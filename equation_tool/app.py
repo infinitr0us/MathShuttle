@@ -17,7 +17,7 @@ from typing import Optional
 from . import __version__, clipboard
 from .convert import FORMAT_LABELS, MODES, Result, convert, mathml_for_office
 from .latex_wrap import WRAPPERS
-from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, pandoc_version
+from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description
 
 SAMPLE = "\\begin{align}\n  \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\\n  \\nabla \\times \\mathbf{B} - \\frac{1}{c^2}\\frac{\\partial \\mathbf{E}}{\\partial t} &= \\mu_0 \\mathbf{J}\n\\end{align}"
 
@@ -230,7 +230,7 @@ class App(tk.Tk):
     # ---- events ---------------------------------------------------------------------------------
     def _startup_check(self) -> None:
         try:
-            self._set_status("Ready  -  engine: %s" % pandoc_version())
+            self._set_status("Ready  -  engine: %s" % engine_description())
         except PandocNotFound as e:
             self._set_status("pandoc not found", error=True)
             messagebox.showerror("pandoc not found", str(e))

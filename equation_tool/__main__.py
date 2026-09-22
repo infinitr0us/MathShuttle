@@ -4,6 +4,7 @@
     python -m equation_tool convert -f latex -t omml [FILE]     convert FILE (or stdin) to stdout
     python -m equation_tool copy [-f latex] [FILE]              put the equation on the clipboard for Word/PowerPoint
     python -m equation_tool paste [-t latex] [--wrapper W]      convert the equation copied in Word/PowerPoint
+    python -m equation_tool version                             pandoc + embedded texmath version
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import sys
 
 from .convert import MODES, convert, mathml_for_office
 from .latex_wrap import WRAPPER_KEYS
-from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound
+from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description, find_pandoc
 
 
 def _read_source(path: str | None) -> str:
@@ -44,6 +45,8 @@ def _cli(argv: list[str]) -> int:
     p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto")
     p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto")
 
+    sub.add_parser("version", help="show the pandoc / texmath versions in use")
+
     args = parser.parse_args(argv)
     try:
         if args.cmd == "convert":
@@ -63,6 +66,8 @@ def _cli(argv: list[str]) -> int:
                 sys.stderr.write("No equation on the clipboard (copy one in Word / PowerPoint first).\n")
                 return 2
             sys.stdout.write(convert(mathml, "mathml", args.dst, args.mode, args.wrapper).text + "\n")
+        elif args.cmd == "version":
+            sys.stdout.write("%s\n%s\n" % (engine_description(), find_pandoc()))
         else:
             parser.print_help()
             return 2

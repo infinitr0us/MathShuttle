@@ -80,9 +80,19 @@ LaTeX → LaTeX never re-renders the equation; only the delimiters change.
 python -m equation_tool convert -f latex -t omml [--mode display|inline] [--wrapper align] [FILE]
 python -m equation_tool copy  [-f latex] [FILE]          # → clipboard, ready to paste into Office
 python -m equation_tool paste [-t latex] [--wrapper W]   # equation copied in Office → stdout
+python -m equation_tool version                          # pandoc + embedded texmath version
 ```
 `FILE` defaults to stdin. Errors (e.g. texmath parse errors, with the caret diagram) go to stderr
 with exit code 1.
+
+## Keeping texmath up to date
+
+pandoc is statically linked against texmath, so the texmath version you run is the one the
+pandoc release was built with - it cannot be updated separately. When a texmath release
+carries a fix you care about, upgrade pandoc once a pandoc release built against it exists
+(`winget upgrade JohnMacFarlane.Pandoc`); the two are maintained together and pandoc releases
+normally follow within days or weeks. The status bar and `python -m equation_tool version`
+show the pandoc and embedded texmath versions.
 
 ## Building the exe
 

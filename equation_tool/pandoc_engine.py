@@ -93,6 +93,32 @@ def pandoc_version() -> str:
     return out.decode("utf-8", "replace").splitlines()[0]
 
 
+_texmath_version: Optional[str] = None
+
+
+def texmath_version() -> Optional[str]:
+    """Version of the texmath library linked into pandoc (pandoc --version does not report it).
+
+    pandoc is statically linked, so the Haskell package id ``texmath-<version>`` is
+    embedded in the executable; a newer texmath only arrives with a newer pandoc.
+    """
+    global _texmath_version
+    if _texmath_version is None:
+        import mmap
+        try:
+            with open(find_pandoc(), "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                m = re.search(rb"texmath-(\d+(?:\.\d+)+)", mm)
+                _texmath_version = m.group(1).decode() if m else ""
+        except (OSError, ValueError):
+            _texmath_version = ""
+    return _texmath_version or None
+
+
+def engine_description() -> str:
+    tm = texmath_version()
+    return pandoc_version() + ("  (texmath %s)" % tm if tm else "")
+
+
 def _run(args: List[str], stdin: bytes, timeout: float = 60) -> "tuple[bytes, str]":
     try:
         proc = subprocess.run([find_pandoc(), *args], input=stdin, capture_output=True,
