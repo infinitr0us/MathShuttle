@@ -24,6 +24,8 @@ from equation_tool.pandoc_engine import Equation, read_equations, write_equation
 
 TEX = r"\frac{\partial f}{\partial x} + \sum_{i=1}^{n} \mathbf{x}_i^2 = \text{const}"
 ALIGN = "\\begin{align}\na &= b + c \\\\\nd &= \\int_0^1 e^{-t}\\,dt\n\\end{align}"
+# continuation lines: must come back as aligned, not matrix (pandoc_engine._mark_equation_array_alignment)
+CONT = "\\begin{align}\nf &= a + b \\\\\n&\\quad + c \\\\\n&+ d\n\\end{align}"
 
 
 def is_running(exe: str) -> bool:
@@ -98,7 +100,7 @@ def test_powerpoint(mathml: str):
 
 
 if __name__ == "__main__":
-    for tex in (TEX, ALIGN):
+    for tex in (TEX, ALIGN, CONT):
         print("#" * 70)
         print("LaTeX:", tex)
         eq = read_equations(tex, "latex")[0] if "\\begin" in tex else Equation(tex, True)

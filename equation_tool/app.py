@@ -6,6 +6,7 @@ import ctypes
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import tkinter as tk
@@ -22,6 +23,7 @@ from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocN
 SAMPLE = "\\begin{align}\n  \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\\n  \\nabla \\times \\mathbf{B} - \\frac{1}{c^2}\\frac{\\partial \\mathbf{E}}{\\partial t} &= \\mu_0 \\mathbf{J}\n\\end{align}"
 
 SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "EquationTool", "settings.json")
+DEFAULT_GEOMETRY = "1200x640"
 DEBOUNCE_MS = 450
 
 HELP = """Equation Tool %s  -  texmath (via pandoc) running locally
@@ -30,8 +32,10 @@ INPUT (From)
   LaTeX   Any delimiters are recognised: bare, $...$, \\(...\\), $$...$$, \\[...\\],
           equation / align / gather / multline / eqnarray / alignat (+ starred),
           \\label, \\tag, \\nonumber, \\newcommand definitions, and several equations
-          mixed with prose (each one is converted).  Bare input uses the Mode box.
-  MathML  <math> element(s), with or without the xmlns / XML prolog.
+          mixed with prose (each one is converted).  Input without any delimiter is
+          one bare equation (even with $...$ inside \\text{} / \\mbox{}); it uses the Mode box.
+  MathML  <math> element(s), with or without the xmlns / XML prolog, also prefixed
+          (<mml:math>) and with named entities (&InvisibleTimes;).
   OMML    <m:oMath> or <m:oMathPara>, alone or inside any Word XML.
 
 OUTPUT (To)
@@ -49,6 +53,20 @@ WORD / POWERPOINT
 
 Ctrl+Enter converts; Auto-convert re-runs the conversion as you type.
 """ % __version__
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def _on_a_monitor(x: int, y: int) -> bool:
+    try:
+        monitor_from_point = ctypes.windll.user32.MonitorFromPoint
+    except AttributeError:  # not Windows: trust the saved position
+        return True
+    monitor_from_point.argtypes = [_POINT, ctypes.c_uint32]
+    monitor_from_point.restype = ctypes.c_void_p  # HMONITOR
+    return bool(monitor_from_point(_POINT(x, y), 0))  # 0 = MONITOR_DEFAULTTONULL
 
 
 def _enable_dpi_awareness() -> None:
@@ -69,6 +87,8 @@ class App(tk.Tk):
         self._after_id: Optional[str] = None
         self._results: "queue.Queue[tuple]" = queue.Queue()
         self._polling = False
+        self._running = 0  # conversion threads whose result has not been collected yet
+        self._shown_args: Optional[tuple] = None  # conversion arguments of the result in the output pane
         self.settings = self._load_settings()
 
         self._scale_fonts()
@@ -134,8 +154,8 @@ class App(tk.Tk):
         self.engine_var = tk.StringVar(value="")
         ttk.Label(bar, textvariable=self.engine_var, relief="sunken", padding=(6, 2)).pack(side="right")
         self.status_var = tk.StringVar(value="")
-        ttk.Label(bar, textvariable=self.status_var, anchor="w", relief="sunken", padding=(6, 2)).pack(
-            side="left", fill="x", expand=True)
+        self.status_label = ttk.Label(bar, textvariable=self.status_var, anchor="w", relief="sunken", padding=(6, 2))
+        self.status_label.pack(side="left", fill="x", expand=True)
 
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", side="bottom", padx=6, pady=(0, 4))
@@ -198,9 +218,21 @@ class App(tk.Tk):
     def _load_settings(self) -> dict:
         try:
             with open(SETTINGS_PATH, encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except Exception:
             return {}
+        return data if isinstance(data, dict) else {}
+
+    def _restore_geometry(self, geometry) -> None:
+        """Apply a saved geometry; drop a position that is on no monitor any more (a disconnected
+        second screen), and ignore a malformed value rather than failing to start."""
+        m = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geometry) if isinstance(geometry, str) else None
+        if m and not _on_a_monitor(int(m.group(3)) + 60, int(m.group(4)) + 15):  # a point in the title bar
+            geometry = "%sx%s" % m.group(1, 2)
+        try:
+            self.geometry(geometry)
+        except tk.TclError:
+            self.geometry(DEFAULT_GEOMETRY)
 
     def _apply_settings(self) -> None:
         s = self.settings
@@ -211,7 +243,7 @@ class App(tk.Tk):
                 var.set(s[key])
         self.auto_var.set(bool(s.get("auto_convert", True)))
         self.annotate_var.set(bool(s.get("annotate", False)))
-        self.geometry(s.get("geometry", "1200x640"))
+        self._restore_geometry(s.get("geometry", DEFAULT_GEOMETRY))
         self.minsize(960, 420)
         self.input.insert("1.0", s.get("input") or SAMPLE)
         self.input.edit_modified(False)
@@ -221,7 +253,7 @@ class App(tk.Tk):
         data = {"src": self.src_var.get(), "dst": self.dst_var.get(), "mode": self.mode_var.get(),
                 "wrapper": self.wrapper_var.get(), "auto_convert": self.auto_var.get(),
                 "annotate": self.annotate_var.get(), "geometry": self.geometry(),
-                "input": self.input.get("1.0", "end-1c")[:20000]}
+                "input": self.input.get("1.0", "end-1c")}  # whole: a cut could land inside an equation
         try:
             os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
             with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -271,18 +303,23 @@ class App(tk.Tk):
             self._after_id = self.after(DEBOUNCE_MS, self.convert_now)
 
     # ---- actions --------------------------------------------------------------------------------
+    def _conversion_args(self) -> tuple:
+        return (self.input.get("1.0", "end-1c"), self.src_var.get(), self.dst_var.get(), self.mode_var.get(),
+                self.wrapper_var.get(), self.annotate_var.get())
+
     def convert_now(self) -> None:
-        self._after_id = None
-        text = self.input.get("1.0", "end-1c")
-        if not text.strip():
+        if self._after_id:  # a debounced conversion is pending (typing, option change): this one replaces it
+            self.after_cancel(self._after_id)
+            self._after_id = None
+        self._seq += 1  # results of conversions still running are stale from now on
+        args = self._conversion_args()
+        if not args[0].strip():
             self._set_output("")
             self._set_status("")
             return
-        self._seq += 1
         seq = self._seq
-        args = (text, self.src_var.get(), self.dst_var.get(), self.mode_var.get(),
-                self.wrapper_var.get(), self.annotate_var.get())
         self._set_status("Converting...")
+        self._running += 1
         threading.Thread(target=self._worker, args=(seq, args), daemon=True).start()
         if not self._polling:
             self._polling = True
@@ -299,29 +336,28 @@ class App(tk.Tk):
         self._results.put((seq, args, result))
 
     def _poll_results(self) -> None:
-        done = False
         while True:
             try:
                 seq, args, result = self._results.get_nowait()
             except queue.Empty:
                 break
-            if seq == self._seq:
-                done = True
+            self._running -= 1
             self._finish(seq, args, result)
-        if done:
-            self._polling = False
-        else:
+        if self._running:
             self.after(30, self._poll_results)
+        else:
+            self._polling = False
 
     def _finish(self, seq: int, args, result) -> None:
         if seq != self._seq:
-            return  # a newer conversion has been started
+            return  # a newer conversion has been started, or the input was cleared
         if isinstance(result, Exception):
             self._set_output(str(result), error=True)
             self._set_status("Conversion failed", error=True)
             return
         assert isinstance(result, Result)
         self._set_output(result.text)
+        self._shown_args = args
         n = len(result.equations)
         mode = "display" if result.equations[0].display else "inline"
         summary = "%s \u2192 %s  (%s%s)" % (FORMAT_LABELS[args[1]], FORMAT_LABELS[args[2]],
@@ -375,8 +411,19 @@ class App(tk.Tk):
         if dst not in READ_FORMATS:
             self._set_status("Cannot swap: %s cannot be used as input" % FORMAT_LABELS[dst], error=True)
             return
-        output = self.output.get("1.0", "end-1c")
-        if self.output.tag_ranges("error"):
+        args = self._conversion_args()
+        if self._shown_args == args:
+            output = self.output.get("1.0", "end-1c")  # the current result (possibly edited by hand)
+        elif args[0].strip():
+            # The output pane is stale (auto-convert off, or a conversion still pending) or shows an
+            # error: it must not become input in the new format.  Convert the current input first.
+            try:
+                output = convert(*args).text
+            except (ConversionError, PandocNotFound) as e:
+                self._set_output(str(e), error=True)
+                self._set_status("Cannot swap: the input does not convert", error=True)
+                return
+        else:
             output = ""
         self.src_var.set(dst)
         self.dst_var.set(src)
@@ -387,6 +434,7 @@ class App(tk.Tk):
         self.convert_now()
 
     def clear(self) -> None:
+        self._seq += 1  # drop the result of a conversion that is still running
         self.input.delete("1.0", "end")
         self.input.edit_modified(False)
         self._set_output("")
@@ -409,11 +457,13 @@ class App(tk.Tk):
 
     # ---- helpers --------------------------------------------------------------------------------
     def _set_output(self, text: str, error: bool = False) -> None:
+        self._shown_args = None
         self.output.delete("1.0", "end")
         self.output.insert("1.0", text, ("error",) if error else ())
 
     def _set_status(self, text: str, error: bool = False) -> None:
         self.status_var.set(text)
+        self.status_label.configure(foreground="#b00020" if error else "")
 
 
 def main() -> int:

@@ -33,7 +33,12 @@ Word, PowerPoint and OneNote recognise). The equation is fully editable in Offic
 **Office → LaTeX.** Select an equation in Word or PowerPoint, press Ctrl+C, then click
 **Paste from Word/PowerPoint** (Ctrl+Shift+V): the tool reads the MathML that Office put on the
 clipboard and converts it (to LaTeX by default; any other target works too). Equation arrays
-that Office exports as a bare `<mtable>` are recognised and come back as `aligned`, not `matrix`.
+that Office exports as a bare `<mtable>` are recognised and come back as `aligned`, not `matrix`
+(continuation lines such as `&+ c` included).
+
+MathML input may also come from elsewhere: prefixed elements (`<mml:math>`, as written by
+Word's XSLT, MathType or JATS journal XML), named entities (`&InvisibleTimes;`, from
+Mathematica / Maple), several documents each with its own XML declaration.
 
 Tip: LaTeX **→** OMML text output is still there for people who work with the XML directly
 (`document.xml`, python-docx, …); for pasting into Office the clipboard route above is the one
@@ -45,7 +50,7 @@ Everything pandoc's LaTeX reader understands is accepted, in any mix:
 
 | input | detected mode |
 |---|---|
-| bare `\frac{a}{b}` | **Mode** box (Auto = display) |
+| bare `\frac{a}{b}` (no `$`, `\(`, `\[` or maths environment outside braces — `\mbox{for $n$}` is fine) | **Mode** box (Auto = display) |
 | `$…$`, `\(…\)`, `\begin{math}` | inline |
 | `$$…$$`, `\[…\]`, `\begin{displaymath}` | display |
 | `equation`, `equation*` | display |
@@ -72,6 +77,9 @@ in MathML, `<m:oMathPara>` vs `<m:oMath>` in OMML, `$ x $` vs `$x$` in Typst, `.
 Environment content is converted as needed: an `align` body becomes `\begin{aligned}` when a
 single-equation wrapper is chosen (and `gather` → `gathered`, `multline` → `gathered`), and an
 `aligned`/`split` block inside an `equation` is unwrapped when `align` is chosen.
+`eqnarray`'s `a &=& b` rows become `a &= b` in `align`/`aligned`, a `split` becomes `aligned`
+in `$…$` / `\(…\)`, and a note appears when per-line `\tag` / `\label` commands end up where
+LaTeX rejects them (inside `aligned`, in `$…$`, …).
 LaTeX → LaTeX never re-renders the equation; only the delimiters change.
 
 ## Command line
@@ -82,8 +90,8 @@ python -m equation_tool copy  [-f latex] [FILE]          # → clipboard, ready 
 python -m equation_tool paste [-t latex] [--wrapper W]   # equation copied in Office → stdout
 python -m equation_tool version                          # pandoc + embedded texmath version
 ```
-`FILE` defaults to stdin. Errors (e.g. texmath parse errors, with the caret diagram) go to stderr
-with exit code 1.
+`FILE` defaults to stdin. Input and output are UTF-8 (also through pipes and redirection).
+Errors (e.g. texmath parse errors, with the caret diagram) go to stderr with exit code 1.
 
 ## Keeping texmath up to date
 
@@ -99,7 +107,8 @@ two also print which `pandoc.exe` is in use. Check that path before upgrading: a
 with `build_exe.ps1 -BundlePandoc` or selected through `EQUATION_TOOL_PANDOC` takes precedence
 over the installed pandoc and is not touched by `winget upgrade` - rebuild with `-BundlePandoc`
 (or replace that copy) and restart the app. A Scoop shim on `PATH` is followed to the real
-executable when reading the texmath version.
+executable when reading the texmath version and when bundling. The current directory is never
+searched for `pandoc.exe`, and an `EQUATION_TOOL_PANDOC` that names no file is an error.
 
 ## Building the exe
 

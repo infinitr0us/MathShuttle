@@ -32,11 +32,13 @@ Write-Host "Running PyInstaller..." -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
 if ($BundlePandoc) {
-    $pandoc = (Get-Command pandoc -ErrorAction SilentlyContinue).Source
-    if (-not $pandoc) { $pandoc = Join-Path $env:LOCALAPPDATA "Pandoc\pandoc.exe" }
-    if (-not (Test-Path $pandoc)) { throw "pandoc.exe not found - install it with: winget install JohnMacFarlane.Pandoc" }
+    # The pandoc the app itself would use, with a Scoop shim followed to the real executable:
+    # a copied launcher (Scoop / Chocolatey shim) would not run without its companion files.
+    $pandoc, $texmath = & $py -c "from equation_tool import pandoc_engine as p; print(p.pandoc_binary()); print(p.texmath_version() or '')"
+    if ($LASTEXITCODE -ne 0) { throw "pandoc.exe not found - install it with: winget install JohnMacFarlane.Pandoc" }
+    if (-not $texmath) { throw "$pandoc looks like a launcher, not pandoc itself - set EQUATION_TOOL_PANDOC to the real pandoc.exe" }
     Copy-Item $pandoc "dist\EquationTool\pandoc.exe" -Force
-    Write-Host "Bundled $pandoc" -ForegroundColor Cyan
+    Write-Host "Bundled $pandoc (texmath $texmath)" -ForegroundColor Cyan
 }
 
 $exe = (Resolve-Path "dist\EquationTool\EquationTool.exe").Path

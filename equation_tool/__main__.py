@@ -18,9 +18,17 @@ from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocN
 
 def _read_source(path: str | None) -> str:
     if path and path != "-":
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             return f.read()
     return sys.stdin.read()
+
+
+def _utf8_stdio() -> None:
+    """Pipes and redirections default to the ANSI code page on Windows (cp1252, cp936...):
+    UTF-8 input would be misread and MathML output such as <mi>ℝ</mi> fails to encode."""
+    for stream, encoding in ((sys.stdin, "utf-8-sig"), (sys.stdout, "utf-8"), (sys.stderr, "utf-8")):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding=encoding)
 
 
 def _cli(argv: list[str]) -> int:
@@ -48,6 +56,11 @@ def _cli(argv: list[str]) -> int:
     sub.add_parser("version", help="show the pandoc / texmath versions in use")
 
     args = parser.parse_args(argv)
+    _utf8_stdio()
+    errors: tuple = (ConversionError, PandocNotFound)
+    if args.cmd in ("copy", "paste"):
+        from . import clipboard
+        errors += (clipboard.ClipboardError,)
     try:
         if args.cmd == "convert":
             result = convert(_read_source(args.file), args.src, args.dst, args.mode, args.wrapper, args.annotate)
@@ -55,12 +68,10 @@ def _cli(argv: list[str]) -> int:
             for note in result.notes:
                 sys.stderr.write(note + "\n")
         elif args.cmd == "copy":
-            from . import clipboard
             mathml, note = mathml_for_office(_read_source(args.file), args.src, args.mode)
             clipboard.copy_mathml_for_office(mathml)
             sys.stderr.write((note + "\n") if note else "Equation copied - paste it into Word / PowerPoint.\n")
         elif args.cmd == "paste":
-            from . import clipboard
             mathml = clipboard.read_equation_from_office()
             if not mathml:
                 sys.stderr.write("No equation on the clipboard (copy one in Word / PowerPoint first).\n")
@@ -71,7 +82,7 @@ def _cli(argv: list[str]) -> int:
         else:
             parser.print_help()
             return 2
-    except (ConversionError, PandocNotFound) as e:
+    except errors as e:
         sys.stderr.write("error: %s\n" % e)
         return 1
     return 0

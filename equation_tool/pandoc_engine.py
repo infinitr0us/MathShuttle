@@ -12,11 +12,11 @@ Supported formats:  read  latex | mathml | omml
 """
 from __future__ import annotations
 
+import html.entities
 import io
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import zipfile
@@ -27,6 +27,7 @@ from typing import List, Optional
 MATHML_NS = "http://www.w3.org/1998/Math/MathML"
 OMML_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 WML_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
 ET.register_namespace("", MATHML_NS)
 ET.register_namespace("m", OMML_NS)
@@ -68,9 +69,13 @@ def _candidate_paths():
     base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     yield os.path.join(base, "pandoc.exe")
     yield os.path.join(base, "pandoc", "pandoc.exe")
-    found = shutil.which("pandoc")
-    if found:
-        yield found
+    # PATH, but not the current directory: on Windows shutil.which() looks there first, which
+    # would run a pandoc.exe lying in whatever folder the CLI is started from.
+    exe = "pandoc.exe" if sys.platform == "win32" else "pandoc"
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        d = d.strip().strip('"')
+        if os.path.isabs(d):
+            yield os.path.join(d, exe)
     for root in (os.environ.get("LOCALAPPDATA"), os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
         if root:
             yield os.path.join(root, "Pandoc", "pandoc.exe")
@@ -79,6 +84,9 @@ def _candidate_paths():
 def find_pandoc() -> str:
     global _pandoc_path
     if _pandoc_path is None:
+        env = os.environ.get("EQUATION_TOOL_PANDOC")
+        if env and not os.path.isfile(env):  # a typo must not silently select some other pandoc
+            raise PandocNotFound("EQUATION_TOOL_PANDOC is set to %r, which is not an existing file." % env)
         for p in _candidate_paths():
             if p and os.path.isfile(p):
                 _pandoc_path = p
@@ -164,6 +172,8 @@ def _run(args: List[str], stdin: bytes, timeout: float = 60) -> "tuple[bytes, st
                               timeout=timeout, creationflags=_CREATE_NO_WINDOW)
     except subprocess.TimeoutExpired:
         raise ConversionError("pandoc did not finish within %d s" % timeout)
+    except OSError as e:  # e.g. pandoc.exe removed or replaced (winget upgrade) while the app runs
+        raise ConversionError("Could not run %s: %s" % (find_pandoc(), e))
     err = proc.stderr.decode("utf-8", "replace").replace("\r\n", "\n")
     if proc.returncode != 0:
         raise ConversionError("pandoc failed (exit %d):\n%s" % (proc.returncode, err.strip()))
@@ -189,14 +199,22 @@ def _mathml_flags() -> List[str]:
     return [_mathml_flag]
 
 
-_TEXMATH_WARNING = re.compile(r"\[WARNING\] Could not convert TeX math (.*?), rendering as TeX:\n((?:  .*\n?)*)")
+# The TeX in the message keeps its line breaks (continuation lines indented by two spaces),
+# so the part before ", rendering as TeX:" may span several lines.
+_TEXMATH_WARNING = re.compile(r"\[WARNING\] Could not convert TeX math [\s\S]*?, rendering as TeX:\n((?:  .*\n?)*)")
+
+# for writers with text output: pandoc writes CRLF on Windows by default
+_LF = "--eol=lf"
 
 
 def _check_texmath_warning(stderr: str) -> None:
+    """Raise if texmath rejected the TeX (pandoc then writes the TeX source as text instead)."""
     m = _TEXMATH_WARNING.search(stderr)
     if m:
-        detail = "\n".join(line[2:] for line in m.group(2).rstrip("\n").splitlines())
+        detail = "\n".join(line[2:] for line in m.group(1).rstrip("\n").splitlines())
         raise ConversionError("texmath could not parse this LaTeX:\n" + detail)
+    if "Could not convert TeX math" in stderr:  # message layout changed in some pandoc release
+        raise ConversionError("texmath could not parse this LaTeX:\n" + stderr.strip())
 
 
 # --- reading --------------------------------------------------------------------------
@@ -220,6 +238,32 @@ def _read_json(fmt: str, source: bytes) -> List[Equation]:
     return eqs
 
 
+# environments that pandoc's LaTeX reader turns into maths (checked against pandoc 3.11)
+_PANDOC_MATH_ENVS = frozenset(
+    "equation equation* displaymath math align align* alignat alignat* flalign flalign* eqnarray eqnarray* "
+    "gather gather* multline multline* dmath dmath* dgroup dgroup* darray darray* subequations".split())
+_LATEX_TOKEN = re.compile(r"\\begin\s*\{([^{}]*)\}|\\[a-zA-Z@]+|\\.|%[^\n]*|[{}$]", re.S)
+
+
+def _has_math_delimiters(text: str) -> bool:
+    """True if `text` has $, \\(, \\[ or a maths environment outside every brace group.
+
+    None of those can occur at the top level of math-mode TeX, while prose with equations
+    always has one - so input without them is a single bare equation, even when pandoc
+    would find maths nested in it (``\\mbox{for all $n$}``).
+    """
+    depth = 0
+    for m in _LATEX_TOKEN.finditer(text):
+        tok = m.group()
+        if tok == "{":
+            depth += 1
+        elif tok == "}":
+            depth = max(depth - 1, 0)
+        elif depth == 0 and (tok in ("$", "\\(", "\\[") or m.group(1) in _PANDOC_MATH_ENVS):
+            return True
+    return False
+
+
 def read_latex(text: str, default_display: bool = True) -> List[Equation]:
     """Extract every equation from LaTeX source.
 
@@ -227,17 +271,57 @@ def read_latex(text: str, default_display: bool = True) -> List[Equation]:
     multline/eqnarray/... environments, several of them, with prose in between)
     are recognised by pandoc's LaTeX reader; \\newcommand definitions in the
     input are expanded.  Input with no delimiters at all is taken as one bare
-    equation in the `default_display` mode.
+    equation in the `default_display` mode (texmath handles its macros itself).
     """
     if not text.strip():
         raise ConversionError("The input is empty.")
-    eqs = _read_json("latex", text.encode("utf-8"))
-    if eqs:
-        return eqs
+    if _has_math_delimiters(text):
+        eqs = _read_json("latex", text.encode("utf-8"))
+        if eqs:
+            return eqs
     return [Equation(text.strip(), default_display)]
 
 
-_XML_PROLOG = re.compile(r"^\s*(<\?xml[^>]*\?>\s*)?(<!DOCTYPE[^>]*>\s*)?", re.I)
+_XML_DECLS = re.compile(r"<\?xml\s[^>]*\?>|<!DOCTYPE[^>]*>", re.I)
+_XML_ENTITIES = ("lt", "gt", "amp", "quot", "apos")
+_NAMED_ENTITY = re.compile(r"&([A-Za-z][A-Za-z0-9]*);")
+
+
+def _strip_xml_prolog(text: str) -> str:
+    """Drop a BOM and every XML declaration / DOCTYPE: several pasted documents carry one
+    each, and inside the wrapper element we parse them in, any of them is a syntax error."""
+    return _XML_DECLS.sub("", text.lstrip("\ufeff"))
+
+
+def _named_entities_to_numeric(text: str) -> str:
+    """``&InvisibleTimes;``, ``&nbsp;``... (MathML / HTML names, common in exported MathML)
+    as numeric references, which a plain XML parser understands."""
+    def numeric(m):
+        value = None if m.group(1) in _XML_ENTITIES else html.entities.html5.get(m.group(1) + ";")
+        return "".join("&#x%X;" % ord(c) for c in value) if value else m.group(0)
+    return _NAMED_ENTITY.sub(numeric, text)
+
+
+def _local(name: str) -> str:
+    """``{namespace}tag`` -> ``tag``."""
+    return name.rsplit("}", 1)[-1]
+
+
+def _outermost(root: ET.Element, match, skip=lambda el: False) -> List[ET.Element]:
+    """Descendants of `root` satisfying `match`, in document order, not descending into a match
+    or into an element satisfying `skip`."""
+    found: List[ET.Element] = []
+
+    def walk(el):
+        for child in el:
+            if match(child):
+                found.append(child)
+            elif not skip(child):
+                walk(child)
+
+    walk(root)
+    return found
+
 
 # characters that make up relation symbols (used to spot an equation array's alignment column)
 _RELATION_CHARS = set("=<>:≠≤≥≪≫≈≃≅≡∼≍∝∈∉∋⊂⊆⊃⊇→←↔⇒⇐⇔⟶⟵⟹⟸⟺↦≔≕∣⊥∥≺≻⪯⪰⊢⊨≐≜≝≟⩽⩾≶≷⊏⊑⊐⊒")
@@ -246,8 +330,10 @@ _RELATION_CHARS = set("=<>:≠≤≥≪≫≈≃≅≡∼≍∝∈∉∋⊂⊆�
 def _mark_equation_array_alignment(math: ET.Element) -> bool:
     """Word/PowerPoint export an equation array as an <mtable> without any alignment
     attributes, which texmath turns into ``\\begin{matrix}``.  When the table has the
-    shape of an aligned block (every row = 2 cells, second cell starting with a relation),
-    add ``columnalign`` so that texmath emits ``\\begin{aligned}``.  Returns True if changed."""
+    shape of an aligned block (every row = 2 cells, the second one empty or starting with an
+    operator or a space - a continuation line such as ``&+ c`` - and at least one of them
+    starting with a relation), add ``columnalign`` so that texmath emits ``\\begin{aligned}``.
+    Returns True if changed."""
     ns = math.tag[:math.tag.index("}") + 1] if math.tag.startswith("{") else ""
     node = math
     while len(node) == 1 and node[0].tag in (ns + "mrow", ns + "semantics", ns + "mstyle"):
@@ -261,16 +347,23 @@ def _mark_equation_array_alignment(math: ET.Element) -> bool:
     rows = [r for r in table if r.tag == ns + "mtr"]
     if not rows:
         return False
+    relations = 0
     for row in rows:
         cells = [c for c in row if c.tag == ns + "mtd"]
         if len(cells) != 2 or any(c.get("columnalign") for c in cells):
             return False
-        first = cells[1][0] if len(cells[1]) else None
-        if first is None or first.tag != ns + "mo":
+        if not len(cells[1]):
+            continue
+        first = cells[1][0]
+        if first.tag == ns + "mspace":
+            continue
+        if first.tag != ns + "mo":
             return False
         text = (first.text or "").strip()
-        if not text or not set(text) <= _RELATION_CHARS:
-            return False
+        if text and set(text) <= _RELATION_CHARS:
+            relations += 1
+    if not relations:
+        return False
     for row in rows:
         cells = [c for c in row if c.tag == ns + "mtd"]
         cells[0].set("columnalign", "right")
@@ -278,26 +371,42 @@ def _mark_equation_array_alignment(math: ET.Element) -> bool:
     return True
 
 
+def _strip_namespaces(el: ET.Element) -> None:
+    for e in el.iter():
+        if isinstance(e.tag, str):
+            e.tag = _local(e.tag)
+        for key in [k for k in e.attrib if k.startswith("{")]:
+            e.attrib[_local(key)] = e.attrib.pop(key)
+
+
+def _serialize_math(math: ET.Element) -> bytes:
+    math.tail = None  # tostring() would include the text that follows the element
+    return ET.tostring(math, encoding="unicode").encode("utf-8")
+
+
 def read_mathml(text: str, fix_office_alignment: bool = True) -> List[Equation]:
     if not text.strip():
         raise ConversionError("The input is empty.")
-    body = _XML_PROLOG.sub("", text, count=1)
-    if "<math" not in body:
-        raise ConversionError("No <math> element found in the MathML input.")
+    body = _named_entities_to_numeric(_strip_xml_prolog(text))
     try:
-        root = ET.fromstring("<r>%s</r>" % body)
+        # the mml prefix is declared so that a pasted <mml:math> fragment parses without its declaration
+        root = ET.fromstring('<r xmlns:mml="%s">%s</r>' % (MATHML_NS, body))
     except ET.ParseError as e:
         raise ConversionError("The MathML is not well-formed XML: %s" % e)
-    if fix_office_alignment:
-        changed = False
-        for math in root.iter():
-            if math.tag in ("{%s}math" % MATHML_NS, "math"):
-                changed |= _mark_equation_array_alignment(math)
-        if changed:
-            body = "".join(ET.tostring(child, encoding="unicode") for child in root)
-    eqs = _read_json("html", body.encode("utf-8"))
-    if not eqs:
-        raise ConversionError("texmath could not interpret this MathML (unsupported or malformed elements).")
+    maths = _outermost(root, lambda el: isinstance(el.tag, str) and _local(el.tag) == "math")
+    if not maths:
+        raise ConversionError("No <math> element found in the MathML input.")
+    for math in maths:
+        _strip_namespaces(math)  # pandoc only recognises a bare <math>, not <mml:math>
+        if fix_office_alignment:
+            _mark_equation_array_alignment(math)
+    eqs = _read_json("html", b"".join(_serialize_math(m) for m in maths))
+    if len(eqs) < len(maths):  # pandoc turns a <math> that texmath rejects into plain text, silently
+        if len(maths) == 1:
+            raise ConversionError("texmath could not interpret this MathML (unsupported or malformed elements).")
+        bad = [str(i) for i, m in enumerate(maths, 1) if not _read_json("html", _serialize_math(m))]
+        raise ConversionError("texmath could not interpret <math> element %s of the %d in the input "
+                              "(unsupported or malformed elements)." % (", ".join(bad) or "?", len(maths)))
     return eqs
 
 
@@ -318,26 +427,20 @@ _DOCX_RELS = (
 
 def _parse_omml_fragments(text: str) -> List[ET.Element]:
     """Return the top-level <m:oMathPara>/<m:oMath> elements found in arbitrary OMML-ish XML."""
-    body = _XML_PROLOG.sub("", text, count=1)
+    body = _strip_xml_prolog(text)
     # Wrap so that undeclared m:/w: prefixes (common when OMML is pasted from a snippet) resolve.
-    wrapped = ('<r xmlns:m="%s" xmlns:w="%s" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+    wrapped = ('<r xmlns:m="%s" xmlns:w="%s" xmlns:mc="%s" '
                'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
-               'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">%s</r>') % (OMML_NS, WML_NS, body)
+               'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">%s</r>') % (
+                   OMML_NS, WML_NS, MC_NS, body)
     try:
         root = ET.fromstring(wrapped)
     except ET.ParseError as e:
         raise ConversionError("The OMML is not well-formed XML: %s" % e)
-    para_tag, math_tag = "{%s}oMathPara" % OMML_NS, "{%s}oMath" % OMML_NS
-    found: List[ET.Element] = []
-
-    def walk(el):
-        if el.tag in (para_tag, math_tag):
-            found.append(el)
-            return  # do not descend: oMath inside oMathPara belongs to it
-        for child in el:
-            walk(child)
-
-    walk(root)
+    tags = ("{%s}oMathPara" % OMML_NS, "{%s}oMath" % OMML_NS)
+    # an oMath inside an oMathPara belongs to it; mc:AlternateContent holds the same content twice
+    # (e.g. an equation in a text box: DrawingML choice + VML fallback) - read the choice only
+    found = _outermost(root, lambda el: el.tag in tags, skip=lambda el: el.tag == "{%s}Fallback" % MC_NS)
     if not found:
         raise ConversionError("No <m:oMath> or <m:oMathPara> element found in the OMML input.")
     return found
@@ -347,6 +450,8 @@ def read_omml(text: str) -> List[Equation]:
     if not text.strip():
         raise ConversionError("The input is empty.")
     fragments = _parse_omml_fragments(text)
+    for f in fragments:
+        f.tail = None  # tostring() would copy the text that follows the element into the paragraph
     paras = "".join("<w:p>%s</w:p>" % ET.tostring(f, encoding="unicode") for f in fragments)
     document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<w:document xmlns:w="%s" xmlns:m="%s"><w:body>%s</w:body></w:document>') % (WML_NS, OMML_NS, paras)
@@ -389,7 +494,7 @@ _MATH_RE = re.compile(r"<math[\s>][\s\S]*?</math>")
 
 def write_mathml(eq: Equation, annotate: bool = False) -> str:
     """MathML for the equation.  With `annotate`, the TeX source is kept in a <semantics>/<annotation>."""
-    out, err = _run(["-f", "json", "-t", "html", *_mathml_flags()], _doc_json(eq))
+    out, err = _run(["-f", "json", "-t", "html", _LF, *_mathml_flags()], _doc_json(eq))
     _check_texmath_warning(err)
     m = _MATH_RE.search(out.decode("utf-8"))
     if not m:
@@ -418,7 +523,7 @@ def write_omml(eq: Equation) -> str:
 
 def write_eqn(eq: Equation) -> str:
     """groff eqn source (body only, without the .EQ/.EN macros)."""
-    out, err = _run(["-f", "json", "-t", "ms"], _doc_json(eq))
+    out, err = _run(["-f", "json", "-t", "ms", _LF], _doc_json(eq))
     _check_texmath_warning(err)
     text = out.decode("utf-8")
     if eq.display:
@@ -434,13 +539,18 @@ def write_eqn(eq: Equation) -> str:
     return body
 
 
+# pandoc writes a \label as a Typst label after the closing $:  $ x = 1 $<eq:a>
+_TYPST_MATH = re.compile(r"^\$([\s\S]*)\$\s*(?:<[^<>\s]+>)?$")
+
+
 def write_typst(eq: Equation) -> str:
-    """Typst math (body only, without the $ delimiters)."""
-    out, err = _run(["-f", "json", "-t", "typst"], _doc_json(eq))
+    """Typst math (body only, without the $ delimiters or a trailing <label>)."""
+    out, err = _run(["-f", "json", "-t", "typst", _LF], _doc_json(eq))
     _check_texmath_warning(err)
     text = out.decode("utf-8").strip()
-    if text.startswith("$") and text.endswith("$") and len(text) >= 2:
-        text = text[1:-1].strip()
+    m = _TYPST_MATH.match(text)
+    if m:
+        text = m.group(1).strip()
     if not text:
         raise ConversionError("pandoc produced no Typst output:\n" + err.strip())
     return text

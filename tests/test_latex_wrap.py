@@ -58,6 +58,47 @@ def test_inner_environments_unwrap_into_align():
     assert wrap("\\[ " + ALIGNED + " \\]".strip(), "align").startswith("\\begin{align}")
 
 
+def test_sibling_environments_are_not_one_environment():
+    two = "\\begin{aligned} a &= b \\end{aligned} \\quad \\begin{aligned} c &= d \\end{aligned}"
+    assert classify(two) == ("plain", two)
+    assert wrap(two, "align") == "\\begin{align}\n%s\n\\end{align}" % two
+    eq = "\\begin{equation}\n\\begin{aligned} a \\end{aligned} = \\begin{aligned} b \\end{aligned}\n\\end{equation}"
+    assert classify(eq) == ("plain", "\\begin{aligned} a \\end{aligned} = \\begin{aligned} b \\end{aligned}")
+    # properly nested environments of the same name are still recognised
+    nested = "\\begin{aligned} \\begin{aligned} a \\end{aligned} &= b \\end{aligned}"
+    assert classify(nested)[0] == "align"
+
+
+def test_eqnarray_columns_become_align_pairs():
+    eqn = "\\begin{eqnarray}\na &=& b + c \\\\\n\\{x\\} & \\le & \\frac{1}{2} \\\\\n& & + d\n\\end{eqnarray}"
+    assert wrap(eqn, "align*") == "\\begin{align*}\na &= b + c \\\\\n\\{x\\} & \\le  \\frac{1}{2} \\\\\n&  + d\n\\end{align*}"
+    assert wrap(eqn, "auto") == eqn  # kept verbatim when the environment is kept
+    # a & inside braces is not a column separator
+    assert classify("\\begin{eqnarray*} a &=& \\text{x {&} y} \\end{eqnarray*}") == ("align", "a &= \\text{x {&} y}")
+
+
+def test_position_argument_is_dropped_when_unwrapping():
+    assert wrap("\\begin{aligned}[t]x&=y\\end{aligned}", "align") == "\\begin{align}\nx&=y\n\\end{align}"
+    assert classify("\\begin{gathered}[b] x \\\\ y \\end{gathered}") == ("gather", "x \\\\ y")
+    assert classify("\\begin{multlined}[t][6cm] a \\\\ b \\end{multlined}") == ("multline", "a \\\\ b")
+    # kept where the environment itself is kept
+    assert wrap("\\begin{aligned}[t]x&=y\\end{aligned}", "bracket") == "\\[ \\begin{aligned}[t]x&=y\\end{aligned} \\]"
+
+
+def test_trailing_comment_does_not_swallow_the_closing_delimiter():
+    assert wrap("x % comment\n", "dollar") == "$x % comment\n$"
+    assert wrap("x % comment", "paren") == "\\(x % comment\n\\)"
+    assert wrap("x % comment", "bracket") == "\\[\nx % comment\n\\]"
+    assert wrap("x % comment", "ddollar") == "$$\nx % comment\n$$"
+    assert wrap("x = 5\\%", "dollar") == "$x = 5\\%$"  # an escaped percent sign is not a comment
+
+
+def test_split_becomes_aligned_inline():
+    assert wrap(EQ_SPLIT, "dollar") == "$\\begin{aligned}\na &= b \\\\\n&= c\n\\end{aligned}$"
+    assert wrap("\\begin{split} a &= b \\end{split}", "paren") == "\\(\\begin{aligned}\na &= b\n\\end{aligned}\\)"
+    assert wrap(EQ_SPLIT, "bracket").startswith("\\[\n\\begin{split}")  # fine in display maths
+
+
 def test_gather_conversions():
     assert wrap(GATHER, "gather") == "\\begin{gather}\na = b \\\\\nc = d\n\\end{gather}"
     assert wrap(GATHER, "align") == "\\begin{align}\na = b \\\\\nc = d\n\\end{align}"

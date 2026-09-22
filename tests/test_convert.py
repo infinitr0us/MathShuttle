@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from equation_tool import pandoc_engine as pe  # noqa: E402
 from equation_tool.convert import convert  # noqa: E402
 from equation_tool.pandoc_engine import ConversionError, Equation, read_equations, write_equation  # noqa: E402
 
@@ -63,6 +64,27 @@ def test_newcommand_is_expanded():
     assert "\\mathbb{R}" in convert(src, "latex", "latex", wrapper="bare").text
 
 
+@pytest.mark.parametrize("cmd", ["\\mbox", "\\textrm", "\\textit", "\\hbox", "\\text"])
+def test_bare_equation_with_math_inside_text_is_one_equation(cmd):
+    # pandoc's LaTeX reader would return only the nested "$n$" as the equation
+    src = "a_n \\le b_n \\quad %s{for all $n$}" % cmd
+    r = convert(src, "latex", "latex", wrapper="bare")
+    assert r.outputs == [src]
+    assert convert(src + " % note", "latex", "latex", mode="inline").text == "$%s %% note\n$" % src
+    if cmd == "\\mbox":
+        assert "for all" in convert(src, "latex", "mathml").text
+
+
+def test_math_delimiters_detection():
+    has = pe._has_math_delimiters
+    assert has("where $x$ holds") and has("\\(x\\)") and has("text \\[ x \\]") and has("\\begin{align*} a \\end{align*}")
+    assert not has("a \\\\[2pt] b")                   # a line break with spacing, not \[
+    assert not has("\\text{cost in \\$} x")           # escaped dollar
+    assert not has("x % comment with $")
+    assert not has("\\begin{aligned} a &= b \\end{aligned}")  # math-mode environment
+    assert not has("\\mbox{if $x > 0$}")
+
+
 # ---- mode handling ------------------------------------------------------------------------------
 def test_mode_controls_output_form():
     assert 'display="block"' in convert("x^2", "latex", "mathml").text
@@ -91,6 +113,24 @@ def test_outputs_eqn_typst():
     assert convert("\\frac{a}{b}", "latex", "eqn").text == "a over b"
     assert convert("\\frac{a}{b}", "latex", "typst").text == "a / b"
     assert convert("\\sqrt{x}", "latex", "typst", mode="inline").text == "sqrt(x)"
+    # a \label becomes a Typst label after the closing $: still only the body is returned
+    assert convert("\\begin{equation}x = 1\\label{eq:a}\\end{equation}", "latex", "typst").text == "x = 1"
+
+
+def test_multiline_outputs_have_no_carriage_returns():
+    # pandoc writes CRLF on Windows unless told otherwise
+    aligned = "\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}"
+    assert convert(aligned, "latex", "typst").text == "a & = b\\\nc & = d"
+    matrix = convert("\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}", "latex", "eqn").text
+    assert "\r" not in matrix and matrix.startswith("left ( matrix{\n")
+
+
+@pytest.mark.parametrize("fmt", ["mathml", "omml", "eqn", "typst"])
+def test_multiline_texmath_error_is_reported(fmt):
+    # the TeX in pandoc's warning spans several lines; eqn / typst used to return the raw TeX
+    with pytest.raises(ConversionError) as e:
+        convert("\\begin{align}\na &= \\frac{b}\n\\end{align}", "latex", fmt)
+    assert str(e.value).startswith("texmath could not parse this LaTeX:\na &= \\frac{b}\n     ^")
 
 
 def test_mathml_roundtrip():
@@ -106,6 +146,28 @@ def test_mathml_without_namespace_and_with_prolog():
     assert convert(src, "mathml", "latex", wrapper="bare").text == "x"
 
 
+def test_mathml_input_variants():
+    ns = 'xmlns:mml="http://www.w3.org/1998/Math/MathML"'
+    # namespace prefix (Word's XSLT, MathType, JATS), declared or not
+    assert convert('<mml:math %s><mml:mi>x</mml:mi><mml:mo>+</mml:mo><mml:mn>1</mml:mn></mml:math>' % ns,
+                   "mathml", "latex", wrapper="bare").text == "x + 1"
+    assert convert('<mml:math><mml:mi>x</mml:mi></mml:math>', "mathml", "latex", wrapper="bare").text == "x"
+    # named entities (Mathematica, Maple, hand-written MathML)
+    assert convert('<math><mi>a</mi><mo>&le;</mo><mi>b</mi><mo>&InvisibleTimes;</mo><mi>c</mi></math>',
+                   "mathml", "latex", wrapper="bare").text == "a \\leq bc"
+    # a BOM, and several documents each with its own XML declaration
+    decl = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    assert convert('\ufeff' + decl + '<math><mi>x</mi></math>', "mathml", "latex", wrapper="bare").text == "x"
+    r = convert(decl + '<math><mi>x</mi></math>\n' + decl + '<math><mi>y</mi></math>', "mathml", "latex", wrapper="bare")
+    assert r.outputs == ["x", "y"]
+
+
+def test_mathml_element_texmath_rejects_is_not_dropped():
+    with pytest.raises(ConversionError) as e:
+        convert('<math><mi>x</mi></math><math><mfoo><mi>y</mi></mfoo></math>', "mathml", "latex")
+    assert "element 2 of the 2" in str(e.value)
+
+
 def test_mathml_annotation_option():
     assert "<annotation" not in convert("x", "latex", "mathml").text
     assert 'annotation encoding="application/x-tex"' in convert("x", "latex", "mathml", annotate=True).text
@@ -119,6 +181,22 @@ def test_office_equation_array_becomes_aligned():
     # a real 2x2 matrix is left alone
     matrix = word.replace("<mo>=</mo>", "").replace("<mo>≤</mo>", "")
     assert convert(matrix, "mathml", "latex", wrapper="bare").text.startswith("\\begin{matrix}")
+    # continuation lines (a &= b \\ &+ c) do not turn the block into a matrix
+    cont = word.replace("<mtd><mi>c</mi></mtd><mtd><mo>≤</mo>", "<mtd></mtd><mtd><mo>+</mo>")
+    assert convert(cont, "mathml", "latex", wrapper="bare").text.startswith("\\begin{aligned}")
+    # ... but a table without any relation is still a matrix
+    signs = matrix.replace("<mtd><mi>b</mi>", "<mtd><mo>−</mo><mi>b</mi>").replace("<mtd><mi>d</mi>", "<mtd><mo>+</mo><mi>d</mi>")
+    assert convert(signs, "mathml", "latex", wrapper="bare").text.startswith("\\begin{matrix}")
+
+
+def test_numbering_commands_moved_into_aligned_are_flagged():
+    src = "\\begin{align}\na &= b \\tag{1} \\\\\nc &= d \\label{eq:c}\n\\end{align}"
+    assert convert(src, "latex", "latex", wrapper="equation").notes
+    assert convert(src, "latex", "latex", wrapper="bracket").notes
+    assert not convert(src, "latex", "latex", wrapper="align*").notes
+    assert not convert(src, "latex", "latex").notes  # auto keeps the align environment
+    one_label = "\\begin{align}\na &= b \\label{eq:a} \\\\\nc &= d\n\\end{align}"
+    assert not convert(one_label, "latex", "latex", wrapper="equation").notes
 
 
 def test_omml_roundtrip_and_loose_input():
@@ -134,6 +212,15 @@ def test_omml_roundtrip_and_loose_input():
            'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><w:r><w:t>hi</w:t></w:r>'
            + bare + '</w:p></w:body></w:document>')
     assert convert(doc, "omml", "latex", wrapper="bare").text == r2.outputs[0][1:-1]
+    # an equation in a text box is stored twice (DrawingML choice + VML fallback): read it once
+    alt = ('<mc:AlternateContent><mc:Choice Requires="wps">%s</mc:Choice><mc:Fallback>%s</mc:Fallback>'
+           '</mc:AlternateContent>' % (bare, bare))
+    assert convert(alt, "omml", "latex").outputs == r2.outputs
+
+
+def test_latex_output_mode_follows_the_wrapper():
+    assert convert("$x$", "latex", "latex", wrapper="bracket").equations[0].display
+    assert not convert("$$x$$", "latex", "latex", wrapper="dollar").equations[0].display
 
 
 # ---- errors ------------------------------------------------------------------------------------

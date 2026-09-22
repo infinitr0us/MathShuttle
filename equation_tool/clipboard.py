@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
+import re
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -135,11 +136,14 @@ _STANDARD_NAMES = {1: "CF_TEXT", 2: "CF_BITMAP", 7: "CF_OEMTEXT", 8: "CF_DIB", 1
 
 # --- text helpers ---------------------------------------------------------------
 def _decode_text(raw: Optional[bytes]) -> Optional[str]:
+    """Text in a registered format: UTF-8 (what Office writes) or, from some other programs,
+    UTF-16-LE - recognised by its BOM or by the NUL after the first (ASCII) character."""
     if raw is None:
         return None
-    raw = raw.split(b"\0\0", 1)[0] if raw[:2] == b"\xff\xfe" else raw
-    # Registered text-ish formats are 8-bit; CF_UNICODETEXT is handled separately.
-    return raw.split(b"\0", 1)[0].decode("utf-8", "replace")
+    if raw[:2] == b"\xff\xfe" or (raw[1:2] == b"\0" and raw[:1] not in (b"", b"\0")):
+        text = raw[:len(raw) & ~1].decode("utf-16-le", "replace")
+        return text.lstrip("\ufeff").split("\0", 1)[0]
+    return raw.split(b"\0", 1)[0].decode("utf-8-sig", "replace")
 
 
 def get_text() -> Optional[str]:
@@ -183,6 +187,6 @@ def read_equation_from_office() -> Optional[str]:
     """
     for fmt in (CF_MATHML, CF_MATHML_PRESENTATION):
         mathml = _decode_text(get_data(fmt))
-        if mathml and "<math" in mathml:
+        if mathml and re.search(r"<(\w+:)?math\b", mathml):  # other programs may write <mml:math>
             return mathml
     return None
