@@ -80,4 +80,4 @@ def mathml_for_office(text: str, src: str, mode: str = "auto") -> "tuple[str, Op
     note = None
     if len(eqs) > 1:
         note = "%d equations in the input - only the first one was copied." % len(eqs)
-    return write_equation(eqs[0], "mathml"), note
+    return write_equation(eqs[0], "mathml", for_office=True), note

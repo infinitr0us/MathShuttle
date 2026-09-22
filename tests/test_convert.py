@@ -189,6 +189,42 @@ def test_office_equation_array_becomes_aligned():
     assert convert(signs, "mathml", "latex", wrapper="bare").text.startswith("\\begin{matrix}")
 
 
+OFFICE_TABLES = {  # LaTeX -> cells per row in the MathML for Office (None: an ordinary table, unchanged)
+    ALIGN: [2, 2],
+    "\\begin{align} f &= a \\\\ &\\quad + c \\end{align}": [2, 2],
+    "\\begin{align} a &= b & c &= d \\end{align}": [4],
+    "\\begin{equation}\\begin{split} a &= b \\\\ &= c \\end{split}\\end{equation}": [2, 2],
+    "\\begin{eqnarray} a &=& b \\\\ c &=& d \\end{eqnarray}": [2, 2],  # the relation joins the right side
+    "$$\\begin{aligned} a &= b \\end{aligned} + x$$": [2],
+    "$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$": None,
+    "$$f = \\begin{cases} 1 & x > 0 \\\\ 0 & \\text{else} \\end{cases}$$": None,
+    "\\begin{gather} a = b \\\\ c = d \\end{gather}": None,
+}
+
+
+@pytest.mark.parametrize("tex, cells", list(OFFICE_TABLES.items()))
+def test_mathml_for_office_marks_equation_arrays(tex, cells):
+    # Word pastes a table as an equation array only with columnspacing="0em" (see tests/office_smoke.py)
+    import xml.etree.ElementTree as ET
+    ns = "{http://www.w3.org/1998/Math/MathML}"
+    plain = write_equation(read_equations(tex, "latex")[0], "mathml")
+    office = write_equation(read_equations(tex, "latex")[0], "mathml", for_office=True)
+    if cells is None:
+        assert office == plain
+    else:
+        table = next(ET.fromstring(office).iter(ns + "mtable"))
+        assert table.get("columnspacing") == "0em"
+        assert [len(r.findall(ns + "mtd")) for r in table] == cells
+    # Copy for Word, then Paste from Word in this app gives the same LaTeX as the plain MathML -
+    # except eqnarray, whose r/c/l columns became an align-style array (as Word now holds it)
+    back = convert(office, "mathml", "latex").text
+    if "eqnarray" in tex:
+        assert back == "\\[\n\\begin{aligned}\na & {= b} \\\\\nc & {= d}\n\\end{aligned}\n\\]"
+    else:
+        assert back == convert(plain, "mathml", "latex").text
+    assert 'columnspacing' not in convert(tex, "latex", "mathml").text  # the MathML output stays texmath's
+
+
 def test_numbering_commands_moved_into_aligned_are_flagged():
     src = "\\begin{align}\na &= b \\tag{1} \\\\\nc &= d \\label{eq:c}\n\\end{align}"
     assert convert(src, "latex", "latex", wrapper="equation").notes

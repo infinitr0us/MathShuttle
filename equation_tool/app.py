@@ -47,7 +47,8 @@ OUTPUT (To)
 WORD / POWERPOINT
   Copy for Word/PowerPoint   converts the input to MathML and places it on the clipboard
           in the "MathML" clipboard format; Ctrl+V in Word, PowerPoint or OneNote then
-          inserts a native, editable equation (Ctrl+Shift+C).
+          inserts a native, editable equation (Ctrl+Shift+C).  align / aligned / split
+          blocks arrive as an Office equation array, lined up at the = signs.
   Paste from Word/PowerPoint   reads the equation you copied in Word / PowerPoint
           (select the equation, Ctrl+C) and converts it to LaTeX (Ctrl+Shift+V).
 

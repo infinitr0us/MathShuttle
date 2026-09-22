@@ -492,8 +492,47 @@ def _pretty(el: ET.Element) -> str:
 _MATH_RE = re.compile(r"<math[\s>][\s\S]*?</math>")
 
 
-def write_mathml(eq: Equation, annotate: bool = False) -> str:
-    """MathML for the equation.  With `annotate`, the TeX source is kept in a <semantics>/<annotation>."""
+def _aligned_row(aligns: List[Optional[str]]) -> Optional[str]:
+    """"pairs" for right/left cell pairs (align, aligned, split, alignat, array{rl}), "eqnarray" for
+    eqnarray's right/center/left, None for anything else (matrix, cases, gather...)."""
+    if aligns == ["right", "center", "left"]:
+        return "eqnarray"
+    if len(aligns) >= 2 and all(a == ("right", "left")[i % 2] for i, a in enumerate(aligns)):
+        return "pairs"
+    return None
+
+
+def _office_equation_arrays(root: ET.Element) -> None:
+    """Mark aligned blocks so that Word / PowerPoint paste them as an equation array.
+
+    Office turns a pasted <mtable> into a matrix with centred columns - the = signs no longer line
+    up - unless it has ``columnspacing="0em"``: that is how Word itself exports an equation array
+    (right/left cell pairs, as texmath writes them, in a table without column gaps), and such a
+    table becomes an <m:eqArr> aligned at the & points.  Checked with Word / PowerPoint 16.
+    eqnarray's relation column is merged into the right-hand side (``a & = b``): as a third cell it
+    would open a new alignment column.
+    """
+    ns = "{%s}" % MATHML_NS
+    for table in list(root.iter(ns + "mtable")):
+        if any(table.get(a, "none") != "none" for a in ("frame", "rowlines", "columnlines")):
+            continue  # an array with rules is not an alignment
+        rows = list(table)
+        if not rows or any(r.tag != ns + "mtr" or any(c.tag != ns + "mtd" for c in r) for r in rows):
+            continue  # labelled rows (mlabeledtr) or other content
+        kinds = [_aligned_row([c.get("columnalign") for c in r]) for r in rows]
+        if None in kinds:
+            continue
+        for row, kind in zip(rows, kinds):
+            if kind == "eqnarray":
+                _, relation, rhs = list(row)
+                rhs[:0] = list(relation)
+                row.remove(relation)
+        table.set("columnspacing", "0em")
+
+
+def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False) -> str:
+    """MathML for the equation.  With `annotate`, the TeX source is kept in a <semantics>/<annotation>;
+    `for_office` shapes aligned blocks for Word / PowerPoint (see `_office_equation_arrays`)."""
     out, err = _run(["-f", "json", "-t", "html", _LF, *_mathml_flags()], _doc_json(eq))
     _check_texmath_warning(err)
     m = _MATH_RE.search(out.decode("utf-8"))
@@ -506,6 +545,8 @@ def write_mathml(eq: Equation, annotate: bool = False) -> str:
         for child in list(sem):
             if child.tag != "{%s}annotation" % MATHML_NS:
                 root.append(child)
+    if for_office:
+        _office_equation_arrays(root)
     return _pretty(root)
 
 
@@ -558,7 +599,7 @@ def write_typst(eq: Equation) -> str:
 
 def write_equation(eq: Equation, fmt: str, **opts) -> str:
     if fmt == "mathml":
-        return write_mathml(eq, annotate=opts.get("annotate", False))
+        return write_mathml(eq, annotate=opts.get("annotate", False), for_office=opts.get("for_office", False))
     if fmt == "omml":
         return write_omml(eq)
     if fmt == "eqn":

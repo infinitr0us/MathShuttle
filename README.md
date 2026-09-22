@@ -29,6 +29,10 @@ Requirement: **pandoc** (`winget install JohnMacFarlane.Pandoc`). The app looks 
 then click inside a Word document / a PowerPoint text box and press **Ctrl+V**: Office inserts
 a native equation (the clipboard carries the equation in the `MathML` clipboard format, which
 Word, PowerPoint and OneNote recognise). The equation is fully editable in Office afterwards.
+Aligned blocks (`align`, `aligned`, `split`, `alignat`, `eqnarray`) arrive as an Office
+*equation array* with the `=` signs lined up. Office turns a plain MathML table into a matrix
+with centred columns, so the tool marks these tables the way Word itself exports an equation
+array (`columnspacing="0em"`). `cases` and matrices stay matrices.
 
 **Office → LaTeX.** Select an equation in Word or PowerPoint, press Ctrl+C, then click
 **Paste from Word/PowerPoint** (Ctrl+Shift+V): the tool reads the MathML that Office put on the
@@ -143,6 +147,7 @@ equation_tool/
 
 * Office → LaTeX output is texmath's rendering style: `\sum\limits_{i}`, `\widehat{x}`,
   `\parallel` for `\|`, `\rightarrow` for `\to`, `\operatorname{f}` → `{f}`, extra braces.
-* `gather`, `multline`, `eqnarray`, `flalign` become an OMML matrix (`<m:m>`); only `align`-style
-  arrays become an equation array (`<m:eqArr>`).
+* In the OMML *text* output, `gather`, `multline`, `eqnarray`, `flalign` become an OMML matrix
+  (`<m:m>`); only `align`-style arrays become an equation array (`<m:eqArr>`). (The clipboard
+  route to Office also makes `eqnarray` an equation array, see above.)
 * Unsupported macros stop the conversion with texmath's parse error shown in the output pane.
