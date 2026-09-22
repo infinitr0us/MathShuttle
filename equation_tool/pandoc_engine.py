@@ -54,6 +54,8 @@ class Equation:
 
 # --- locating / running pandoc ------------------------------------------------------
 _pandoc_path: Optional[str] = None
+_pandoc_version: Optional[str] = None
+_texmath_version: Optional[str] = None
 _api_version: Optional[list] = None
 _mathml_flag: Optional[str] = None
 
@@ -88,35 +90,72 @@ def find_pandoc() -> str:
     return _pandoc_path
 
 
+def _shim_target(path: str) -> Optional[str]:
+    """The executable behind a Scoop shim: ``<name>.exe`` is a generic launcher and the
+    ``<name>.shim`` file next to it holds ``path = "<real exe>"`` (unquoted in older Scoop)."""
+    try:
+        with open(os.path.splitext(path)[0] + ".shim", encoding="utf-8-sig") as f:
+            for line in f:
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == "path":
+                    target = value.strip().strip('"')
+                    return target if os.path.isfile(target) else None
+    except OSError:
+        pass
+    return None
+
+
+def pandoc_binary() -> str:
+    """The pandoc executable itself; `find_pandoc()` (what gets *run*) may be a launcher."""
+    path = find_pandoc()
+    return _shim_target(path) or path
+
+
 def pandoc_version() -> str:
-    out, _ = _run(["--version"], b"")
-    return out.decode("utf-8", "replace").splitlines()[0]
+    global _pandoc_version
+    if _pandoc_version is None:
+        out, _ = _run(["--version"], b"")
+        _pandoc_version = out.decode("utf-8", "replace").splitlines()[0]
+    return _pandoc_version
 
 
-_texmath_version: Optional[str] = None
+def _scan_texmath_version(path: str) -> Optional[str]:
+    """The ``texmath-<version>`` Haskell package id embedded in a (statically linked) pandoc."""
+    import mmap
+    try:
+        with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            m = re.search(rb"texmath-(\d+(?:\.\d+)+)", mm)
+            return m.group(1).decode() if m else None  # the match reads the mmap: decode before it closes
+    except (OSError, ValueError):  # unreadable or empty file
+        return None
 
 
 def texmath_version() -> Optional[str]:
     """Version of the texmath library linked into pandoc (pandoc --version does not report it).
 
-    pandoc is statically linked, so the Haskell package id ``texmath-<version>`` is
-    embedded in the executable; a newer texmath only arrives with a newer pandoc.
+    pandoc is statically linked, so the package id is embedded in the executable; a newer
+    texmath only arrives with a newer pandoc.  None when the executable carries no package
+    id (a launcher we do not know how to follow, or an unusual build).
     """
     global _texmath_version
     if _texmath_version is None:
-        import mmap
-        try:
-            with open(find_pandoc(), "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                m = re.search(rb"texmath-(\d+(?:\.\d+)+)", mm)
-                _texmath_version = m.group(1).decode() if m else ""
-        except (OSError, ValueError):
-            _texmath_version = ""
+        _texmath_version = _scan_texmath_version(pandoc_binary()) or ""
     return _texmath_version or None
 
 
 def engine_description() -> str:
-    tm = texmath_version()
-    return pandoc_version() + ("  (texmath %s)" % tm if tm else "")
+    """One line for the status bar: ``pandoc 3.11  (texmath 0.13.2.2)``."""
+    return "%s  (texmath %s)" % (pandoc_version(), texmath_version() or "version unknown")
+
+
+def engine_report() -> str:
+    """`engine_description()` plus the executable in use (and the binary behind a shim)."""
+    command, binary = find_pandoc(), pandoc_binary()
+    lines = [engine_description(), command if binary == command else "%s  ->  %s" % (command, binary)]
+    if not texmath_version():
+        lines.append("texmath version unknown: %s carries no texmath package id (a launcher?). "
+                     "Set EQUATION_TOOL_PANDOC to the real pandoc.exe to inspect it." % os.path.basename(binary))
+    return "\n".join(lines)
 
 
 def _run(args: List[str], stdin: bytes, timeout: float = 60) -> "tuple[bytes, str]":

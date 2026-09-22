@@ -17,7 +17,7 @@ from typing import Optional
 from . import __version__, clipboard
 from .convert import FORMAT_LABELS, MODES, Result, convert, mathml_for_office
 from .latex_wrap import WRAPPERS
-from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description
+from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description, engine_report
 
 SAMPLE = "\\begin{align}\n  \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\\n  \\nabla \\times \\mathbf{B} - \\frac{1}{c^2}\\frac{\\partial \\mathbf{E}}{\\partial t} &= \\mu_0 \\mathbf{J}\n\\end{align}"
 
@@ -127,9 +127,15 @@ class App(tk.Tk):
         self.annotate_chk.pack(side="left", padx=(12, 4))
 
         # --- status bar and button bar are packed before the panes so they always stay visible ---
+        # Two panes: conversion progress / messages on the left, the engine version (pandoc +
+        # texmath) permanently on the right, so the messages never hide it.
+        bar = ttk.Frame(self)
+        bar.pack(fill="x", side="bottom")
+        self.engine_var = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.engine_var, relief="sunken", padding=(6, 2)).pack(side="right")
         self.status_var = tk.StringVar(value="")
-        status = ttk.Label(self, textvariable=self.status_var, anchor="w", relief="sunken", padding=(6, 2))
-        status.pack(fill="x", side="bottom")
+        ttk.Label(bar, textvariable=self.status_var, anchor="w", relief="sunken", padding=(6, 2)).pack(
+            side="left", fill="x", expand=True)
 
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", side="bottom", padx=6, pady=(0, 4))
@@ -230,14 +236,18 @@ class App(tk.Tk):
     # ---- events ---------------------------------------------------------------------------------
     def _startup_check(self) -> None:
         try:
-            self._set_status("Ready  -  engine: %s" % engine_description())
+            self.engine_var.set(engine_description())
         except PandocNotFound as e:
-            self._set_status("pandoc not found", error=True)
+            self.engine_var.set("pandoc not found")
+            self._set_status("pandoc not found  -  install it (winget install JohnMacFarlane.Pandoc) "
+                             "or set EQUATION_TOOL_PANDOC, then restart", error=True)
             messagebox.showerror("pandoc not found", str(e))
             return
         except Exception as e:  # pragma: no cover
+            self.engine_var.set("engine check failed")
             self._set_status("pandoc check failed: %s" % e, error=True)
             return
+        self._set_status("Ready")
         self._schedule()
 
     def _update_option_states(self) -> None:
@@ -384,10 +394,14 @@ class App(tk.Tk):
         self.input.focus_set()
 
     def show_help(self) -> None:
+        try:
+            engine = engine_report()
+        except (PandocNotFound, ConversionError) as e:
+            engine = str(e)
         win = tk.Toplevel(self)
         win.title("Equation Tool - help")
         txt = tk.Text(win, wrap="word", font=self.mono, padx=10, pady=10, width=92, height=32)
-        txt.insert("1.0", HELP)
+        txt.insert("1.0", HELP + "\nENGINE\n" + "".join("  %s\n" % line for line in engine.splitlines()))
         txt.configure(state="disabled")
         txt.pack(fill="both", expand=True)
         ttk.Button(win, text="Close", command=win.destroy).pack(pady=6)

@@ -91,8 +91,15 @@ pandoc is statically linked against texmath, so the texmath version you run is t
 pandoc release was built with - it cannot be updated separately. When a texmath release
 carries a fix you care about, upgrade pandoc once a pandoc release built against it exists
 (`winget upgrade JohnMacFarlane.Pandoc`); the two are maintained together and pandoc releases
-normally follow within days or weeks. The status bar and `python -m equation_tool version`
-show the pandoc and embedded texmath versions.
+normally follow within days or weeks.
+
+The right-hand pane of the status bar, the Help window (`?` / F1) and
+`python -m equation_tool version` show the pandoc and embedded texmath versions; the latter
+two also print which `pandoc.exe` is in use. Check that path before upgrading: a copy bundled
+with `build_exe.ps1 -BundlePandoc` or selected through `EQUATION_TOOL_PANDOC` takes precedence
+over the installed pandoc and is not touched by `winget upgrade` - rebuild with `-BundlePandoc`
+(or replace that copy) and restart the app. A Scoop shim on `PATH` is followed to the real
+executable when reading the texmath version.
 
 ## Building the exe
 

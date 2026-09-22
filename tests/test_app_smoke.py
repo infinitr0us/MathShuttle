@@ -3,6 +3,7 @@
 Needs a desktop session (tkinter) and pandoc; overwrites the clipboard.
 """
 import os
+import re
 import sys
 import time
 
@@ -109,3 +110,19 @@ def test_swap_moves_output_to_input(app):
     app.dst_var.set("eqn")
     app.swap()
     assert "Cannot swap" in app.status_var.get()
+
+
+def test_engine_version_survives_auto_convert(app):
+    # The engine pane is filled by the startup check and must outlive the first auto-conversion,
+    # which rewrites the status pane ("Converting..." then the summary) DEBOUNCE_MS after startup.
+    assert pump(app, until=lambda: "texmath" in app.engine_var.get())
+    engine = app.engine_var.get()
+    assert re.fullmatch(r"pandoc \S+  \(texmath \d+(?:\.\d+)+\)", engine), engine
+    app.src_var.set("latex")
+    app.dst_var.set("mathml")
+    set_input(app, "$x^2$")
+    app.auto_var.set(True)
+    app._schedule()
+    assert pump(app, until=lambda: "inline" in app.status_var.get())
+    assert app.engine_var.get() == engine
+    assert "texmath" not in app.status_var.get()

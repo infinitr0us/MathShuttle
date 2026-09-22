@@ -13,7 +13,7 @@ import sys
 
 from .convert import MODES, convert, mathml_for_office
 from .latex_wrap import WRAPPER_KEYS
-from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description, find_pandoc
+from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_report
 
 
 def _read_source(path: str | None) -> str:
@@ -67,7 +67,7 @@ def _cli(argv: list[str]) -> int:
                 return 2
             sys.stdout.write(convert(mathml, "mathml", args.dst, args.mode, args.wrapper).text + "\n")
         elif args.cmd == "version":
-            sys.stdout.write("%s\n%s\n" % (engine_description(), find_pandoc()))
+            sys.stdout.write(engine_report() + "\n")
         else:
             parser.print_help()
             return 2
