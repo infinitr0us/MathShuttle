@@ -25,6 +25,7 @@ SAMPLE = "\\begin{align}\n  \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\vareps
 SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "EquationTool", "settings.json")
 DEFAULT_GEOMETRY = "1200x640"
 DEBOUNCE_MS = 450
+MAX_SAVED_INPUT = 200_000  # characters of input kept for the next start
 
 HELP = """Equation Tool %s  -  texmath (via pandoc) running locally
 
@@ -227,9 +228,11 @@ class App(tk.Tk):
     def _restore_geometry(self, geometry) -> None:
         """Apply a saved geometry; drop a position that is on no monitor any more (a disconnected
         second screen), and ignore a malformed value rather than failing to start."""
-        m = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geometry) if isinstance(geometry, str) else None
-        if m and not _on_a_monitor(int(m.group(3)) + 60, int(m.group(4)) + 15):  # a point in the title bar
-            geometry = "%sx%s" % m.group(1, 2)
+        m = re.fullmatch(r"(\d+)x(\d+)([+-])(-?\d+)([+-])(-?\d+)", geometry) if isinstance(geometry, str) else None
+        # An offset from the right / bottom edge (-X-Y: only from an edited settings file, Tk reports a
+        # position the app set itself as +X+Y) cannot be checked against the monitors: keep the size only.
+        if m and ("-" in m.group(3, 5) or not _on_a_monitor(int(m.group(4)) + 60, int(m.group(6)) + 15)):
+            geometry = "%sx%s" % m.group(1, 2)  # (x + 60, y + 15) is a point in the title bar
         try:
             self.geometry(geometry)
         except tk.TclError:
@@ -251,10 +254,13 @@ class App(tk.Tk):
         self._update_option_states()
 
     def _save_settings(self) -> None:
+        text = self.input.get("1.0", "end-1c")
         data = {"src": self.src_var.get(), "dst": self.dst_var.get(), "mode": self.mode_var.get(),
                 "wrapper": self.wrapper_var.get(), "auto_convert": self.auto_var.get(),
                 "annotate": self.annotate_var.get(), "geometry": self.geometry(),
-                "input": self.input.get("1.0", "end-1c")}  # whole: a cut could land inside an equation
+                # whole or not at all: a cut could land inside an equation, and a very large input
+                # (a whole document.xml) would be reloaded and converted again at every start
+                "input": text if len(text) <= MAX_SAVED_INPUT else ""}
         try:
             os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
             with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -308,25 +314,33 @@ class App(tk.Tk):
         return (self.input.get("1.0", "end-1c"), self.src_var.get(), self.dst_var.get(), self.mode_var.get(),
                 self.wrapper_var.get(), self.annotate_var.get())
 
-    def convert_now(self) -> None:
-        if self._after_id:  # a debounced conversion is pending (typing, option change): this one replaces it
+    def _new_conversion(self) -> None:
+        """Results of conversions still running are stale from now on, and so is a pending debounced
+        one (typing, option change): the conversion about to start replaces them."""
+        if self._after_id:
             self.after_cancel(self._after_id)
             self._after_id = None
-        self._seq += 1  # results of conversions still running are stale from now on
+        self._seq += 1
+
+    def convert_now(self) -> None:
+        self._new_conversion()
         args = self._conversion_args()
         if not args[0].strip():
             self._set_output("")
             self._set_status("")
             return
-        seq = self._seq
+        self._start(args)
+
+    def _start(self, args, swap: bool = False) -> None:
+        """Convert `args` in a background thread; with `swap`, the result completes a Swap."""
         self._set_status("Converting...")
         self._running += 1
-        threading.Thread(target=self._worker, args=(seq, args), daemon=True).start()
+        threading.Thread(target=self._worker, args=(self._seq, args, swap), daemon=True).start()
         if not self._polling:
             self._polling = True
             self.after(30, self._poll_results)
 
-    def _worker(self, seq: int, args) -> None:
+    def _worker(self, seq: int, args, swap: bool) -> None:
         """Runs in a background thread; only ever touches the queue."""
         try:
             result: object = convert(*args)
@@ -334,29 +348,36 @@ class App(tk.Tk):
             result = e
         except Exception:  # pragma: no cover
             result = ConversionError("Unexpected error:\n" + traceback.format_exc())
-        self._results.put((seq, args, result))
+        self._results.put((seq, args, result, swap))
 
     def _poll_results(self) -> None:
         while True:
             try:
-                seq, args, result = self._results.get_nowait()
+                seq, args, result, swap = self._results.get_nowait()
             except queue.Empty:
                 break
             self._running -= 1
-            self._finish(seq, args, result)
+            self._finish(seq, args, result, swap)
         if self._running:
             self.after(30, self._poll_results)
         else:
             self._polling = False
 
-    def _finish(self, seq: int, args, result) -> None:
+    def _finish(self, seq: int, args, result, swap: bool = False) -> None:
         if seq != self._seq:
             return  # a newer conversion has been started, or the input was cleared
+        if swap and self._conversion_args() != args:
+            # input or options changed while converting (auto-convert off: no newer conversion)
+            self._set_status("Swap cancelled: the input or the options changed", error=True)
+            return
         if isinstance(result, Exception):
             self._set_output(str(result), error=True)
-            self._set_status("Conversion failed", error=True)
+            self._set_status("Cannot swap: the input does not convert" if swap else "Conversion failed", error=True)
             return
         assert isinstance(result, Result)
+        if swap:
+            self._swap_with(args, result.text)
+            return
         self._set_output(result.text)
         self._shown_args = args
         n = len(result.equations)
@@ -408,26 +429,26 @@ class App(tk.Tk):
         self.convert_now()
 
     def swap(self) -> None:
-        src, dst = self.src_var.get(), self.dst_var.get()
+        dst = self.dst_var.get()
         if dst not in READ_FORMATS:
             self._set_status("Cannot swap: %s cannot be used as input" % FORMAT_LABELS[dst], error=True)
             return
         args = self._conversion_args()
         if self._shown_args == args:
-            output = self.output.get("1.0", "end-1c")  # the current result (possibly edited by hand)
+            self._swap_with(args, self.output.get("1.0", "end-1c"))  # the current result (possibly edited by hand)
         elif args[0].strip():
             # The output pane is stale (auto-convert off, or a conversion still pending) or shows an
-            # error: it must not become input in the new format.  Convert the current input first.
-            try:
-                output = convert(*args).text
-            except (ConversionError, PandocNotFound) as e:
-                self._set_output(str(e), error=True)
-                self._set_status("Cannot swap: the input does not convert", error=True)
-                return
+            # error: it must not become input in the new format.  Convert the current input first, in
+            # the background like any conversion; _finish completes the swap.
+            self._new_conversion()
+            self._start(args, swap=True)
         else:
-            output = ""
-        self.src_var.set(dst)
-        self.dst_var.set(src)
+            self._swap_with(args, "")
+
+    def _swap_with(self, args, output: str) -> None:
+        """Swap From and To of `args`; `output` (their result) becomes the input."""
+        self.src_var.set(args[2])
+        self.dst_var.set(args[1])
         if output.strip():
             self.input.delete("1.0", "end")
             self.input.insert("1.0", output)

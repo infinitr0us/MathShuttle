@@ -32,7 +32,8 @@ Word, PowerPoint and OneNote recognise). The equation is fully editable in Offic
 Aligned blocks (`align`, `aligned`, `split`, `alignat`, `eqnarray`) arrive as an Office
 *equation array* with the `=` signs lined up. Office turns a plain MathML table into a matrix
 with centred columns, so the tool marks these tables the way Word itself exports an equation
-array (`columnspacing="0em"`). `cases` and matrices stay matrices.
+array (`columnspacing="0em"`). `cases` and matrices stay matrices, and so does an `array` unless its
+columns read like an alignment (`\begin{array}{rl} x &= 1`, or `{rcl}` with relations in the middle).
 
 **Office → LaTeX.** Select an equation in Word or PowerPoint, press Ctrl+C, then click
 **Paste from Word/PowerPoint** (Ctrl+Shift+V): the tool reads the MathML that Office put on the
@@ -54,7 +55,7 @@ Everything pandoc's LaTeX reader understands is accepted, in any mix:
 
 | input | detected mode |
 |---|---|
-| bare `\frac{a}{b}` (no `$`, `\(`, `\[` or maths environment outside braces — `\mbox{for $n$}` is fine) | **Mode** box (Auto = display) |
+| bare `\frac{a}{b}` (no `$`, `\(`, `\[` or maths environment, except inside `\text`, `\mbox` and similar: `\mbox{for $n$}` is fine) | **Mode** box (Auto = display) |
 | `$…$`, `\(…\)`, `\begin{math}` | inline |
 | `$$…$$`, `\[…\]`, `\begin{displaymath}` | display |
 | `equation`, `equation*` | display |
@@ -82,8 +83,8 @@ Environment content is converted as needed: an `align` body becomes `\begin{alig
 single-equation wrapper is chosen (and `gather` → `gathered`, `multline` → `gathered`), and an
 `aligned`/`split` block inside an `equation` is unwrapped when `align` is chosen.
 `eqnarray`'s `a &=& b` rows become `a &= b` in `align`/`aligned`, a `split` becomes `aligned`
-in `$…$` / `\(…\)`, and a note appears when per-line `\tag` / `\label` commands end up where
-LaTeX rejects them (inside `aligned`, in `$…$`, …).
+in `$…$` / `\(…\)`, and a note appears when `\tag` / `\label` commands end up where
+LaTeX rejects them (per-line ones inside `aligned`, any `\tag` in `$…$`, …).
 LaTeX → LaTeX never re-renders the equation; only the delimiters change.
 
 ## Command line
@@ -94,7 +95,8 @@ python -m equation_tool copy  [-f latex] [FILE]          # → clipboard, ready 
 python -m equation_tool paste [-t latex] [--wrapper W]   # equation copied in Office → stdout
 python -m equation_tool version                          # pandoc + embedded texmath version
 ```
-`FILE` defaults to stdin. Input and output are UTF-8 (also through pipes and redirection).
+`FILE` defaults to stdin. Input and output are UTF-8 (also through pipes and redirection); an input
+file may also be UTF-16 with a BOM (what `>` writes in Windows PowerShell 5.1).
 Errors (e.g. texmath parse errors, with the caret diagram) go to stderr with exit code 1.
 
 ## Keeping texmath up to date

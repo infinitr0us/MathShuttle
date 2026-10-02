@@ -64,12 +64,13 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
         if dst == "latex":
             display = not latex_wrap.wrapper_is_inline(wrapper, eq.display)
             outputs.append(latex_wrap.wrap(eq.tex, wrapper, display))
-            numbering_conflict |= latex_wrap.numbering_conflict(eq.tex, wrapper)
-            eqs[i] = Equation(eq.tex, display)  # the mode of the output, which the wrapper decides
+            numbering_conflict |= latex_wrap.numbering_conflict(eq.tex, wrapper, display)
+            # the mode of the output, which the wrapper decides (Auto: a kept environment)
+            eqs[i] = Equation(eq.tex, latex_wrap.output_is_display(eq.tex, wrapper, display))
         else:
             outputs.append(write_equation(eq, dst, annotate=annotate))
     if numbering_conflict:
-        notes.append("Per-line \\tag / \\label commands were kept, but LaTeX allows no \\tag and at most one "
+        notes.append("\\tag / \\label commands were kept, but LaTeX allows no \\tag and at most one "
                      "\\label in this wrapper - edit them, or choose the align wrapper.")
     return Result(eqs, outputs, notes)
 

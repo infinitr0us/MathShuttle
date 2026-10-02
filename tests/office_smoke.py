@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import win32com.client  # noqa: E402
 
 from equation_tool import clipboard  # noqa: E402
-from equation_tool.pandoc_engine import Equation, read_equations, write_equation  # noqa: E402
+from equation_tool.convert import mathml_for_office  # noqa: E402
+from equation_tool.pandoc_engine import read_equations  # noqa: E402
 
 TEX = r"\frac{\partial f}{\partial x} + \sum_{i=1}^{n} \mathbf{x}_i^2 = \text{const}"
 ALIGN = "\\begin{align}\na &= b + c \\\\\nd &= \\int_0^1 e^{-t}\\,dt\n\\end{align}"
@@ -30,7 +31,13 @@ CONT = "\\begin{align}\nf &= a + b \\\\\n&\\quad + c \\\\\n&+ d\n\\end{align}"
 ALIGN4 = "\\begin{align}\na &= b & c &= d \\\\\nee &= f & g &= hh\n\\end{align}"  # two alignment columns
 EQNARRAY = "\\begin{eqnarray}\na &=& b + c \\\\\ndd &=& e\n\\end{eqnarray}"
 CASES = "\\begin{equation}\nf = \\begin{cases} 1 & x > 0 \\\\ 0 & \\text{else} \\end{cases}\n\\end{equation}"  # stays a matrix
-EQUATION_ARRAYS = (ALIGN, CONT, ALIGN4, EQNARRAY)
+# texmath gives these ragged rows (a trailing \\, a line without &): padded for Office
+RAGGED = "\\begin{align}\na &= b + c \\\\\nd &= e \\\\\n\\end{align}"
+NO_AMP = "\\begin{align}\na &= b + c \\\\\n\\quad + d\n\\end{align}"
+# an array becomes an equation array only when it reads like one
+SYSTEM = "\\[\n\\left\\{\\begin{array}{rl} x + y &= 1 \\\\ x - y &= 0 \\end{array}\\right.\n\\]"
+VALUES = "\\[\n\\begin{array}{rcl} 1 & 2 & 3 \\\\ 4 & 5 & 6 \\end{array}\n\\]"  # stays a matrix
+EQUATION_ARRAYS = (ALIGN, CONT, ALIGN4, EQNARRAY, RAGGED, NO_AMP, SYSTEM)
 
 
 def is_running(exe: str) -> bool:
@@ -74,7 +81,7 @@ def test_word(mathml: str, eq_array: bool):
         assert mml_back, "Word did not put MathML on the clipboard"
         back = [e.tex for e in read_equations(mml_back, "mathml")]
         print("  MathML -> LaTeX:", back)
-        assert back[0].startswith("\\begin{aligned}") == eq_array
+        assert ("\\begin{aligned}" in back[0]) == eq_array  # SYSTEM: inside \left\{ ... \right.
     finally:
         doc.Close(0)
         if not was_running:
@@ -96,14 +103,14 @@ def test_powerpoint(mathml: str, eq_array: bool):
         tr2 = shape.TextFrame2.TextRange
         print("  MathZones.Count after paste into textbox:", tr2.MathZones.Count)
         print("  text:", tr2.Text[:100])
-        if tr2.MathZones.Count:
-            tr2.MathZones.Item(1).Copy()
-            time.sleep(0.5)
-            mml_back = show_clipboard()
-            assert mml_back, "PowerPoint did not put MathML on the clipboard"
-            print("  MathML -> LaTeX:", [e.tex for e in read_equations(mml_back, "mathml")])
-            # an equation array is exported as a table without column gaps
-            assert ('columnspacing="0em"' in mml_back) == eq_array
+        assert tr2.MathZones.Count >= 1, "PowerPoint did not create a native equation from the MathML clipboard"
+        tr2.MathZones.Item(1).Copy()
+        time.sleep(0.5)
+        mml_back = show_clipboard()
+        assert mml_back, "PowerPoint did not put MathML on the clipboard"
+        print("  MathML -> LaTeX:", [e.tex for e in read_equations(mml_back, "mathml")])
+        # an equation array is exported as a table without column gaps
+        assert ('columnspacing="0em"' in mml_back) == eq_array
     finally:
         pres.Close()
         if not was_running:
@@ -111,11 +118,10 @@ def test_powerpoint(mathml: str, eq_array: bool):
 
 
 if __name__ == "__main__":
-    for tex in (TEX, ALIGN, CONT, ALIGN4, EQNARRAY, CASES):
+    for tex in (TEX, ALIGN, CONT, ALIGN4, EQNARRAY, CASES, RAGGED, NO_AMP, SYSTEM, VALUES):
         print("#" * 70)
         print("LaTeX:", tex)
-        eq = read_equations(tex, "latex")[0] if "\\begin" in tex else Equation(tex, True)
-        mathml = write_equation(eq, "mathml", for_office=True)  # what "Copy for Word/PowerPoint" puts there
+        mathml, _ = mathml_for_office(tex, "latex")  # what "Copy for Word/PowerPoint" puts there
         print("MathML:", mathml[:200].replace("\n", " "))
         test_word(mathml, tex in EQUATION_ARRAYS)
         test_powerpoint(mathml, tex in EQUATION_ARRAYS)

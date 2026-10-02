@@ -75,6 +75,14 @@ def test_eqnarray_columns_become_align_pairs():
     assert wrap(eqn, "auto") == eqn  # kept verbatim when the environment is kept
     # a & inside braces is not a column separator
     assert classify("\\begin{eqnarray*} a &=& \\text{x {&} y} \\end{eqnarray*}") == ("align", "a &= \\text{x {&} y}")
+    # nor are the & and \\ of a nested matrix (its second row used to lose a separator: "5  6")
+    nested = "\\begin{eqnarray} A &=& \\begin{pmatrix} 1 & 2 & 3 \\\\ 4 & 5 & 6 \\end{pmatrix} \\\\ x &=& y \\end{eqnarray}"
+    assert classify(nested) == ("align", "A &= \\begin{pmatrix} 1 & 2 & 3 \\\\ 4 & 5 & 6 \\end{pmatrix} \\\\ x &= y")
+    # nor one in a comment
+    assert classify("\\begin{eqnarray} a &=& b % c & d & e\n\\end{eqnarray}") == ("align", "a &= b % c & d & e")
+    # a comment between \begin and the environment name does not hide the nested matrix
+    commented = "\\begin{eqnarray} A &=& \\begin% matrix\n{pmatrix} 1 & 2 & 3 \\\\ 4 & 5 & 6 \\end{pmatrix} \\end{eqnarray}"
+    assert classify(commented)[1] == "A &= \\begin% matrix\n{pmatrix} 1 & 2 & 3 \\\\ 4 & 5 & 6 \\end{pmatrix}"
 
 
 def test_position_argument_is_dropped_when_unwrapping():
@@ -83,6 +91,18 @@ def test_position_argument_is_dropped_when_unwrapping():
     assert classify("\\begin{multlined}[t][6cm] a \\\\ b \\end{multlined}") == ("multline", "a \\\\ b")
     # kept where the environment itself is kept
     assert wrap("\\begin{aligned}[t]x&=y\\end{aligned}", "bracket") == "\\[ \\begin{aligned}[t]x&=y\\end{aligned} \\]"
+    # LaTeX also finds the argument after a comment; the comment stays
+    assert wrap("\\begin{aligned}% position\n[t]x&=y\\end{aligned}", "align") == "\\begin{align}\n% position\nx&=y\n\\end{align}"
+    assert classify("\\begin{alignat}% columns\n{2} a &= b \\end{alignat}") == ("align", "% columns\n a &= b")
+
+
+def test_environment_commands_in_comments_are_ignored():
+    two = "\\begin{aligned}\na &= b % \\begin{aligned}\n\\end{aligned} \\quad \\begin{aligned}\nc &= d % \\end{aligned}\n\\end{aligned}"
+    assert classify(two) == ("plain", two)  # two siblings, not one environment
+    assert wrap(two, "align") == "\\begin{align}\n%s\n\\end{align}" % two
+    # ... and comments between \begin / \end and the name do not hide the inner boundaries
+    split = "\\begin{aligned}a&=b\\end% first\n{aligned}\\quad\\begin% second\n{aligned}c&=d\\end{aligned}"
+    assert classify(split) == ("plain", split)
 
 
 def test_trailing_comment_does_not_swallow_the_closing_delimiter():
@@ -97,6 +117,14 @@ def test_split_becomes_aligned_inline():
     assert wrap(EQ_SPLIT, "dollar") == "$\\begin{aligned}\na &= b \\\\\n&= c\n\\end{aligned}$"
     assert wrap("\\begin{split} a &= b \\end{split}", "paren") == "\\(\\begin{aligned}\na &= b\n\\end{aligned}\\)"
     assert wrap(EQ_SPLIT, "bracket").startswith("\\[\n\\begin{split}")  # fine in display maths
+    # also next to other content, e.g. the usual \label before it
+    labelled = "\\begin{equation}\\label{eq:s}\n\\begin{split}\na &= b \\\\\n&= c\n\\end{split}\n\\end{equation}"
+    assert wrap(labelled, "dollar") == "$\\label{eq:s}\n\\begin{aligned}\na &= b \\\\\n&= c\n\\end{aligned}$"
+    assert wrap(labelled, "bracket") == "\\[\n\\label{eq:s}\n\\begin{split}\na &= b \\\\\n&= c\n\\end{split}\n\\]"
+    assert wrap("x = 1 % \\begin{split}", "dollar") == "$x = 1 % \\begin{split}\n$"  # a comment is left alone
+    # a comment between \begin and the name: both ends are renamed, the comment stays
+    assert wrap("\\label{s}\\begin% block\n{split}a &= b\\end{split}", "dollar") == \
+        "$\\label{s}\\begin% block\n{aligned}a &= b\\end{aligned}$"
 
 
 def test_gather_conversions():

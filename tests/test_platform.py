@@ -24,6 +24,17 @@ def test_mistyped_env_var_is_an_error(monkeypatch, tmp_path):
     assert "EQUATION_TOOL_PANDOC" in str(e.value)
 
 
+def test_pandoc_that_cannot_be_started_is_a_conversion_error(monkeypatch, tmp_path):
+    # e.g. pandoc.exe removed or replaced by `winget upgrade` while the app runs
+    def run(*args, **kwargs):
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+    monkeypatch.setattr(pe, "_pandoc_path", str(tmp_path / "pandoc.exe"))
+    monkeypatch.setattr(pe.subprocess, "run", run)
+    with pytest.raises(pe.ConversionError) as e:
+        pe._run(["--version"], b"")
+    assert str(e.value).startswith("Could not run ")
+
+
 def test_current_directory_is_not_searched(monkeypatch, tmp_path):
     (tmp_path / "pandoc.exe").write_bytes(b"planted")
     monkeypatch.chdir(tmp_path)
@@ -64,3 +75,34 @@ def test_cli_stdin_is_read_as_utf8():
     proc = _run_cli(["convert", "-t", "latex", "--wrapper", "bare"], "$\\text{café 公式}$".encode("utf-8"))
     assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
     assert proc.stdout.decode("utf-8").strip() == "\\text{café 公式}"
+
+
+def test_cli_reads_a_utf16_file(tmp_path, capsys):
+    # what `>` writes in Windows PowerShell 5.1 (it used to end in a UnicodeDecodeError traceback)
+    from equation_tool.__main__ import main
+    src = tmp_path / "eq.tex"
+    src.write_bytes("\\text{café} \\\\\r\n x".encode("utf-16"))  # with its BOM, and CRLF
+    assert main(["convert", "-t", "latex", "--wrapper", "bare", str(src)]) == 0
+    assert capsys.readouterr().out == "\\text{café} \\\\\n x\n"
+
+
+@pytest.mark.parametrize("content", [None, b"\xff\x00 not text \xc3"])
+def test_cli_unreadable_file_is_a_clean_error(tmp_path, capsys, content):
+    from equation_tool.__main__ import main
+    src = tmp_path / "eq.tex"
+    if content is not None:
+        src.write_bytes(content)
+    assert main(["convert", str(src)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and str(src) in err and "Traceback" not in err
+
+
+def test_cli_clipboard_error_is_a_clean_error(monkeypatch, capsys):
+    # no clipboard access: the clipboard read is replaced by one that fails
+    from equation_tool.__main__ import main
+
+    def busy():
+        raise clipboard.ClipboardError("Could not open the clipboard (another application is holding it)")
+    monkeypatch.setattr(clipboard, "read_equation_from_office", busy)
+    assert main(["paste"]) == 1
+    assert capsys.readouterr().err == "error: Could not open the clipboard (another application is holding it)\n"

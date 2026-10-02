@@ -29,11 +29,33 @@ _OUTER = PLAIN_ENVS + ALIGN_ENVS + GATHER_ENVS + MULTLINE_ENVS
 _INNER = INNER_ALIGN + INNER_GATHER + INNER_MULTLINE
 
 _ENV_RE = re.compile(r"^\s*\\begin\{(?P<env>[a-zA-Z]+\*?)\}(?P<body>[\s\S]*?)\\end\{(?P=env)\}\s*$")
-_ALIGNAT_ARG_RE = re.compile(r"^\s*\{\s*\d+\s*\}")
+# LaTeX finds an environment's arguments after spaces and after comments (``\begin{aligned}% note``
+# + newline + ``[t]``): group 1 is that gap, kept in the body
+_BEFORE_ARG = r"^((?:\s|%[^\n]*(?:\n|$))*)"
+_ALIGNAT_ARG_RE = re.compile(_BEFORE_ARG + r"\{\s*\d+\s*\}")
 # vertical position of aligned / gathered ([t], [b], [c]); multlined also takes a width: [t][6cm]
-_POSITION_ARG_RE = {"aligned": re.compile(r"^\s*\[\s*[tbc]\s*\]"), "gathered": re.compile(r"^\s*\[\s*[tbc]\s*\]"),
-                    "multlined": re.compile(r"^\s*(?:\[[^\[\]]*\]\s*){1,2}")}
-_TOKEN_RE = re.compile(r"\\[a-zA-Z@]+|\\.|%[^\n]*|[{}&]", re.S)
+_POSITION_ARG_RE = {"aligned": re.compile(_BEFORE_ARG + r"\[\s*[tbc]\s*\]"),
+                    "gathered": re.compile(_BEFORE_ARG + r"\[\s*[tbc]\s*\]"),
+                    "multlined": re.compile(_BEFORE_ARG + r"(?:\[[^\[\]]*\]\s*){1,2}")}
+# \begin{env} / \end{env} (groups "be", "env"; spaces or comments may precede the name), other control
+# sequences, comments, braces and &; a comment is one token, so nothing inside it counts
+_TOKEN_RE = re.compile(r"\\(?P<be>begin|end)(?:\s|%[^\n]*\n)*\{(?P<env>[^{}]*)\}|\\[a-zA-Z@]+|\\.|%[^\n]*|[{}&]", re.S)
+
+
+def _top_level(body: str):
+    """The tokens of `body` that are outside every brace group and nested environment (comments
+    skipped), as regex matches; \\begin / \\end tokens themselves are not yielded."""
+    depth = 0
+    for m in _TOKEN_RE.finditer(body):
+        tok = m.group()
+        if m.group("be"):
+            depth += 1 if m.group("be") == "begin" else -1
+        elif tok == "{":
+            depth += 1
+        elif tok == "}":
+            depth -= 1
+        elif depth <= 0 and not tok.startswith("%"):
+            yield m
 
 # ---- output wrappers ---------------------------------------------------------------------
 # key -> label shown in the UI
@@ -61,26 +83,23 @@ def _balanced(body: str, env: str) -> bool:
     """True if the \\begin{env} / \\end{env} inside `body` pair up, i.e. the outer begin and end
     enclose all of `tex` - not ``\\begin{aligned}..\\end{aligned} \\quad \\begin{aligned}..\\end{aligned}``."""
     depth = 0
-    for m in re.finditer(r"\\(begin|end)\{%s\}" % re.escape(env), body):
-        depth += 1 if m.group(1) == "begin" else -1
-        if depth < 0:
-            return False
+    for m in _TOKEN_RE.finditer(body):  # not inside comments
+        if m.group("be") and m.group("env").strip() == env:
+            depth += 1 if m.group("be") == "begin" else -1
+            if depth < 0:
+                return False
     return depth == 0
 
 
 def _eqnarray_to_align(body: str) -> str:
     """eqnarray rows have three columns (``a &=& b``); align / aligned have pairs (``a &= b``):
-    drop the second top-level ``&`` of every row."""
-    out, depth, amps, last = [], 0, 0, 0
-    for m in _TOKEN_RE.finditer(body):
+    drop the second ``&`` of every row (not counting those of a nested matrix or array)."""
+    out, amps, last = [], 0, 0
+    for m in _top_level(body):
         tok = m.group()
-        if tok == "{":
-            depth += 1
-        elif tok == "}":
-            depth -= 1
-        elif depth == 0 and tok == "\\\\":
+        if tok == "\\\\":
             amps = 0
-        elif depth == 0 and tok == "&":
+        elif tok == "&":
             amps += 1
             if amps == 2:
                 out.append(body[last:m.start()])
@@ -94,11 +113,11 @@ def split_env(tex: str, envs: Tuple[str, ...]) -> Tuple[Optional[str], str]:
     if m and m.group("env") in envs and _balanced(m.group("body"), m.group("env")):
         env, body = m.group("env"), m.group("body")
         if env.startswith("alignat"):
-            body = _ALIGNAT_ARG_RE.sub("", body, count=1)  # drop the column-count argument
+            body = _ALIGNAT_ARG_RE.sub(r"\1", body, count=1)  # drop the column-count argument
         elif env.startswith("eqnarray"):
             body = _eqnarray_to_align(body)
         elif env in _POSITION_ARG_RE:
-            body = _POSITION_ARG_RE[env].sub("", body, count=1)  # meaningless outside the enclosing formula
+            body = _POSITION_ARG_RE[env].sub(r"\1", body, count=1)  # meaningless outside the enclosing formula
         return env, body.strip("\n").strip()
     return None, tex.strip()
 
@@ -109,9 +128,17 @@ def _ends_in_comment(body: str) -> bool:
 
 
 def _no_split(body: str) -> str:
-    """split only works directly inside a display formula: inline, it becomes aligned."""
+    """split only works directly inside a display formula: inline, it becomes aligned - also when the
+    formula holds more than the split block (``\\label{eq:a}\\begin{split}...``)."""
     env, inner = split_env(body, ("split",))
-    return _env("aligned", inner) if env else body
+    if env:
+        return _env("aligned", inner)
+    out, last = [], 0
+    for m in _TOKEN_RE.finditer(body):
+        if m.group("be") and m.group("env").strip() == "split":
+            out.append(body[last:m.start("env")] + "aligned")
+            last = m.end("env")
+    return "".join(out) + body[last:]
 
 
 def classify(tex: str) -> Tuple[str, str]:
@@ -210,24 +237,39 @@ def wrap(tex: str, wrapper: str, display: bool = True) -> str:
     return _env(wrapper, body)
 
 
-def numbering_conflict(tex: str, wrapper: str) -> bool:
-    """True if `wrap(tex, wrapper)` moves an environment's per-line ``\\tag`` / ``\\label``
-    commands somewhere LaTeX accepts no ``\\tag`` and at most one ``\\label`` (inside
-    aligned / gathered, in a single-equation or inline wrapper, or several tags in multline)."""
-    if wrapper == "auto" and has_outer_env(tex):
-        return False  # kept verbatim
+def numbering_conflict(tex: str, wrapper: str, display: bool = True) -> bool:
+    """True if `wrap(tex, wrapper, display)` puts ``\\tag`` / ``\\label`` commands somewhere LaTeX
+    rejects them: a ``\\tag`` in inline maths, or an environment's per-line tags / several labels
+    inside aligned / gathered, in a single-equation wrapper, or several tags in multline."""
+    if wrapper == "auto":
+        if has_outer_env(tex):
+            return False  # kept verbatim
+        wrapper = "bracket" if display else "dollar"
     kind, content = classify(tex)
+    tags = bool(re.search(r"\\tag(?![a-zA-Z])", content))
+    if wrapper in INLINE_WRAPPERS and tags:
+        return True  # \tag is an error in $...$ / \(...\), whatever the source environment
     target = wrapper.rstrip("*")
     if (kind == "plain" or target == "align" or (target == "gather" and kind != "align")
             or (target == "multline" and kind == "multline")):
         return False
-    return bool(re.search(r"\\tag(?![a-zA-Z])", content)) or len(re.findall(r"\\label(?![a-zA-Z])", content)) > 1
+    return tags or len(re.findall(r"\\label(?![a-zA-Z])", content)) > 1
 
 
 def wrapper_is_inline(wrapper: str, display: bool) -> bool:
     if wrapper == "auto":
         return not display
     return wrapper in INLINE_WRAPPERS
+
+
+def output_is_display(tex: str, wrapper: str, display: bool) -> bool:
+    """Whether `wrap(tex, wrapper, display)` is display maths: Auto keeps an environment of the
+    input (display, except ``math``) whatever `display` asks for."""
+    if wrapper == "auto":
+        env = split_env(tex, _OUTER)[0]
+        if env is not None:
+            return env != "math"
+    return not wrapper_is_inline(wrapper, display)
 
 
 def join_outputs(parts: List[str]) -> str:

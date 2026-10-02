@@ -242,25 +242,74 @@ def _read_json(fmt: str, source: bytes) -> List[Equation]:
 _PANDOC_MATH_ENVS = frozenset(
     "equation equation* displaymath math align align* alignat alignat* flalign flalign* eqnarray eqnarray* "
     "gather gather* multline multline* dmath dmath* dgroup dgroup* darray darray* subequations".split())
-_LATEX_TOKEN = re.compile(r"\\begin\s*\{([^{}]*)\}|\\[a-zA-Z@]+|\\.|%[^\n]*|[{}$]", re.S)
+# spaces and comments, which LaTeX skips between a command and its argument
+_TEX_GAP = r"(?:\s|%[^\n]*\n)*"
+_LATEX_TOKEN = re.compile(r"\\begin" + _TEX_GAP + r"\{([^{}]*)\}|\\[a-zA-Z@]+|\\.|%[^\n]*|[{}$]", re.S)
+# commands whose argument is text even inside maths, so that it may hold nested $...$
+_TEXT_IN_MATH = frozenset(
+    "\\text \\mbox \\hbox \\makebox \\fbox \\framebox \\raisebox \\parbox \\textrm \\textit \\textbf \\textsf "
+    "\\texttt \\textnormal \\textup \\textsl \\textsc \\textmd \\textcolor \\colorbox \\fcolorbox".split())
+# what may stand between a command and its next argument: spaces, [options], TeX's "to 3cm"
+_ARG_GAP = re.compile(r"\s*(?:\[[^\[\]{}]*\]\s*)*(?:(?:to|spread)\b[^{}\\$%\[\]]*)?")
+
+
+_MACRO_DEF = re.compile(r"\\(?:(?:re|provide)?newcommand|DeclareRobustCommand)\*?" + _TEX_GAP +
+                        r"(?:\{\s*(\\[a-zA-Z@]+)\s*\}|(\\[a-zA-Z@]+))|\\[gex]?def\s*(\\[a-zA-Z@]+)")
+
+
+def _text_macros(text: str) -> frozenset:
+    """`_TEXT_IN_MATH` plus the macros that `text` defines with a body using one of them
+    (``\\newcommand{\\note}[1]{\\mbox{#1}}``)."""
+    bodies = {}
+    for m in _MACRO_DEF.finditer(text):
+        start = text.find("{", m.end())  # after [n] [default] or \def's parameter text
+        if start < 0:
+            continue
+        depth, i = 0, start
+        for i in range(start, len(text)):
+            depth += {"{": 1, "}": -1}.get(text[i], 0) if text[i - 1:i] != "\\" else 0
+            if not depth:
+                break
+        bodies[m.group(1) or m.group(2) or m.group(3)] = set(re.findall(r"\\[a-zA-Z@]+", text[start:i + 1]))
+    commands = set(_TEXT_IN_MATH)
+    while True:  # a macro built from another text macro is one too
+        more = {name for name, used in bodies.items() if name not in commands and used & commands}
+        if not more:
+            return frozenset(commands)
+        commands |= more
 
 
 def _has_math_delimiters(text: str) -> bool:
-    """True if `text` has $, \\(, \\[ or a maths environment outside every brace group.
+    """True if `text` has $, \\(, \\[ or a maths environment outside every text-command argument.
 
-    None of those can occur at the top level of math-mode TeX, while prose with equations
-    always has one - so input without them is a single bare equation, even when pandoc
-    would find maths nested in it (``\\mbox{for all $n$}``).
+    In math-mode TeX those can only occur inside the argument of \\text, \\mbox, ... (text in
+    the formula), while prose with equations always has one elsewhere - at the top level, or
+    in a group such as ``\\emph{for $n$}`` / ``{\\bf ... $x$ ...}``.  So input without them is a
+    single bare equation, even when pandoc would find maths nested in it (``\\mbox{for all $n$}``).
     """
-    depth = 0
+    text_commands = _text_macros(text)
+    owners: List[Optional[str]] = []  # per open brace group: the command it is an argument of
+    in_text = 0  # open groups that are text-command arguments
+    owner, end = None, 0  # command whose argument may start next, end of the previous token
     for m in _LATEX_TOKEN.finditer(text):
         tok = m.group()
+        if owner is not None and not _ARG_GAP.fullmatch(text, end, m.start()):
+            owner = None  # something else came between the command and this token
+        end = m.end()
         if tok == "{":
-            depth += 1
+            owners.append(owner)
+            in_text += owner in text_commands
+            owner = None
         elif tok == "}":
-            depth = max(depth - 1, 0)
-        elif depth == 0 and (tok in ("$", "\\(", "\\[") or m.group(1) in _PANDOC_MATH_ENVS):
+            if owners:
+                owner = owners.pop()  # \raisebox{1pt}{$x$}: the next group is the same command's
+                in_text -= owner in text_commands
+        elif tok.startswith("%"):
+            pass
+        elif not in_text and (tok in ("$", "\\(", "\\[") or m.group(1) in _PANDOC_MATH_ENVS):
             return True
+        else:
+            owner = tok if tok.startswith("\\") and tok[1:2].isalpha() else None
     return False
 
 
@@ -282,15 +331,26 @@ def read_latex(text: str, default_display: bool = True) -> List[Equation]:
     return [Equation(text.strip(), default_display)]
 
 
-_XML_DECLS = re.compile(r"<\?xml\s[^>]*\?>|<!DOCTYPE[^>]*>", re.I)
 _XML_ENTITIES = ("lt", "gt", "amp", "quot", "apos")
 _NAMED_ENTITY = re.compile(r"&([A-Za-z][A-Za-z0-9]*);")
+# CDATA sections and comments: literal text that the markup clean-ups below must not touch
+_XML_LITERAL = re.compile(r"(<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->)")
+# group 1: a literal (kept); otherwise an XML declaration or a DOCTYPE, whose internal subset
+# [...] may hold comments and quoted strings with any characters
+_XML_PROLOG = re.compile(_XML_LITERAL.pattern + r"|<\?xml\s[^>]*\?>"
+                         r"|<!DOCTYPE[^\[>]*(?:\[(?:<!--[\s\S]*?-->|\"[^\"]*\"|'[^']*'|[^\]\"'])*\]\s*)?>", re.I)
+
+
+def _outside_literals(text: str, fix) -> str:
+    """Apply `fix` to the markup of `text`, leaving CDATA sections and comments alone."""
+    parts = _XML_LITERAL.split(text)
+    return "".join(part if i % 2 else fix(part) for i, part in enumerate(parts))
 
 
 def _strip_xml_prolog(text: str) -> str:
     """Drop a BOM and every XML declaration / DOCTYPE: several pasted documents carry one
     each, and inside the wrapper element we parse them in, any of them is a syntax error."""
-    return _XML_DECLS.sub("", text.lstrip("\ufeff"))
+    return _XML_PROLOG.sub(lambda m: m.group(1) or "", text.lstrip("\ufeff"))
 
 
 def _named_entities_to_numeric(text: str) -> str:
@@ -299,7 +359,7 @@ def _named_entities_to_numeric(text: str) -> str:
     def numeric(m):
         value = None if m.group(1) in _XML_ENTITIES else html.entities.html5.get(m.group(1) + ";")
         return "".join("&#x%X;" % ord(c) for c in value) if value else m.group(0)
-    return _NAMED_ENTITY.sub(numeric, text)
+    return _outside_literals(text, lambda s: _NAMED_ENTITY.sub(numeric, s))
 
 
 def _local(name: str) -> str:
@@ -307,24 +367,66 @@ def _local(name: str) -> str:
     return name.rsplit("}", 1)[-1]
 
 
-def _outermost(root: ET.Element, match, skip=lambda el: False) -> List[ET.Element]:
-    """Descendants of `root` satisfying `match`, in document order, not descending into a match
-    or into an element satisfying `skip`."""
+def _outermost(root: ET.Element, match) -> List[ET.Element]:
+    """Descendants of `root` satisfying `match`, in document order, not descending into a match."""
     found: List[ET.Element] = []
 
     def walk(el):
         for child in el:
             if match(child):
                 found.append(child)
-            elif not skip(child):
+            else:
                 walk(child)
 
     walk(root)
     return found
 
 
-# characters that make up relation symbols (used to spot an equation array's alignment column)
-_RELATION_CHARS = set("=<>:≠≤≥≪≫≈≃≅≡∼≍∝∈∉∋⊂⊆⊃⊇→←↔⇒⇐⇔⟶⟵⟹⟸⟺↦≔≕∣⊥∥≺≻⪯⪰⊢⊨≐≜≝≟⩽⩾≶≷⊏⊑⊐⊒")
+# characters that make up relation symbols (used to spot an equation array's alignment column):
+# arrows, and the relations among the mathematical operators (not ∪ ⊕ ⊗ ... between them)
+_RELATION_CHARS = frozenset("=<>:∈∉∊∋∌∍∝∣∤∥∦⋈⋔").union(map(chr, (
+    *range(0x2190, 0x2200), *range(0x27F0, 0x2800), *range(0x2900, 0x2980),  # arrows
+    *range(0x2236, 0x223E), *range(0x2241, 0x228C), *range(0x228F, 0x2293),  # ∶ ∼, ≁ ... ⊋, ⊏ ... ⊒
+    *range(0x22A2, 0x22B9), *range(0x22D0, 0x22D2), *range(0x22D6, 0x22EE),  # ⊢ ... ⊸, ⋐ ⋑, ⋖ ... ⋭
+    *range(0x22F2, 0x2300), *range(0x2A66, 0x2AFB)))).difference(          # ⋲ ... ⋿, ⩦ ... ⫺
+    "⊤∸∺⩱⩲⫵⫶")  # an ordinary symbol and binary operators inside those ranges
+
+
+def _leading_mo(el: ET.Element, ns: str) -> Optional[ET.Element]:
+    """The <mo> an element starts with: itself, or the base of an over/under-decorated operator
+    (``\\overset{!}{=}`` is an <mover> over <mo>=</mo>)."""
+    while el.tag in (ns + "mover", ns + "munder", ns + "munderover") and len(el):
+        el = el[0]
+    return el if el.tag == ns + "mo" else None
+
+
+def _is_relation(mo: ET.Element) -> bool:
+    text = (mo.text or "").strip()
+    return bool(text) and set(text) <= _RELATION_CHARS
+
+
+def _is_empty(el: ET.Element) -> bool:
+    """No text and nothing but <mrow>s: an empty table cell (not ``\\sqrt{}``, not spacing)."""
+    return not "".join(el.itertext()).strip() and all(_local(e.tag) in ("mtd", "mrow") for e in el.iter())
+
+
+def _cell_start(cell: ET.Element, ns: str) -> Optional[str]:
+    """How the right-hand cell of an aligned block starts: "empty", "relation" (``&= b``), "operator"
+    (a continuation line, ``&+ c``), "space" (spacing followed by anything else, ``&\\quad x``), or
+    None for anything else (a table of values).  Spacing before an operator is looked past
+    (``&\\quad = b``; Word exports ``&\\quad + c`` as ``<mo> </mo><mo>+</mo>``)."""
+    if _is_empty(cell):
+        return "empty"
+    spaced = False
+    for child in cell:
+        if child.tag == ns + "mspace" or _is_empty(child) or (child.tag == ns + "mo" and not (child.text or "").strip()):
+            spaced = True
+            continue
+        mo = _leading_mo(child, ns)
+        if mo is not None:
+            return "relation" if _is_relation(mo) else "operator"
+        break
+    return "space" if spaced else None
 
 
 def _mark_equation_array_alignment(math: ET.Element) -> bool:
@@ -352,16 +454,10 @@ def _mark_equation_array_alignment(math: ET.Element) -> bool:
         cells = [c for c in row if c.tag == ns + "mtd"]
         if len(cells) != 2 or any(c.get("columnalign") for c in cells):
             return False
-        if not len(cells[1]):
-            continue
-        first = cells[1][0]
-        if first.tag == ns + "mspace":
-            continue
-        if first.tag != ns + "mo":
+        start = _cell_start(cells[1], ns)
+        if start is None:
             return False
-        text = (first.text or "").strip()
-        if text and set(text) <= _RELATION_CHARS:
-            relations += 1
+        relations += start == "relation"
     if not relations:
         return False
     for row in rows:
@@ -407,6 +503,7 @@ def read_mathml(text: str, fix_office_alignment: bool = True) -> List[Equation]:
         bad = [str(i) for i, m in enumerate(maths, 1) if not _read_json("html", _serialize_math(m))]
         raise ConversionError("texmath could not interpret <math> element %s of the %d in the input "
                               "(unsupported or malformed elements)." % (", ".join(bad) or "?", len(maths)))
+    _check_not_empty(eqs, "MathML")
     return eqs
 
 
@@ -438,12 +535,38 @@ def _parse_omml_fragments(text: str) -> List[ET.Element]:
     except ET.ParseError as e:
         raise ConversionError("The OMML is not well-formed XML: %s" % e)
     tags = ("{%s}oMathPara" % OMML_NS, "{%s}oMath" % OMML_NS)
-    # an oMath inside an oMathPara belongs to it; mc:AlternateContent holds the same content twice
-    # (e.g. an equation in a text box: DrawingML choice + VML fallback) - read the choice only
-    found = _outermost(root, lambda el: el.tag in tags, skip=lambda el: el.tag == "{%s}Fallback" % MC_NS)
+    alternatives, choice = "{%s}AlternateContent" % MC_NS, "{%s}Choice" % MC_NS
+    found: List[ET.Element] = []
+
+    def walk(el):
+        for child in el:
+            if child.tag in tags:
+                found.append(child)  # an oMath inside an oMathPara belongs to it
+            elif child.tag == alternatives:
+                # the same content once per branch (e.g. an equation in a text box: DrawingML choice +
+                # VML fallback, possibly several choices): read the first choice, else the fallback
+                branches = list(child)
+                branch = next((b for b in branches if b.tag == choice), branches[0] if branches else None)
+                if branch is not None:
+                    walk(branch)
+            else:
+                walk(child)
+
+    walk(root)
     if not found:
         raise ConversionError("No <m:oMath> or <m:oMathPara> element found in the OMML input.")
     return found
+
+
+def _check_not_empty(eqs: List[Equation], what: str) -> None:
+    """texmath skips elements it does not know (OMML) and yields an empty equation for an empty one:
+    report that instead of converting it to an empty result."""
+    empty = [str(i) for i, e in enumerate(eqs, 1) if not e.tex]
+    if empty:
+        where = "this %s" % what if len(eqs) == 1 else "%s equation %s of the %d in the input" % (
+            what, ", ".join(empty), len(eqs))
+        raise ConversionError("texmath could not interpret %s: it is empty or holds only elements "
+                              "texmath does not support." % where)
 
 
 def read_omml(text: str) -> List[Equation]:
@@ -463,6 +586,7 @@ def read_omml(text: str) -> List[Equation]:
     eqs = _read_json("docx", buf.getvalue())
     if not eqs:
         raise ConversionError("texmath could not interpret this OMML.")
+    _check_not_empty(eqs, "OMML")
     return eqs
 
 
@@ -492,42 +616,114 @@ def _pretty(el: ET.Element) -> str:
 _MATH_RE = re.compile(r"<math[\s>][\s\S]*?</math>")
 
 
-def _aligned_row(aligns: List[Optional[str]]) -> Optional[str]:
-    """"pairs" for right/left cell pairs (align, aligned, split, alignat, array{rl}), "eqnarray" for
-    eqnarray's right/center/left, None for anything else (matrix, cases, gather...)."""
-    if aligns == ["right", "center", "left"]:
-        return "eqnarray"
-    if len(aligns) >= 2 and all(a == ("right", "left")[i % 2] for i, a in enumerate(aligns)):
+_PAIRS = ("right", "left")
+_EQNARRAY = ["right", "center", "left"]
+
+
+def _table_shape(rows: List[ET.Element]) -> Optional[str]:
+    """"pairs" for right/left cell pairs (align, aligned, split, alignat), "eqnarray" for eqnarray's
+    right/center/left, None for anything else (matrix, cases, gather...).  Rows may be short (a
+    trailing \\\\, a line without &): only the cells they have must fit the pattern."""
+    aligns = [[c.get("columnalign") for c in r] for r in rows]
+    width = max(map(len, aligns))
+    if width >= 2 and all(a == _PAIRS[i % 2] for row in aligns for i, a in enumerate(row)):
         return "pairs"
+    if width == 3 and all(row == _EQNARRAY[:len(row)] for row in aligns):
+        return "eqnarray"
     return None
 
 
-def _office_equation_arrays(root: ET.Element) -> None:
+def _reads_as_alignment(rows: List[ET.Element], shape: str, ns: str) -> bool:
+    """For a table that comes from `array`: True if its cells read like an aligned block - every
+    right-hand cell (pairs) empty or starting with an operator or a space, every middle cell
+    (eqnarray) empty or a relation, and at least one relation - rather than a table of values."""
+    relations = 0
+    for row in rows:
+        cells = list(row)
+        for cell in (cells[1::2] if shape == "pairs" else cells[1:2]):
+            start = _cell_start(cell, ns)
+            if start is None or (shape == "eqnarray" and start not in ("empty", "relation")):
+                return False
+            relations += start == "relation"
+    return relations > 0
+
+
+def _office_equation_arrays(root: ET.Element, arrays: Optional[set] = frozenset()) -> None:
     """Mark aligned blocks so that Word / PowerPoint paste them as an equation array.
 
     Office turns a pasted <mtable> into a matrix with centred columns - the = signs no longer line
     up - unless it has ``columnspacing="0em"``: that is how Word itself exports an equation array
     (right/left cell pairs, as texmath writes them, in a table without column gaps), and such a
     table becomes an <m:eqArr> aligned at the & points.  Checked with Word / PowerPoint 16.
+    Short rows are padded to the table's width and a trailing empty row (a final \\\\) is dropped.
     eqnarray's relation column is merged into the right-hand side (``a & = b``): as a third cell it
     would open a new alignment column.
+
+    `arrays` holds the indices (document order) of the tables that come from an `array`
+    environment, None if unknown: such a table is marked only if it reads like an alignment.
     """
     ns = "{%s}" % MATHML_NS
-    for table in list(root.iter(ns + "mtable")):
+    for index, table in enumerate(list(root.iter(ns + "mtable"))):
         if any(table.get(a, "none") != "none" for a in ("frame", "rowlines", "columnlines")):
-            continue  # an array with rules is not an alignment
+            continue  # an array with rules is not an alignment (texmath 0.13 writes none of these)
         rows = list(table)
         if not rows or any(r.tag != ns + "mtr" or any(c.tag != ns + "mtd" for c in r) for r in rows):
             continue  # labelled rows (mlabeledtr) or other content
-        kinds = [_aligned_row([c.get("columnalign") for c in r]) for r in rows]
-        if None in kinds:
+        shape = _table_shape(rows)
+        if shape is None:
             continue
-        for row, kind in zip(rows, kinds):
-            if kind == "eqnarray":
+        if (arrays is None or index in arrays) and not _reads_as_alignment(rows, shape, ns):
+            continue
+        while len(rows) > 1 and all(_is_empty(c) for c in rows[-1]):
+            table.remove(rows.pop())
+        pattern = _EQNARRAY if shape == "eqnarray" else _PAIRS * ((max(len(r) for r in rows) + 1) // 2)
+        for row in rows:
+            for align in pattern[len(row):]:
+                ET.SubElement(row, ns + "mtd", columnalign=align)
+            if shape == "eqnarray":
                 _, relation, rhs = list(row)
                 rhs[:0] = list(relation)
                 row.remove(relation)
         table.set("columnspacing", "0em")
+
+
+_ARRAY_BEGIN = re.compile(r"\\begin%s\{(?:array|subarray|darray)\}%s(?:\[[^\[\]]*\]%s)?\{" % ((_TEX_GAP,) * 3))
+
+
+def _centre_array_columns(tex: str) -> str:
+    """`tex` with the l / r columns of every array environment made c (control words such as
+    \\linewidth in the column spec are left alone)."""
+    out, last = [], 0
+    for m in _ARRAY_BEGIN.finditer(tex):
+        depth, i = 1, m.end()
+        while i < len(tex) and depth:
+            depth += {"{": 1, "}": -1}.get(tex[i], 0)
+            i += 1
+        spec = re.sub(r"\\[a-zA-Z@]+|[lr]", lambda t: "c" if len(t.group()) == 1 else t.group(), tex[m.end():i])
+        out.append(tex[last:m.end()] + spec)
+        last = i
+    return "".join(out) + tex[last:]
+
+
+def _array_tables(eq: Equation, root: ET.Element) -> Optional[set]:
+    """Indices (document order) of the <mtable>s of `root` (texmath's MathML for `eq`) that come from
+    an array environment, which texmath renders exactly like aligned: the TeX is converted once more
+    with the arrays' columns centred, and the tables whose alignment changed are the arrays.
+    None when that cannot be told."""
+    if not _ARRAY_BEGIN.search(eq.tex):
+        return set()
+    try:
+        centred = ET.fromstring(write_mathml(Equation(_centre_array_columns(eq.tex), eq.display)))
+    except (ConversionError, ET.ParseError):
+        return None
+
+    def alignments(tree):
+        return [[[c.get("columnalign") for c in r] for r in t] for t in tree.iter("{%s}mtable" % MATHML_NS)]
+
+    before, after = alignments(root), alignments(centred)
+    if len(before) != len(after):
+        return None
+    return {i for i, (a, b) in enumerate(zip(before, after)) if a != b}
 
 
 def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False) -> str:
@@ -546,7 +742,7 @@ def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False)
             if child.tag != "{%s}annotation" % MATHML_NS:
                 root.append(child)
     if for_office:
-        _office_equation_arrays(root)
+        _office_equation_arrays(root, _array_tables(eq, root))
     return _pretty(root)
 
 
@@ -580,8 +776,9 @@ def write_eqn(eq: Equation) -> str:
     return body
 
 
-# pandoc writes a \label as a Typst label after the closing $:  $ x = 1 $<eq:a>
-_TYPST_MATH = re.compile(r"^\$([\s\S]*)\$\s*(?:<[^<>\s]+>)?$")
+# pandoc writes a \label as a Typst label after the closing $:  $ x = 1 $<eq:a>, or, when the name is not
+# valid label syntax (eq/loss, eq(1), a space...):  $ x = 1 $#label("eq/loss")
+_TYPST_MATH = re.compile(r'^\$([\s\S]*)\$\s*(?:<[^<>\s]+>|#label\("(?:[^"\\]|\\.)*"\))?$')
 
 
 def write_typst(eq: Equation) -> str:
@@ -607,8 +804,3 @@ def write_equation(eq: Equation, fmt: str, **opts) -> str:
     if fmt == "typst":
         return write_typst(eq)
     raise ValueError("unknown output format %r" % fmt)
-
-
-def validate_tex(eq: Equation) -> None:
-    """Raise ConversionError if texmath cannot parse the TeX (used before copying to Office)."""
-    write_mathml(eq)

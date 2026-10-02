@@ -83,6 +83,31 @@ def test_math_delimiters_detection():
     assert not has("x % comment with $")
     assert not has("\\begin{aligned} a &= b \\end{aligned}")  # math-mode environment
     assert not has("\\mbox{if $x > 0$}")
+    # text in a formula: any argument of a text command, also after options or a TeX box spec
+    assert not has("\\raisebox{1pt}{$x$}") and not has("\\text {for $n$}") and not has("\\hbox to 3cm{$x$}")
+    assert not has("\\text{\\textbf{$x$} {$y$}}") and not has("\\makebox[2cm][l]{$x$}")
+    # but a group that is not a text-command argument is prose
+    assert has("{$x$}") and has("\\emph{for $n$}") and has("{\\bf where $x$ is given}") and has("\\mbox{a} + $x$")
+
+
+@pytest.mark.parametrize("src, tex", [("\\emph{for $n \\ge 1$}", "n \\ge 1"), ("{\\bf where $x$ is given}", "x"),
+                                      ("{$x$}", "x")])
+def test_prose_in_a_group_is_read_by_pandoc(src, tex):
+    # used to be taken for one bare equation: "\[ \emph{for $n \ge 1$} \]", or a texmath error
+    assert convert(src, "latex", "latex").outputs == ["$%s$" % tex]
+
+
+@pytest.mark.parametrize("definition", ["\\newcommand{\\note}[1]{\\mbox{#1}}", "\\newcommand\\note[1]{\\text{#1}}",
+                                        "\\def\\note#1{\\textrm{#1}}", "\\newcommand{\\inner}[1]{\\mbox{#1}}"
+                                        "\\newcommand{\\note}[1]{\\inner{#1}}"])
+def test_text_macros_defined_in_the_input_keep_a_bare_equation_whole(definition):
+    # a macro that wraps \mbox / \text: its argument is text inside the formula, as for \mbox itself
+    # (pandoc's prose reader used to get it, expand it and return only the nested "n")
+    src = definition + "\na_n \\le b_n \\quad \\note{for all $n$}"
+    assert not pe._has_math_delimiters(src)
+    assert convert(src, "latex", "latex", wrapper="bare").outputs == [src]
+    if not definition.startswith("\\def"):  # texmath does not know \def
+        assert convert(src, "latex", "mathml").text.count("<mi>n</mi>") == 3  # a_n, b_n and the text's n
 
 
 # ---- mode handling ------------------------------------------------------------------------------
@@ -115,6 +140,12 @@ def test_outputs_eqn_typst():
     assert convert("\\sqrt{x}", "latex", "typst", mode="inline").text == "sqrt(x)"
     # a \label becomes a Typst label after the closing $: still only the body is returned
     assert convert("\\begin{equation}x = 1\\label{eq:a}\\end{equation}", "latex", "typst").text == "x = 1"
+
+
+@pytest.mark.parametrize("label", ["eq/loss", "eq:loss+reg", "eq(1)", "eq,1", "eq a", 'say "hi"'])
+def test_typst_label_function_is_removed(label):
+    # labels that are not valid Typst label syntax come out as $ x = 1 $#label("eq/loss")
+    assert convert("\\begin{equation}x = 1\\label{%s}\\end{equation}" % label, "latex", "typst").text == "x = 1"
 
 
 def test_multiline_outputs_have_no_carriage_returns():
@@ -166,6 +197,46 @@ def test_mathml_element_texmath_rejects_is_not_dropped():
     with pytest.raises(ConversionError) as e:
         convert('<math><mi>x</mi></math><math><mfoo><mi>y</mi></mfoo></math>', "mathml", "latex")
     assert "element 2 of the 2" in str(e.value)
+
+
+def test_cdata_and_comments_are_left_alone():
+    # entity and declaration clean-up used to rewrite literal text: \text{\&\#x2264;}
+    assert convert("<math><mtext><![CDATA[&le;]]></mtext></math>", "mathml", "latex").text == "$\\text{\\&le;}$"
+    assert convert('<math><mtext><![CDATA[<?xml version="1.0"?>]]></mtext></math>', "mathml",
+                   "latex").text == '$\\text{<?xml version="1.0"?>}$'
+    assert convert("<math><!-- &foo; --><mi>&alpha;</mi></math>", "mathml", "latex").text == "$\\alpha$"
+    # a DOCTYPE is still removed whole, also with comments or brackets in its internal subset
+    for doctype in ('<!DOCTYPE math [<!-- note -->]>', '<!DOCTYPE math [<!ENTITY x "a]b"> <!-- ]> -->]>',
+                    '<!DOCTYPE math PUBLIC "-//W3C//DTD MathML 2.0//EN" "mathml2.dtd">'):
+        assert convert(doctype + "\n<math><mi>x</mi></math>", "mathml", "latex").text == "$x$", doctype
+
+
+OMML_X = "<m:oMath><m:r><m:t>x</m:t></m:r></m:oMath>"
+
+
+@pytest.mark.parametrize("src, fmt", [
+    ("<m:oMath></m:oMath>", "omml"),
+    ("<m:oMath><m:foo><m:r><m:t>y</m:t></m:r></m:foo></m:oMath>", "omml"),  # texmath skips unknown elements
+    (OMML_X + "<m:oMath/>", "omml"),
+    ("<math></math>", "mathml"),
+])
+def test_empty_equation_is_an_error(src, fmt):
+    # used to give an empty result: "$$" in LaTeX, <mrow /> in MathML
+    with pytest.raises(ConversionError) as e:
+        convert(src, fmt, "latex")
+    assert "texmath could not interpret" in str(e.value)
+    if src.startswith(OMML_X):
+        assert "equation 2 of the 2" in str(e.value)
+
+
+def test_omml_alternate_content_with_several_choices_is_read_once():
+    ns = ('xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+          'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"')
+    alt = ('<mc:AlternateContent %s><mc:Choice Requires="a">%s</mc:Choice><mc:Choice Requires="b">%s</mc:Choice>'
+           '<mc:Fallback>%s</mc:Fallback></mc:AlternateContent>' % (ns, OMML_X, OMML_X, OMML_X))
+    assert convert(alt, "omml", "latex").outputs == ["$x$"]
+    fallback_only = '<mc:AlternateContent %s><mc:Fallback>%s</mc:Fallback></mc:AlternateContent>' % (ns, OMML_X)
+    assert convert(fallback_only, "omml", "latex").outputs == ["$x$"]
 
 
 def test_mathml_annotation_option():
@@ -225,6 +296,54 @@ def test_mathml_for_office_marks_equation_arrays(tex, cells):
     assert 'columnspacing' not in convert(tex, "latex", "mathml").text  # the MathML output stays texmath's
 
 
+TABLE = "\\[\n\\begin{aligned}\n%s\n\\end{aligned}\n\\]"
+OFFICE_SHAPES = [  # LaTeX, cells per row in the MathML for Office (None: unchanged), LaTeX back from it
+    # a trailing \\ or a line without & gives texmath rows with fewer cells: padded, a trailing empty row dropped
+    ("\\begin{align} a &= b \\\\ c &= d \\\\ \\end{align}", [2, 2], TABLE % "a & {= b} \\\\\nc & {= d}"),
+    ("\\begin{aligned} a &= b \\\\ c &= d \\\\ \\end{aligned}", [2, 2], TABLE % "a & {= b} \\\\\nc & {= d}"),
+    ("\\begin{align} a &= b \\\\ c \\end{align}", [2, 2], TABLE % "a & {= b} \\\\\nc & "),
+    ("\\begin{eqnarray} a &=& b \\\\ c \\end{eqnarray}", [2, 2], TABLE % "a & {= b} \\\\\nc & "),
+    ("\\begin{align} a &= b & c &= d \\\\ e &= f \\end{align}", [4, 4], TABLE % "a & {= b} & c & {= d} \\\\\ne & {= f} & & "),
+    # an array is an equation array only when it reads like one; a table of values stays a matrix
+    ("\\[\\left\\{\\begin{array}{rl} x+y &= 1 \\\\ x-y &= 0 \\end{array}\\right.\\]", [2, 2],
+     "\\[\n\\left\\{ \\begin{aligned}\n{x + y} & {= 1} \\\\\n{x - y} & {= 0}\n\\end{aligned} \\right.\n\\]"),
+    ("\\[\\begin{array}{rcl} x+y &=& 1 \\\\ x &=& 2 \\end{array}\\]", [2, 2], TABLE % "{x + y} & {= 1} \\\\\nx & {= 2}"),
+    ("\\[\\begin{array}{rcl}1&2&3\\\\4&5&6\\end{array}\\]", None, None),  # used to lose its middle column
+    ("\\[\\begin{array}{rlr}1&2&3\\\\4&5&6\\end{array}\\]", None, None),
+    ("\\[f=\\left\\{\\begin{array}{rl}1, & x>0\\\\0, & \\text{else}\\end{array}\\right.\\]", None, None),
+    ("\\[\\begin{array}{p{\\linewidth}} x \\end{array}\\]", None, None),
+    ("\\[\\begin{array}% column specification\n{rcl} 1 & 2 & 3 \\\\ 4 & 5 & 6 \\end{array}\\]", None, None),
+    ("\\[\\begin{array}{rl} x & \\quad = 1 \\\\ y & \\quad = 2 \\end{array}\\]", [2, 2], None),  # spacing, then =
+    # a last row without text is not always empty
+    ("\\begin{aligned} a &= b \\\\ & \\sqrt{} \\end{aligned}", [2, 2], None),
+    ("\\begin{aligned} a &= b \\\\ & \\frac{}{} \\end{aligned}", [2, 2], None),
+]
+
+
+@pytest.mark.parametrize("tex, cells, back", OFFICE_SHAPES)
+def test_mathml_for_office_shapes_ragged_tables_and_arrays(tex, cells, back):
+    import xml.etree.ElementTree as ET
+    from equation_tool.convert import mathml_for_office
+    ns = "{http://www.w3.org/1998/Math/MathML}"
+    office = mathml_for_office(tex, "latex")[0]  # what Copy for Word/PowerPoint puts on the clipboard
+    if cells is None:
+        assert office == write_equation(read_equations(tex, "latex")[0], "mathml")
+    else:
+        table = next(ET.fromstring(office).iter(ns + "mtable"))
+        assert table.get("columnspacing") == "0em"
+        assert [len(r.findall(ns + "mtd")) for r in table] == cells
+        if back is not None:
+            assert convert(office, "mathml", "latex").text == back
+
+
+def test_mathml_for_office_shapes_only_the_alignment_around_an_array():
+    import xml.etree.ElementTree as ET
+    from equation_tool.convert import mathml_for_office
+    ns = "{http://www.w3.org/1998/Math/MathML}"
+    office = mathml_for_office("\\begin{align} a &= \\begin{array}{rl} 1 & 2 \\end{array} \\\\ c &= d \\end{align}", "latex")[0]
+    assert [t.get("columnspacing") for t in ET.fromstring(office).iter(ns + "mtable")] == ["0em", None]
+
+
 def test_numbering_commands_moved_into_aligned_are_flagged():
     src = "\\begin{align}\na &= b \\tag{1} \\\\\nc &= d \\label{eq:c}\n\\end{align}"
     assert convert(src, "latex", "latex", wrapper="equation").notes
@@ -233,6 +352,13 @@ def test_numbering_commands_moved_into_aligned_are_flagged():
     assert not convert(src, "latex", "latex").notes  # auto keeps the align environment
     one_label = "\\begin{align}\na &= b \\label{eq:a} \\\\\nc &= d\n\\end{align}"
     assert not convert(one_label, "latex", "latex", wrapper="equation").notes
+    # a \tag is an error in inline maths, also when it comes from a single equation
+    tagged = "\\begin{equation}x\\tag{A}\\end{equation}"
+    assert convert(tagged, "latex", "latex", wrapper="dollar").notes
+    assert convert(tagged, "latex", "latex", wrapper="paren").notes
+    assert convert("x \\tag{A}", "latex", "latex", mode="inline").notes  # Auto -> $...$
+    assert not convert(tagged, "latex", "latex", wrapper="bracket").notes  # \[ \tag{A} \] is fine
+    assert not convert(tagged, "latex", "latex", mode="inline").notes  # Auto keeps the equation
 
 
 def test_omml_roundtrip_and_loose_input():
@@ -257,6 +383,27 @@ def test_omml_roundtrip_and_loose_input():
 def test_latex_output_mode_follows_the_wrapper():
     assert convert("$x$", "latex", "latex", wrapper="bracket").equations[0].display
     assert not convert("$$x$$", "latex", "latex", wrapper="dollar").equations[0].display
+    # Auto keeps a display environment even when Mode = Inline: the status must say display
+    r = convert("\\begin{equation}x\\end{equation}", "latex", "latex", mode="inline")
+    assert r.text.startswith("\\begin{equation}") and r.equations[0].display
+    assert not convert("x", "latex", "latex", mode="inline").equations[0].display
+
+
+def test_relations_of_office_equation_arrays():
+    # Word exports an equation array without alignment attributes; a relation in the right-hand cells
+    # identifies it.  Arrows, negated and other relations, and decorated ones (\overset{!}{=}) count.
+    row = '<mtr><mtd><mi>a</mi></mtd><mtd>%s<mi>b</mi></mtd></mtr>'
+    word = '<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mtable>%s%s</mtable></math>'
+    for rel in ["≲", "≢", "⊊", "↪", "≦", "≰", "∶", "⟹", "⩽"]:
+        mo = "<mo>%s</mo>" % rel
+        assert convert(word % (row % mo, row % mo), "mathml", "latex", wrapper="bare").text.startswith("\\begin{aligned}"), rel
+    over = "<mover><mo>=</mo><mi>!</mi></mover>"
+    assert convert(word % (row % over, row % "<mo>=</mo>"), "mathml", "latex", wrapper="bare").text.startswith("\\begin{aligned}")
+    spaced = "<mo> </mo><mo>=</mo>"  # Word's export of &\quad = b: the relation after the space counts
+    assert convert(word % (row % spaced, row % spaced), "mathml", "latex", wrapper="bare").text.startswith("\\begin{aligned}")
+    for op in ["∪", "⊕", "⊤", "∸", "∺"]:  # operators and ordinary symbols are not relations: a matrix
+        mo = "<mo>%s</mo>" % op
+        assert convert(word % (row % mo, row % mo), "mathml", "latex", wrapper="bare").text.startswith("\\begin{matrix}"), op
 
 
 # ---- errors ------------------------------------------------------------------------------------

@@ -16,11 +16,25 @@ from .latex_wrap import WRAPPER_KEYS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_report
 
 
+class InputError(ValueError):
+    """The input file cannot be read; the message is meant for the user."""
+
+
 def _read_source(path: str | None) -> str:
-    if path and path != "-":
-        with open(path, encoding="utf-8-sig") as f:
-            return f.read()
-    return sys.stdin.read()
+    """The input text: UTF-8 (with or without a BOM), or UTF-16 with a BOM - what `>` writes in
+    Windows PowerShell 5.1."""
+    if not path or path == "-":
+        return sys.stdin.read()
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        raise InputError("cannot read %s: %s" % (path, e.strerror or e))
+    try:
+        text = data.decode("utf-16") if data[:2] in (b"\xff\xfe", b"\xfe\xff") else data.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise InputError("%s is neither UTF-8 nor UTF-16 text (%s)" % (path, e))
+    return text.replace("\r\n", "\n").replace("\r", "\n")  # as text mode would
 
 
 def _utf8_stdio() -> None:
@@ -57,7 +71,7 @@ def _cli(argv: list[str]) -> int:
 
     args = parser.parse_args(argv)
     _utf8_stdio()
-    errors: tuple = (ConversionError, PandocNotFound)
+    errors: tuple = (ConversionError, PandocNotFound, InputError)
     if args.cmd in ("copy", "paste"):
         from . import clipboard
         errors += (clipboard.ClipboardError,)
