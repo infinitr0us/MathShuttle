@@ -67,7 +67,7 @@ WORD / POWERPOINT
   Hotkey (Ctrl+Alt+Shift+M, works in any program while MathShuttle runs, even minimised):
           an equation copied in Word / PowerPoint becomes LaTeX text on the clipboard;
           LaTeX text on the clipboard becomes an equation - then Ctrl+V in Office.  The key
-          is "hotkey" in the settings file (%APPDATA%\\MathShuttle\\settings.json).
+          is "hotkey" in the settings file (%%APPDATA%%\\MathShuttle\\settings.json).
   Open file...   every equation of a .docx / .pptx / .tex / .md file, with where it is.
 
 Ctrl+Enter converts; Auto-convert re-runs the conversion as you type.
