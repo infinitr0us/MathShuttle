@@ -272,6 +272,33 @@ def test_open_document_lists_and_uses_equations(app, tmp_path):
         del app._show_equations
 
 
+def test_copy_for_office_hotkey_round_trip(app):
+    """The hotkey (a simulated press: no keystroke is sent): LaTeX text on the clipboard becomes an
+    equation for Office, and pressing again turns it back into LaTeX text.  Overwrites the clipboard."""
+    from mathshuttle import hotkeys
+    app.src_var.set("latex")
+    app.hotkey = "Ctrl+Alt+Shift+F23"  # not the user's key, which a running MathShuttle may hold
+    app.hotkey_var.set(True)
+    app._toggle_hotkey()
+    assert app._listener is not None, app.status_var.get()
+    try:
+        clipboard.set_text(r"\frac{a}{b}")
+        app._listener.simulate_press()
+        assert pump(app, until=lambda: "Equation ready" in app.status_var.get())
+        assert "<mfrac" in (clipboard.read_equation_from_office() or "")
+        app._listener.simulate_press()
+        assert pump(app, until=lambda: "LaTeX copied" in app.status_var.get())
+        assert clipboard.get_text().strip() == r"\[ \frac{a}{b} \]"
+        clipboard.set_text("")
+        results = []
+        app.shuttle_clipboard(done=lambda message, failed: results.append(failed))
+        assert pump(app, until=lambda: results) and results == [True]
+    finally:
+        app.hotkey_var.set(False)
+        app._toggle_hotkey()
+        app.hotkey = hotkeys.DEFAULT
+
+
 def test_open_document_reports_errors(app, tmp_path):
     bad = tmp_path / "broken.pptx"
     bad.write_bytes(b"not a zip")

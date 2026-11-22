@@ -16,7 +16,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from typing import Optional
 
-from . import __version__, clipboard, compat, latex_wrap
+from . import __version__, clipboard, compat, hotkeys, latex_wrap
 from .convert import FORMAT_LABELS, MODES, Result, convert, macro_notes, office_copy
 from .latex_wrap import WRAPPERS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description, engine_report
@@ -64,6 +64,11 @@ WORD / POWERPOINT
           blocks arrive as an Office equation array, lined up at the = signs.
   Paste from Word/PowerPoint   reads the equation you copied in Word / PowerPoint
           (select the equation, Ctrl+C) and converts it to LaTeX (Ctrl+Shift+V).
+  Hotkey (Ctrl+Alt+Shift+M, works in any program while MathShuttle runs, even minimised):
+          an equation copied in Word / PowerPoint becomes LaTeX text on the clipboard;
+          LaTeX text on the clipboard becomes an equation - then Ctrl+V in Office.  The key
+          is "hotkey" in the settings file (%APPDATA%\\MathShuttle\\settings.json).
+  Open file...   every equation of a .docx / .pptx / .tex / .md file, with where it is.
 
 Ctrl+Enter converts; Auto-convert re-runs the conversion as you type.
 """ % __version__
@@ -134,6 +139,9 @@ class App(tk.Tk):
         self.annotate_var = tk.BooleanVar(value=False)
         self.tidy_var = tk.BooleanVar(value=True)
         self.auto_var = tk.BooleanVar(value=True)
+        self.hotkey_var = tk.BooleanVar(value=True)
+        self.hotkey = hotkeys.DEFAULT
+        self._listener: Optional[hotkeys.HotkeyListener] = None
         self.macro_files: list = []  # macro files and extra definitions for LaTeX input (Macros...)
         self.macro_text = ""
 
@@ -187,6 +195,8 @@ class App(tk.Tk):
         ttk.Checkbutton(bottom, text="Auto-convert", variable=self.auto_var, command=self._schedule).pack(side="left", **pad)
         ttk.Button(bottom, text="Clear", command=self.clear).pack(side="left", padx=(14, 4))
         ttk.Button(bottom, text="Open file...", command=self.open_document).pack(side="left", padx=(14, 4))
+        self.hotkey_chk = ttk.Checkbutton(bottom, variable=self.hotkey_var, command=self._toggle_hotkey)
+        self.hotkey_chk.pack(side="left", padx=(14, 4))
         ttk.Button(bottom, text="Paste from Word/PowerPoint", command=self.paste_from_office).pack(side="right", **pad)
         ttk.Button(bottom, text="Copy for Word/PowerPoint", command=self.copy_for_office).pack(side="right", **pad)
         ttk.Button(bottom, text="Copy output", command=self.copy_output).pack(side="right", **pad)
@@ -274,6 +284,14 @@ class App(tk.Tk):
         self.auto_var.set(bool(s.get("auto_convert", True)))
         self.annotate_var.set(bool(s.get("annotate", False)))
         self.tidy_var.set(bool(s.get("tidy", True)))
+        self.hotkey_var.set(bool(s.get("hotkey_enabled", True)))
+        if isinstance(s.get("hotkey"), str):
+            try:
+                hotkeys.parse(s["hotkey"])
+                self.hotkey = s["hotkey"]
+            except ValueError:
+                pass  # keep the default; the settings file was edited by hand
+        self.hotkey_chk.configure(text="Hotkey %s" % self.hotkey)
         files = s.get("macro_files")
         self.macro_files = [f for f in files if isinstance(f, str)] if isinstance(files, list) else []
         self.macro_text = s.get("macro_text") if isinstance(s.get("macro_text"), str) else ""
@@ -289,6 +307,7 @@ class App(tk.Tk):
         data = {"src": self.src_var.get(), "dst": self.dst_var.get(), "mode": self.mode_var.get(),
                 "wrapper": self.wrapper_var.get(), "auto_convert": self.auto_var.get(),
                 "annotate": self.annotate_var.get(), "tidy": self.tidy_var.get(),
+                "hotkey": self.hotkey, "hotkey_enabled": self.hotkey_var.get(),
                 "macro_files": self.macro_files, "macro_text": self.macro_text, "geometry": self.geometry(),
                 # whole or not at all: a cut could land inside an equation, and a very large input
                 # (a whole document.xml) would be reloaded and converted again at every start
@@ -302,6 +321,7 @@ class App(tk.Tk):
 
     def _on_close(self) -> None:
         self._save_settings()
+        self._stop_hotkey()
         self.destroy()
 
     # ---- events ---------------------------------------------------------------------------------
@@ -319,6 +339,7 @@ class App(tk.Tk):
             self._set_status("pandoc check failed: %s" % e, error=True)
             return
         self._set_status("Ready")
+        self._toggle_hotkey()
         self._schedule()
 
     def _update_option_states(self) -> None:
@@ -509,6 +530,73 @@ class App(tk.Tk):
         self._set_status("")
         self.input.focus_set()
 
+    # ---- the hotkey: shuttle the clipboard ------------------------------------------------------
+    def _toggle_hotkey(self) -> None:
+        """Listen for the hotkey while the box is ticked (and the app runs, even minimised)."""
+        self._stop_hotkey()
+        if not self.hotkey_var.get():
+            return
+        listener = hotkeys.HotkeyListener(self.hotkey)
+        error = listener.start_and_wait()
+        if error:
+            self.hotkey_var.set(False)
+            self._set_status("Hotkey off: %s (change \"hotkey\" in %s)" % (error, SETTINGS_PATH), error=True)
+            return
+        self._listener = listener
+        self._poll_hotkey(listener)
+
+    def _stop_hotkey(self) -> None:
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+
+    def _poll_hotkey(self, listener) -> None:
+        if listener is not self._listener:
+            return  # replaced or stopped
+        pressed = False
+        while True:
+            try:
+                listener.presses.get_nowait()
+                pressed = True
+            except queue.Empty:
+                break
+        if pressed:
+            self.shuttle_clipboard()
+        self.after(120, self._poll_hotkey, listener)
+
+    def shuttle_clipboard(self, done=None) -> None:
+        """The hotkey: an equation copied in Office (or MathML / OMML text) becomes LaTeX text; LaTeX text
+        becomes an equation to paste into Office.  Uses the Mode, LaTeX wrapper, Macros and Tidy settings."""
+        mode, wrapper, tidy, macros = self.mode_var.get(), self.wrapper_var.get(), self.tidy_var.get(), self._macros()
+
+        def work():
+            mathml = clipboard.read_equation_from_office()
+            text = clipboard.get_text() or ""
+            src = "mathml" if mathml else ("mathml" if re.search(r"<(\w+:)?math\b", text) else
+                                            "omml" if re.search(r"<m:oMath", text) else "latex")
+            if src != "latex":
+                latex = convert(mathml or text, src, "latex", mode, wrapper, tidy=tidy).text
+                clipboard.set_text(latex)
+                return "LaTeX copied: %s" % " ".join(latex.split())[:70], False
+            if not text.strip():
+                return "Nothing to convert: copy LaTeX, or an equation in Word / PowerPoint, first", True
+            copy = office_copy(text, "latex", mode, macros)
+            clipboard.copy_mathml_for_office(copy.mathml)
+            return "   ".join(["Equation ready: press Ctrl+V in Word / PowerPoint"] + copy.notes), False
+
+        def finished(value, error):
+            if error is not None:
+                lines = str(error).strip().splitlines() or [repr(error)]
+                message, failed = "Could not convert the clipboard: %s" % lines[-1], True
+            else:
+                message, failed = value
+            self._set_status(message, error=failed)
+            Toast(self, message, error=failed)
+            if done:
+                done(message, failed)
+
+        self._in_background(work, finished)
+
     # ---- documents ------------------------------------------------------------------------------
     def _in_background(self, work, done) -> None:
         """Run `work()` in a thread; call `done(value, error)` in the Tk thread when it ends."""
@@ -640,6 +728,35 @@ class App(tk.Tk):
     def _set_status(self, text: str, error: bool = False) -> None:
         self.status_var.set(text)
         self.status_label.configure(foreground="#b00020" if error else "")
+
+
+class Toast(tk.Toplevel):
+    """A short message at the bottom right of the screen that does not take the focus (the user is
+    working in Word / PowerPoint when the hotkey is pressed)."""
+
+    def __init__(self, app: App, text: str, error: bool = False, ms: int = 2600) -> None:
+        super().__init__(app)
+        self.withdraw()
+        self.overrideredirect(True)
+        tk.Label(self, text="MathShuttle: " + text, padx=14, pady=9, wraplength=520, justify="left",
+                 bg="#8b1a1a" if error else "#202124", fg="white").pack()
+        self.update_idletasks()
+        self.geometry("+%d+%d" % (self.winfo_screenwidth() - self.winfo_reqwidth() - 24,
+                                  self.winfo_screenheight() - self.winfo_reqheight() - 72))
+        try:
+            user32 = ctypes.windll.user32
+            user32.GetParent.restype = ctypes.c_void_p
+            user32.GetParent.argtypes = [ctypes.c_void_p]
+            user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+            hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
+            # WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW: never the active window, no taskbar button
+            user32.SetWindowLongW(hwnd, -20, user32.GetWindowLongW(hwnd, -20) | 0x08000000 | 0x80)
+        except (AttributeError, OSError):
+            pass
+        self.attributes("-topmost", True)
+        self.deiconify()  # (a program in the background cannot take the foreground from Word anyway)
+        self.after(ms, self.destroy)
 
 
 class EquationList(tk.Toplevel):

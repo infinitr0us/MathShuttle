@@ -80,6 +80,14 @@ back as `\boldsymbol{x}`; Word's *own* LaTeX paste keeps it upright), stores an 
 upright text, not as a function (`\operatorname{f}` comes back as `\mathrm{f}`), and drops `\tag`
 numbers (the tool says so when it copies one).
 
+**Without the window: the hotkey.** While MathShuttle runs (minimised is fine), **Ctrl+Alt+Shift+M**
+in any program shuttles the clipboard: an equation copied in Word / PowerPoint becomes LaTeX text,
+and LaTeX text becomes an equation to paste with Ctrl+V. So: copy LaTeX in your editor, press the
+hotkey, paste in PowerPoint; or copy an equation in Word, press the hotkey, paste in Overleaf. A
+small note at the bottom right of the screen says what happened (it does not take the focus). The
+key is the `hotkey` entry of `%APPDATA%\MathShuttle\settings.json`; the checkbox in the window turns
+it off. Ctrl+Alt+Shift keeps clear of Word's own Ctrl+Alt shortcuts.
+
 **Whole documents.** **Open file…** lists every equation of a `.docx`, `.pptx`, `.tex` or `.md` file
 with where it is (the heading above it, the slide and its title, the `\label`) and the sentence
 around it. From the list, use one as input, copy it for Word / PowerPoint or as LaTeX, or export
@@ -226,6 +234,7 @@ mathshuttle/
   tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
   documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are
+  hotkeys.py         the system-wide hotkey (RegisterHotKey in a thread of its own)
   clipboard.py       Win32 clipboard via ctypes: "MathML" format in/out
   app.py             tkinter GUI
   __main__.py        GUI / CLI entry
