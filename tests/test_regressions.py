@@ -1,5 +1,6 @@
-"""Regression tests for the findings of the Codex review of d63b58d
-(reviews/2026-11-22/d63b58d-codex-review.md; numbers below are the findings')."""
+"""Regression tests for the 25 findings of a Codex review of the commit that added compat.py and
+tidy.py (the numbers below are the findings'); each input made the code of that commit give wrong
+maths or invalid LaTeX without an error."""
 import os
 import sys
 
