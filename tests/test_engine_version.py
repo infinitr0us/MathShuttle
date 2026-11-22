@@ -20,7 +20,14 @@ def test_scan_finds_the_package_id(tmp_path):
     assert pe._scan_texmath_version(str(exe)) == "0.13.2.2"
 
 
-@pytest.mark.parametrize("content", [b"", b"no package id in here", b"texmath-x.y texmath-1"])
+def test_scan_finds_cabals_short_package_id(tmp_path):
+    # Homebrew's pandoc (Cabal on macOS drops the vowels of unit ids: pndc-cl-3.14-..., txmth-...)
+    exe = tmp_path / "pandoc"
+    exe.write_bytes(b"\x00pndc-cl-3.14-f411b0bc\x00Over\x00\x00txmth-0.13.3.5-a4909360\x00")
+    assert pe._scan_texmath_version(str(exe)) == "0.13.3.5"
+
+
+@pytest.mark.parametrize("content", [b"", b"no package id in here", b"texmath-x.y texmath-1", b"txmth-1"])
 def test_scan_without_package_id(tmp_path, content):
     exe = tmp_path / "pandoc.exe"
     exe.write_bytes(content)

@@ -36,12 +36,41 @@ def test_pandoc_that_cannot_be_started_is_a_conversion_error(monkeypatch, tmp_pa
 
 
 def test_current_directory_is_not_searched(monkeypatch, tmp_path):
-    (tmp_path / "pandoc.exe").write_bytes(b"planted")
+    exe = "pandoc.exe" if sys.platform == "win32" else "pandoc"
+    (tmp_path / exe).write_bytes(b"planted")
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MATHSHUTTLE_PANDOC", raising=False)
     monkeypatch.setenv("PATH", os.pathsep.join([".", "", os.environ.get("PATH", "")]))
     candidates = [os.path.normcase(os.path.abspath(p)) for p in pe._candidate_paths()]  # which() says .\pandoc.EXE
-    assert os.path.normcase(str(tmp_path / "pandoc.exe")) not in candidates
+    assert os.path.normcase(str(tmp_path / exe)) not in candidates
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS")
+def test_homebrew_is_searched_without_it_on_path(monkeypatch):
+    # an app started from the Finder has launchd's PATH, without Homebrew's bin
+    monkeypatch.delenv("MATHSHUTTLE_PANDOC", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    candidates = list(pe._candidate_paths())
+    assert candidates[-2:] == ["/opt/homebrew/bin/pandoc", "/usr/local/bin/pandoc"]
+    assert not any(p.endswith(".exe") for p in candidates)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS")
+def test_pandoc_not_found_says_how_to_install_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(pe, "_pandoc_path", None)
+    monkeypatch.delenv("MATHSHUTTLE_PANDOC", raising=False)
+    monkeypatch.setattr(pe, "_candidate_paths", lambda: iter([str(tmp_path / "pandoc")]))
+    with pytest.raises(pe.PandocNotFound, match="brew install pandoc"):
+        pe.find_pandoc()
+
+
+# ---- clipboard backend ----------------------------------------------------------------------------------
+def test_clipboard_without_a_backend_is_a_clipboard_error(monkeypatch):
+    # what the app catches and reports, also where there is no clipboard code (not an import error)
+    monkeypatch.setattr(clipboard, "_backend_module", None)
+    monkeypatch.setattr(clipboard.sys, "platform", "linux")
+    with pytest.raises(clipboard.ClipboardError, match="Windows and macOS only"):
+        clipboard.get_text()
 
 
 # ---- clipboard decoding (no clipboard access) ---------------------------------------------------------

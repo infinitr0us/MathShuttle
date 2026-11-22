@@ -39,6 +39,12 @@ READ_FORMATS = ("latex", "mathml", "omml")
 WRITE_FORMATS = ("latex", "mathml", "omml", "eqn", "typst")
 
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+_EXE = "pandoc.exe" if sys.platform == "win32" else "pandoc"
+INSTALL_HINT = "brew install pandoc" if sys.platform == "darwin" else "winget install JohnMacFarlane.Pandoc"
+# An app started from the Finder or the Dock gets launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin), not
+# the shell's: Homebrew's bin (Apple silicon, Intel) is searched too, and is where pandoc's own
+# installer puts it (/usr/local/bin).
+_MACOS_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
 
 
 class PandocNotFound(RuntimeError):
@@ -77,18 +83,20 @@ def _candidate_paths():
         yield env
     # next to the frozen executable / this package (lets a copy of pandoc.exe be bundled)
     base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    yield os.path.join(base, "pandoc.exe")
-    yield os.path.join(base, "pandoc", "pandoc.exe")
+    yield os.path.join(base, _EXE)
+    yield os.path.join(base, "pandoc", _EXE)
     # PATH, but not the current directory: on Windows shutil.which() looks there first, which
     # would run a pandoc.exe lying in whatever folder the CLI is started from.
-    exe = "pandoc.exe" if sys.platform == "win32" else "pandoc"
     for d in os.environ.get("PATH", "").split(os.pathsep):
         d = d.strip().strip('"')
         if os.path.isabs(d):
-            yield os.path.join(d, exe)
+            yield os.path.join(d, _EXE)
     for root in (os.environ.get("LOCALAPPDATA"), os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
         if root:
             yield os.path.join(root, "Pandoc", "pandoc.exe")
+    if sys.platform == "darwin":
+        for d in _MACOS_DIRS:
+            yield os.path.join(d, "pandoc")
 
 
 def find_pandoc() -> str:
@@ -103,8 +111,8 @@ def find_pandoc() -> str:
                 break
         else:
             raise PandocNotFound(
-                "pandoc.exe was not found. Install it with  winget install JohnMacFarlane.Pandoc\n"
-                "(or set MATHSHUTTLE_PANDOC to the full path of pandoc.exe).")
+                "%s was not found. Install it with  %s\n"
+                "(or set MATHSHUTTLE_PANDOC to the full path of %s)." % (_EXE, INSTALL_HINT, _EXE))
     return _pandoc_path
 
 
@@ -138,11 +146,13 @@ def pandoc_version() -> str:
 
 
 def _scan_texmath_version(path: str) -> Optional[str]:
-    """The ``texmath-<version>`` Haskell package id embedded in a (statically linked) pandoc."""
+    """The ``texmath-<version>`` Haskell package id embedded in a (statically linked) pandoc.  Cabal
+    shortens the ids on macOS (vowels dropped, as in ``pndc-cl-3.14-..``): Homebrew's pandoc carries
+    ``txmth-<version>``."""
     import mmap
     try:
         with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-            m = re.search(rb"texmath-(\d+(?:\.\d+)+)", mm)
+            m = re.search(rb"(?:texmath|txmth)-(\d+(?:\.\d+)+)", mm)
             return m.group(1).decode() if m else None  # the match reads the mmap: decode before it closes
     except (OSError, ValueError):  # unreadable or empty file
         return None
@@ -172,7 +182,7 @@ def engine_report() -> str:
     lines = [engine_description(), command if binary == command else "%s  ->  %s" % (command, binary)]
     if not texmath_version():
         lines.append("texmath version unknown: %s carries no texmath package id (a launcher?). "
-                     "Set MATHSHUTTLE_PANDOC to the real pandoc.exe to inspect it." % os.path.basename(binary))
+                     "Set MATHSHUTTLE_PANDOC to the real %s to inspect it." % (os.path.basename(binary), _EXE))
     return "\n".join(lines)
 
 

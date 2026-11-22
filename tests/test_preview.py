@@ -23,6 +23,18 @@ def test_math_line(tex, display, expected):
     assert " ".join(preview.math_line(tex, display).split()) == " ".join(expected.split())
 
 
+@pytest.mark.skipif(sys.platform != "darwin" or not os.path.isfile("/Library/TeX/texbin/latex"), reason="MacTeX")
+def test_mactex_is_found_without_it_on_path(monkeypatch):
+    # an app started from the Finder has launchd's PATH; latex's directory is added for the fonts kpathsea
+    # makes with mktexpk (bbm), which it finds through PATH
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    assert preview._which("latex") == "/Library/TeX/texbin/latex"
+    env = preview._tex_env("/Library/TeX/texbin/latex")
+    assert env["PATH"] == "/Library/TeX/texbin:/usr/bin:/bin:/usr/sbin:/sbin"
+    monkeypatch.setenv("PATH", "/Library/TeX/texbin:/usr/bin")
+    assert preview._tex_env("/Library/TeX/texbin/latex") is None  # already there: this process's own
+
+
 @needs_latex
 def test_render_and_cache(tmp_path):
     eqs = [Equation(r"\left\lvert \frac{x}{2} \right\rvert", True), Equation("a^2", False)]

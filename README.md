@@ -4,7 +4,8 @@ Move equations between LaTeX and Word / PowerPoint, both ways, offline. Copy LaT
 paper's macros) and paste it into Office as a native, editable equation; copy an equation in
 Office and get LaTeX you can put in a paper. MathShuttle also converts between **LaTeX, MathML
 and OMML** (Office Math), with eqn and Typst output, as a local stand-in for the
-[texmath web demo](https://johnmacfarlane.net/texmath.html). Windows, Python standard library.
+[texmath web demo](https://johnmacfarlane.net/texmath.html). Windows (macOS in progress, see below),
+Python standard library.
 
 The conversion engine *is* texmath: it runs inside [pandoc](https://pandoc.org) (same author),
 which is the only runtime dependency besides Python's standard library.
@@ -39,6 +40,29 @@ the tool converts all 784, and 764 of them come back from Word as the same symbo
 Requirement: **pandoc** (`winget install JohnMacFarlane.Pandoc`). The app looks for
 `pandoc.exe` next to itself, on `PATH`, then in `%LOCALAPPDATA%\Pandoc`; set
 `MATHSHUTTLE_PANDOC` to point at a specific copy.
+
+## macOS (in progress)
+
+The same code runs on macOS: the window, every conversion, the command line, **Open file…**, the LaTeX
+preview and the tests (checked on macOS 27.2 with Python 3.12 / Tk 9.0 and Python 3.9 / Tk 8.6, pandoc
+3.14 from Homebrew, MacTeX 2026). Install pandoc with `brew install pandoc` and start the window with
+`python3 -m mathshuttle` (any Python ≥ 3.9 with tkinter; uv's 3.11 and later work in a `.venv` as they are,
+its 3.9 there needs `TCL_LIBRARY` set to its `lib/tcl8.6`). An app started from the
+Finder does not get the shell's `PATH`, so pandoc is also looked for in `/opt/homebrew/bin` and
+`/usr/local/bin`, and `latex` / `dvipng` in `/Library/TeX/texbin`. The shortcuts take Command as well as
+Control (Cmd+Shift+C, Cmd+Shift+V, Cmd+Return); the settings are kept in
+`~/Library/Application Support/MathShuttle/settings.json`.
+
+Not there yet:
+
+* **Word / PowerPoint for Mac.** The clipboard code uses the general pasteboard (NSPasteboard, through
+  the Objective-C runtime with ctypes), but which pasteboard types Mac Office uses for an equation is
+  still to be found out with Office at hand. Until then *Copy for Word/PowerPoint* puts the MathML under
+  a few candidate types (`MATHML_TYPES` in `mathshuttle/_clipboard_macos.py`) and as plain text, and
+  *Paste from Word/PowerPoint* reads any type whose name contains `mathml`. macOS may ask once before
+  the app reads what another app copied (paste privacy).
+* **The hotkey**: Windows only for now; its checkbox says so.
+* A standalone app: `build_exe.ps1` builds the Windows `.exe` only.
 
 ## Word / PowerPoint workflow
 
@@ -218,8 +242,10 @@ python tests\office_smoke.py            # optional: real Word + PowerPoint via C
 python tools\capture_word_fixtures.py   # optional: re-capture tests\fixtures\word from your Word
 ```
 The Office smoke test pastes into hidden Word/PowerPoint instances, copies the equation back,
-converts it to LaTeX and closes everything without saving. These overwrite the clipboard (in
-pytest only `test_copy_for_office_and_paste_back`; deselect it with `-k "not copy_for_office"`).
+converts it to LaTeX and closes everything without saving. These overwrite the clipboard, and so do
+the clipboard tests in pytest (deselect them with `-k "not copy_for_office and not clipboard"`).
+On macOS the Windows-only tests (the hotkey) are skipped, and the pasteboard tests
+(`tests/test_clipboard_macos.py`) read back only what they wrote themselves.
 `tests\fixtures\word` holds what Word 16.0.20527 really writes (MathML and OMML) for typical
 equations typed into it; the tidy tests run on those.
 
@@ -241,9 +267,11 @@ mathshuttle/
   tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
   documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are
-  hotkeys.py         the system-wide hotkey (RegisterHotKey in a thread of its own)
+  hotkeys.py         the system-wide hotkey (RegisterHotKey in a thread of its own; Windows only for now)
   preview.py         the LaTeX preview (latex + dvipng)
-  clipboard.py       Win32 clipboard via ctypes: "MathML" format in/out
+  clipboard.py       the clipboard the app uses; loads the platform's backend on first use
+  _clipboard_win32.py  Win32 clipboard via ctypes: "MathML" format in/out
+  _clipboard_macos.py  macOS pasteboard via the Objective-C runtime (ctypes); MathML types to be confirmed
   app.py             tkinter GUI
   __main__.py        GUI / CLI entry
 ```

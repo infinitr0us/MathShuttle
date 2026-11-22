@@ -33,33 +33,58 @@ TEMPLATE = r"""\documentclass[border=4pt,12pt]{standalone}
 """
 _LINE = r"\MathShuttleEdge\hspace{1pt}%s\hspace{1pt}\MathShuttleEdge"
 
+# An app started from the Finder or the Dock gets launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin), not
+# the shell's: MacTeX's /Library/TeX/texbin, and Homebrew's bin for a TeX Live from there, are searched
+# after PATH, and the TeX programs are run with their own directory on PATH (see _tex_env).
+_MACOS_DIRS = ("/Library/TeX/texbin", "/opt/homebrew/bin", "/usr/local/bin") if sys.platform == "darwin" else ()
+
 _tools: Optional[dict] = None
 
 
+def _which(name: str) -> Optional[str]:
+    if not _MACOS_DIRS:
+        return shutil.which(name)
+    return shutil.which(name, path=os.pathsep.join([os.environ.get("PATH", os.defpath), *_MACOS_DIRS]))
+
+
+def _tex_env(latex: str) -> Optional[dict]:
+    """The environment for latex, dvipng and kpsewhich: this process's own (None), but on macOS with
+    their directory added to PATH when it is not there.  kpathsea finds mktexpk through PATH when a
+    font has no outlines (bbm, for \\mathbbm) and must be made; without it dvipng leaves the glyph blank."""
+    path = os.environ.get("PATH", os.defpath)
+    directory = os.path.dirname(latex)
+    if not _MACOS_DIRS or directory in path.split(os.pathsep):
+        return None
+    return dict(os.environ, PATH=os.pathsep.join([directory, path]))
+
+
 def tools() -> Optional[dict]:
-    """{"latex": path, "dvipng": path, "miktex": bool, "packages": preamble} or None without LaTeX."""
+    """{"latex": path, "dvipng": path, "miktex": bool, "packages": preamble, "env": for subprocess} or None
+    without LaTeX."""
     global _tools
     if _tools is None:
-        latex, dvipng = shutil.which("latex"), shutil.which("dvipng")
+        latex, dvipng = _which("latex"), _which("dvipng")
         if not latex or not dvipng:
             _tools = {}
         else:
+            env = _tex_env(latex)
             try:
                 version = subprocess.run([latex, "--version"], capture_output=True, timeout=20,
-                                         creationflags=_FLAGS).stdout.decode("utf-8", "replace")
+                                         creationflags=_FLAGS, env=env).stdout.decode("utf-8", "replace")
             except (OSError, subprocess.TimeoutExpired):
                 version = ""
             packages = PACKAGES
-            kpsewhich = shutil.which("kpsewhich")
+            kpsewhich = _which("kpsewhich")
             for name in OPTIONAL_PACKAGES:
                 try:
                     found = kpsewhich and subprocess.run([kpsewhich, name + ".sty"], capture_output=True,
-                                                         timeout=20, creationflags=_FLAGS).stdout.strip()
+                                                         timeout=20, creationflags=_FLAGS, env=env).stdout.strip()
                 except (OSError, subprocess.TimeoutExpired):
                     found = False
                 if found:
                     packages += "\n\\usepackage{%s}" % name
-            _tools = {"latex": latex, "dvipng": dvipng, "miktex": "MiKTeX" in version, "packages": packages}
+            _tools = {"latex": latex, "dvipng": dvipng, "miktex": "MiKTeX" in version, "packages": packages,
+                      "env": env}
     return _tools or None
 
 
@@ -145,7 +170,8 @@ def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
     with open(os.path.join(job, "eq.tex"), "w", encoding="utf-8") as f:
         f.write(source)
     try:
-        p = subprocess.run(latex_command(t, "eq.tex"), cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS)
+        p = subprocess.run(latex_command(t, "eq.tex"), cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS,
+                           env=t.get("env"))
         if p.returncode:
             log = p.stdout.decode("utf-8", "replace")
             errors = [ln for ln in log.splitlines() if ln.startswith("!")]
@@ -155,7 +181,7 @@ def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
             raise PreviewError("LaTeX: " + (errors[0][2:] if errors else "failed") +
                                (" (at: %s)" % at.strip()[-60:] if at.strip() else ""))
         p = subprocess.run([t["dvipng"], "-D", str(dpi), "-T", "tight", "-bg", "White", "-q", "-o", "eq.png",
-                            "eq.dvi"], cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS)
+                            "eq.dvi"], cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS, env=t.get("env"))
         if p.returncode or not os.path.exists(os.path.join(job, "eq.png")):
             raise PreviewError("dvipng failed: " + p.stderr.decode("utf-8", "replace").strip()[-200:])
         os.replace(os.path.join(job, "eq.png"), png)

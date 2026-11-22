@@ -206,6 +206,7 @@ def test_nested_tag_is_dropped():
 
 
 # ---- hotkey ---------------------------------------------------------------------------------------
+@pytest.mark.skipif(sys.platform != "win32", reason="RegisterHotKey: the hotkey is Windows only for now")
 def test_timed_out_listener_releases_the_key(monkeypatch):
     real = hotkeys._user32
 

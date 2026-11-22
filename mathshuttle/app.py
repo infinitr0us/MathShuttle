@@ -19,18 +19,30 @@ from typing import Optional
 from . import __version__, clipboard, compat, hotkeys, latex_wrap, preview
 from .convert import FORMAT_LABELS, MODES, Result, convert, macro_notes, office_copy
 from .latex_wrap import WRAPPERS
-from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description, engine_report
+from .pandoc_engine import (INSTALL_HINT, READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description,
+                            engine_report)
 
 SAMPLE = "\\begin{align}\n  \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\\n  \\nabla \\times \\mathbf{B} - \\frac{1}{c^2}\\frac{\\partial \\mathbf{E}}{\\partial t} &= \\mu_0 \\mathbf{J}\n\\end{align}"
 
-SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "MathShuttle", "settings.json")
+MAC = sys.platform == "darwin"
+# the modifier of the app's own shortcuts, and of copy / paste in Office, as the user knows it
+KEY = "Cmd" if MAC else "Ctrl"
+APP_DATA = (os.path.join(os.path.expanduser("~"), "Library", "Application Support") if MAC
+            else os.environ.get("APPDATA", os.path.expanduser("~")))
+SETTINGS_PATH = os.path.join(APP_DATA, "MathShuttle", "settings.json")
 # where the tool kept them under its former name (Equation Tool): read once if there are no settings yet
-OLD_SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "EquationTool", "settings.json")
+OLD_SETTINGS_PATH = os.path.join(APP_DATA, "EquationTool", "settings.json")
 DEFAULT_GEOMETRY = "1200x720"
 DEBOUNCE_MS = 450
 MAX_SAVED_INPUT = 200_000  # characters of input kept for the next start
 
-HELP = """MathShuttle %s  -  texmath (via pandoc) running locally
+_HOTKEY_HELP = """  Hotkey: not on macOS yet.""" if MAC else """\
+  Hotkey (Ctrl+Alt+Shift+M, works in any program while MathShuttle runs, even minimised):
+          an equation copied in Word / PowerPoint becomes LaTeX text on the clipboard;
+          LaTeX text on the clipboard becomes an equation - then Ctrl+V in Office.  The key
+          is "hotkey" in the settings file (%APPDATA%\\MathShuttle\\settings.json)."""
+
+HELP = """MathShuttle %(version)s  -  texmath (via pandoc) running locally
 
 INPUT (From)
   LaTeX   Any delimiters are recognised: bare, $...$, \\(...\\), $$...$$, \\[...\\],
@@ -59,31 +71,48 @@ OUTPUT (To)
 
 WORD / POWERPOINT
   Copy for Word/PowerPoint   converts the input to MathML and places it on the clipboard
-          in the "MathML" clipboard format; Ctrl+V in Word, PowerPoint or OneNote then
-          inserts a native, editable equation (Ctrl+Shift+C).  align / aligned / split
+          in the "MathML" clipboard format; %(key)s+V in Word, PowerPoint or OneNote then
+          inserts a native, editable equation (%(key)s+Shift+C).  align / aligned / split
           blocks arrive as an Office equation array, lined up at the = signs.
   Paste from Word/PowerPoint   reads the equation you copied in Word / PowerPoint
-          (select the equation, Ctrl+C) and converts it to LaTeX (Ctrl+Shift+V).
-  Hotkey (Ctrl+Alt+Shift+M, works in any program while MathShuttle runs, even minimised):
-          an equation copied in Word / PowerPoint becomes LaTeX text on the clipboard;
-          LaTeX text on the clipboard becomes an equation - then Ctrl+V in Office.  The key
-          is "hotkey" in the settings file (%%APPDATA%%\\MathShuttle\\settings.json).
+          (select the equation, %(key)s+C) and converts it to LaTeX (%(key)s+Shift+V).
+%(hotkey)s
   Open file...   every equation of a .docx / .pptx / .tex / .md file, with where it is.
 
 LaTeX preview: the LaTeX side of the conversion as LaTeX sets it (needs latex + dvipng on PATH).
 
-Ctrl+Enter converts; Auto-convert re-runs the conversion as you type.
-""" % __version__
+%(key)s+Enter converts; Auto-convert re-runs the conversion as you type.
+""" % {"version": __version__, "key": KEY, "hotkey": _HOTKEY_HELP}
 
 
 class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
+class _CGPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+def _on_a_display_macos(x: int, y: int) -> bool:
+    """CGGetDisplaysWithPoint; Quartz's global coordinates are Tk's on macOS (from the top left corner
+    of the main display, growing downwards)."""
+    try:
+        displays_with_point = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics").CGGetDisplaysWithPoint
+    except (OSError, AttributeError):
+        return True
+    displays_with_point.argtypes = [_CGPoint, ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    displays_with_point.restype = ctypes.c_int32  # CGError, 0 = success
+    count = ctypes.c_uint32(0)
+    error = displays_with_point(_CGPoint(x, y), 0, None, ctypes.byref(count))
+    return error != 0 or count.value > 0  # if Quartz cannot tell, trust the saved position
+
+
 def _on_a_monitor(x: int, y: int) -> bool:
+    if MAC:
+        return _on_a_display_macos(x, y)
     try:
         monitor_from_point = ctypes.windll.user32.MonitorFromPoint
-    except AttributeError:  # not Windows: trust the saved position
+    except AttributeError:  # neither Windows nor macOS: trust the saved position
         return True
     monitor_from_point.argtypes = [_POINT, ctypes.c_uint32]
     monitor_from_point.restype = ctypes.c_void_p  # HMONITOR
@@ -111,6 +140,8 @@ class App(tk.Tk):
         self._running = 0  # conversion threads whose result has not been collected yet
         self._shown_args: Optional[tuple] = None  # conversion arguments of the result in the output pane
         self.settings = self._load_settings()
+        # Tk's native macOS windowing, which has the Command modifier and the tk::mac:: hooks
+        self.aqua = self.tk.call("tk", "windowingsystem") == "aqua"
 
         self._scale_fonts()
         self._build()
@@ -126,9 +157,15 @@ class App(tk.Tk):
             self.tk.call("tk", "scaling", dpi / 72.0)
         except Exception:
             pass
-        self.mono = tkfont.Font(family="Consolas", size=11)
         ui = tkfont.nametofont("TkDefaultFont")
-        ui.configure(size=10)
+        if MAC:
+            # Tk's default font there is the system font at the system size, which is 13 at Tk 8.6's 72 dpi
+            # and 10 at Tk 9's 96 dpi: it stays as it is, and the monospace font (Menlo comes with every
+            # macOS; Consolas does not) gets the same size
+            self.mono = tkfont.Font(family="Menlo", size=abs(int(ui.actual("size"))) or 13)
+        else:
+            self.mono = tkfont.Font(family="Consolas", size=11)
+            ui.configure(size=10)
         self.option_add("*Font", ui)
         ttk.Style(self).configure("TButton", padding=(8, 3))
 
@@ -258,6 +295,8 @@ class App(tk.Tk):
         scroll.pack(side="right", fill="y")
         text.pack(side="left", fill="both", expand=True)
         text.bind("<Control-a>", lambda e: (text.tag_add("sel", "1.0", "end-1c"), "break")[1])
+        if self.aqua:
+            text.bind("<Command-a>", lambda e: (text.tag_add("sel", "1.0", "end-1c"), "break")[1])
         return text
 
     def _bind_keys(self) -> None:
@@ -269,6 +308,18 @@ class App(tk.Tk):
         self.bind_all("<Control-Shift-V>", lambda e: self.paste_from_office())
         self.bind_all("<Control-Shift-v>", lambda e: self.paste_from_office())
         self.bind_all("<F1>", lambda e: self.show_help())
+        if self.aqua:  # the Command key too: what Mac users press (the Control keys above keep working)
+            self.bind_all("<Command-Return>", lambda e: self.convert_now())
+            for w in (self.input, self.output):
+                w.bind("<Command-Return>", lambda e: (self.convert_now(), "break")[1])
+            self.bind_all("<Command-Shift-C>", lambda e: self.copy_for_office())
+            self.bind_all("<Command-Shift-c>", lambda e: self.copy_for_office())
+            self.bind_all("<Command-Shift-V>", lambda e: self.paste_from_office())
+            self.bind_all("<Command-Shift-v>", lambda e: self.paste_from_office())
+            # Quit in the application menu (Cmd+Q) would end Tk without WM_DELETE_WINDOW, losing the
+            # settings and the input; Help in the Help menu opens this app's help
+            self.createcommand("tk::mac::Quit", self._on_close)
+            self.createcommand("tk::mac::ShowHelp", self.show_help)
 
     # ---- settings -----------------------------------------------------------------------------
     def _load_settings(self) -> dict:
@@ -314,6 +365,9 @@ class App(tk.Tk):
             except ValueError:
                 pass  # keep the default; the settings file was edited by hand
         self.hotkey_chk.configure(text="Hotkey %s" % self.hotkey)
+        if hotkeys.UNAVAILABLE:
+            self.hotkey_var.set(False)
+            self.hotkey_chk.configure(text="Hotkey (%s)" % hotkeys.UNAVAILABLE, state="disabled")
         files = s.get("macro_files")
         self.macro_files = [f for f in files if isinstance(f, str)] if isinstance(files, list) else []
         self.macro_text = s.get("macro_text") if isinstance(s.get("macro_text"), str) else ""
@@ -329,7 +383,11 @@ class App(tk.Tk):
         data = {"src": self.src_var.get(), "dst": self.dst_var.get(), "mode": self.mode_var.get(),
                 "wrapper": self.wrapper_var.get(), "auto_convert": self.auto_var.get(),
                 "annotate": self.annotate_var.get(), "tidy": self.tidy_var.get(),
-                "hotkey": self.hotkey, "hotkey_enabled": self.hotkey_var.get(), "preview": self.preview_var.get(),
+                "hotkey": self.hotkey,
+                # where there is no hotkey, the box is off without the user's say: keep their choice
+                "hotkey_enabled": (bool(self.settings.get("hotkey_enabled", True)) if hotkeys.UNAVAILABLE
+                                   else self.hotkey_var.get()),
+                "preview": self.preview_var.get(),
                 "macro_files": self.macro_files, "macro_text": self.macro_text, "geometry": self.geometry(),
                 # whole or not at all: a cut could land inside an equation, and a very large input
                 # (a whole document.xml) would be reloaded and converted again at every start
@@ -352,8 +410,8 @@ class App(tk.Tk):
             self.engine_var.set(engine_description())
         except PandocNotFound as e:
             self.engine_var.set("pandoc not found")
-            self._set_status("pandoc not found  -  install it (winget install JohnMacFarlane.Pandoc) "
-                             "or set MATHSHUTTLE_PANDOC, then restart", error=True)
+            self._set_status("pandoc not found  -  install it (%s) "
+                             "or set MATHSHUTTLE_PANDOC, then restart" % INSTALL_HINT, error=True)
             messagebox.showerror("pandoc not found", str(e))
             return
         except Exception as e:  # pragma: no cover
@@ -501,7 +559,7 @@ class App(tk.Tk):
             self._set_output(str(e), error=True)
             self._set_status("Could not copy the equation", error=True)
             return
-        msg = "Equation copied  -  press Ctrl+V in Word / PowerPoint / OneNote to insert it as a native equation"
+        msg = "Equation copied  -  press %s+V in Word / PowerPoint / OneNote to insert it as a native equation" % KEY
         self._set_status("   ".join([msg] + copy.notes))
 
     def paste_from_office(self) -> None:
@@ -511,8 +569,8 @@ class App(tk.Tk):
             self._set_status(str(e), error=True)
             return
         if not mathml:
-            self._set_status("No equation on the clipboard  -  select an equation in Word / PowerPoint and press Ctrl+C first",
-                             error=True)
+            self._set_status("No equation on the clipboard  -  select an equation in Word / PowerPoint and press %s+C first"
+                             % KEY, error=True)
             return
         self.src_var.set("mathml")
         if self.dst_var.get() == "mathml":
@@ -632,7 +690,7 @@ class App(tk.Tk):
     def _toggle_hotkey(self) -> None:
         """Listen for the hotkey while the box is ticked (and the app runs, even minimised)."""
         self._stop_hotkey()
-        if not self.hotkey_var.get():
+        if not self.hotkey_var.get() or hotkeys.UNAVAILABLE:
             return
         listener = hotkeys.HotkeyListener(self.hotkey)
         error = listener.start_and_wait()
@@ -682,7 +740,7 @@ class App(tk.Tk):
                 return "Nothing to convert: copy LaTeX, or an equation in Word / PowerPoint, first", True
             copy = office_copy(text, "latex", mode, macros)
             clipboard.copy_mathml_for_office(copy.mathml, expect_sequence=sequence)
-            return "   ".join(["Equation ready: press Ctrl+V in Word / PowerPoint"] + copy.notes), False
+            return "   ".join(["Equation ready: press %s+V in Word / PowerPoint" % KEY] + copy.notes), False
 
         def finished(value, error):
             if error is not None:
@@ -936,7 +994,7 @@ class EquationList(tk.Toplevel):
         except (ConversionError, PandocNotFound, clipboard.ClipboardError) as e:
             self.info.set("Could not copy: %s" % str(e).splitlines()[-1])
             return
-        self.info.set("   ".join(["Copied: press Ctrl+V in Word / PowerPoint"] + copy.notes))
+        self.info.set("   ".join(["Copied: press %s+V in Word / PowerPoint" % KEY] + copy.notes))
 
     def copy_latex(self) -> None:
         found = self._selected()

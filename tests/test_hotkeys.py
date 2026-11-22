@@ -28,6 +28,17 @@ def test_parse_rejects(text):
         hotkeys.parse(text)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="where there is no hotkey")
+def test_listener_reports_why_there_is_no_hotkey():
+    listener = hotkeys.HotkeyListener("Ctrl+Alt+Shift+M")
+    assert hotkeys.UNAVAILABLE and listener.start_and_wait() == hotkeys.UNAVAILABLE
+    assert not listener.is_alive()  # no thread was started
+    listener.stop()  # and stopping it is harmless
+    if sys.platform == "darwin":
+        assert hotkeys.UNAVAILABLE == "not on macOS yet"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="RegisterHotKey: the hotkey is Windows only for now")
 def test_listener_registers_hears_and_releases():
     listener = hotkeys.HotkeyListener(KEY)
     assert listener.start_and_wait() is None

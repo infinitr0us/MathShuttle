@@ -10,19 +10,26 @@ import ctypes
 import ctypes.wintypes as wt
 import queue
 import re
+import sys
 import threading
 from typing import Optional, Tuple
 
-_user32 = ctypes.windll.user32
-_kernel32 = ctypes.windll.kernel32
-_user32.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
-_user32.RegisterHotKey.restype = wt.BOOL
-_user32.UnregisterHotKey.argtypes = [wt.HWND, ctypes.c_int]
-_user32.GetMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT]
-_user32.GetMessageW.restype = wt.BOOL
-_user32.PostThreadMessageW.argtypes = [wt.DWORD, wt.UINT, wt.WPARAM, wt.LPARAM]
-_user32.PostThreadMessageW.restype = wt.BOOL
-_user32.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
+# Why there is no hotkey (None: there is one).  The module still imports elsewhere, for parse() and so
+# that the app can say so; a listener there reports this reason instead of starting.
+UNAVAILABLE: Optional[str] = None if sys.platform == "win32" else (
+    "not on macOS yet" if sys.platform == "darwin" else "Windows only")
+
+if UNAVAILABLE is None:
+    _user32 = ctypes.windll.user32
+    _kernel32 = ctypes.windll.kernel32
+    _user32.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
+    _user32.RegisterHotKey.restype = wt.BOOL
+    _user32.UnregisterHotKey.argtypes = [wt.HWND, ctypes.c_int]
+    _user32.GetMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT]
+    _user32.GetMessageW.restype = wt.BOOL
+    _user32.PostThreadMessageW.argtypes = [wt.DWORD, wt.UINT, wt.WPARAM, wt.LPARAM]
+    _user32.PostThreadMessageW.restype = wt.BOOL
+    _user32.PeekMessageW.argtypes = [ctypes.POINTER(wt.MSG), wt.HWND, wt.UINT, wt.UINT, wt.UINT]
 
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
@@ -93,6 +100,8 @@ class HotkeyListener(threading.Thread):
 
     def start_and_wait(self, timeout: float = 2.0) -> Optional[str]:
         """Start; None once the hotkey is registered, else the reason it is not."""
+        if UNAVAILABLE is not None:
+            return UNAVAILABLE  # no thread: there is nothing to register the key with
         self.start()
         if not self.started.wait(timeout):
             with self._lock:

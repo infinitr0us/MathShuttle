@@ -83,7 +83,8 @@ def test_copy_for_office_and_paste_back(app):
     app.dst_var.set("omml")
     set_input(app, "\\begin{align} a &= b \\\\ c &= d \\end{align}")
     app.copy_for_office()
-    assert "Ctrl+V" in app.status_var.get()
+    import mathshuttle.app as app_module
+    assert app_module.KEY + "+V" in app.status_var.get()  # Ctrl+V on Windows, Cmd+V on macOS
     mathml = clipboard.read_equation_from_office()
     assert mathml and "<mtable" in mathml
 
@@ -273,6 +274,7 @@ def test_open_document_lists_and_uses_equations(app, tmp_path):
         del app._show_equations
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="RegisterHotKey: the hotkey is Windows only for now")
 def test_copy_for_office_hotkey_round_trip(app):
     """The hotkey (a simulated press: no keystroke is sent): LaTeX text on the clipboard becomes an
     equation for Office, and pressing again turns it back into LaTeX text.  Overwrites the clipboard."""
@@ -298,6 +300,48 @@ def test_copy_for_office_hotkey_round_trip(app):
         app.hotkey_var.set(False)
         app._toggle_hotkey()
         app.hotkey = hotkeys.DEFAULT
+
+
+def test_shuttle_clipboard_without_the_hotkey(app):
+    """What the hotkey does, called directly (there is no hotkey on macOS yet): LaTeX text becomes an
+    equation for Office and back.  Overwrites the clipboard; reads only what this process wrote."""
+    import mathshuttle.app as app_module
+    app.src_var.set("latex")
+    clipboard.set_text(r"\frac{a}{b}")
+    results = []
+    app.shuttle_clipboard(done=lambda message, failed: results.append((message, failed)))
+    assert pump(app, until=lambda: results)
+    assert results[-1] == ("Equation ready: press %s+V in Word / PowerPoint" % app_module.KEY, False)
+    assert "<mfrac" in (clipboard.read_equation_from_office() or "")
+    app.shuttle_clipboard(done=lambda message, failed: results.append((message, failed)))
+    assert pump(app, until=lambda: len(results) == 2)
+    assert results[-1][1] is False and clipboard.get_text().strip() == r"\[ \frac{a}{b} \]"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS")
+def test_macos_window(app, tmp_path, monkeypatch):
+    """The hotkey box says why it is off and keeps the user's choice; Command keys; the settings
+    file under Application Support; a monospace font that exists; no Windows key names in the help."""
+    import json
+    from tkinter import font as tkfont
+    import mathshuttle.app as app_module
+    assert str(app.hotkey_chk.cget("state")) == "disabled"
+    assert app.hotkey_chk.cget("text") == "Hotkey (not on macOS yet)" and not app.hotkey_var.get()
+    monkeypatch.setattr(app_module, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setitem(app.settings, "hotkey_enabled", True)
+    app._save_settings()
+    with open(app_module.SETTINGS_PATH, encoding="utf-8") as f:
+        assert json.load(f)["hotkey_enabled"] is True
+
+    assert app_module.APP_DATA == os.path.expanduser("~/Library/Application Support")
+    assert app_module.KEY == "Cmd" and "Ctrl" not in app_module.HELP and "APPDATA" not in app_module.HELP
+    assert app.mono.actual("family") == "Menlo" and "Menlo" in tkfont.families(app)
+    assert app.mono.metrics("linespace") <= 1.4 * tkfont.nametofont("TkDefaultFont").metrics("linespace")
+    assert app.aqua
+    for sequence in ("<Command-Shift-Key-C>", "<Command-Shift-Key-V>", "<Command-Key-Return>"):
+        assert app.bind_all(sequence), sequence
+    assert app.input.bind("<Command-Key-a>") and app.input.bind("<Command-Key-Return>")
+    assert app.tk.call("info", "commands", "::tk::mac::Quit") and app.tk.call("info", "commands", "::tk::mac::ShowHelp")
 
 
 def test_open_document_reports_errors(app, tmp_path):
