@@ -11,17 +11,17 @@ import pytest
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
 
-from equation_tool import clipboard  # noqa: E402
-from equation_tool import pandoc_engine as pe  # noqa: E402
+from mathshuttle import clipboard  # noqa: E402
+from mathshuttle import pandoc_engine as pe  # noqa: E402
 
 
 # ---- pandoc discovery ------------------------------------------------------------------------------
 def test_mistyped_env_var_is_an_error(monkeypatch, tmp_path):
     monkeypatch.setattr(pe, "_pandoc_path", None)
-    monkeypatch.setenv("EQUATION_TOOL_PANDOC", str(tmp_path / "pandoc.exe"))
+    monkeypatch.setenv("MATHSHUTTLE_PANDOC", str(tmp_path / "pandoc.exe"))
     with pytest.raises(pe.PandocNotFound) as e:
         pe.find_pandoc()
-    assert "EQUATION_TOOL_PANDOC" in str(e.value)
+    assert "MATHSHUTTLE_PANDOC" in str(e.value)
 
 
 def test_pandoc_that_cannot_be_started_is_a_conversion_error(monkeypatch, tmp_path):
@@ -38,7 +38,7 @@ def test_pandoc_that_cannot_be_started_is_a_conversion_error(monkeypatch, tmp_pa
 def test_current_directory_is_not_searched(monkeypatch, tmp_path):
     (tmp_path / "pandoc.exe").write_bytes(b"planted")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("EQUATION_TOOL_PANDOC", raising=False)
+    monkeypatch.delenv("MATHSHUTTLE_PANDOC", raising=False)
     monkeypatch.setenv("PATH", os.pathsep.join([".", "", os.environ.get("PATH", "")]))
     candidates = [os.path.normcase(os.path.abspath(p)) for p in pe._candidate_paths()]  # which() says .\pandoc.EXE
     assert os.path.normcase(str(tmp_path / "pandoc.exe")) not in candidates
@@ -58,7 +58,7 @@ def test_decode_registered_text_format(raw):
 # ---- CLI encoding --------------------------------------------------------------------------------------
 def _run_cli(args, stdin=b""):
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
-    return subprocess.run([sys.executable, "-m", "equation_tool", *args], input=stdin, capture_output=True,
+    return subprocess.run([sys.executable, "-m", "mathshuttle", *args], input=stdin, capture_output=True,
                           cwd=ROOT, env=env, timeout=60)
 
 
@@ -79,7 +79,7 @@ def test_cli_stdin_is_read_as_utf8():
 
 def test_cli_reads_a_utf16_file(tmp_path, capsys):
     # what `>` writes in Windows PowerShell 5.1 (it used to end in a UnicodeDecodeError traceback)
-    from equation_tool.__main__ import main
+    from mathshuttle.__main__ import main
     src = tmp_path / "eq.tex"
     src.write_bytes("\\text{café} \\\\\r\n x".encode("utf-16"))  # with its BOM, and CRLF
     assert main(["convert", "-t", "latex", "--wrapper", "bare", str(src)]) == 0
@@ -88,7 +88,7 @@ def test_cli_reads_a_utf16_file(tmp_path, capsys):
 
 @pytest.mark.parametrize("content", [None, b"\xff\x00 not text \xc3"])
 def test_cli_unreadable_file_is_a_clean_error(tmp_path, capsys, content):
-    from equation_tool.__main__ import main
+    from mathshuttle.__main__ import main
     src = tmp_path / "eq.tex"
     if content is not None:
         src.write_bytes(content)
@@ -99,7 +99,7 @@ def test_cli_unreadable_file_is_a_clean_error(tmp_path, capsys, content):
 
 def test_cli_clipboard_error_is_a_clean_error(monkeypatch, capsys):
     # no clipboard access: the clipboard read is replaced by one that fails
-    from equation_tool.__main__ import main
+    from mathshuttle.__main__ import main
 
     def busy():
         raise clipboard.ClipboardError("Could not open the clipboard (another application is holding it)")

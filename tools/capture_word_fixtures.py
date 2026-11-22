@@ -18,7 +18,7 @@ sys.path.insert(0, ROOT)
 
 import win32com.client  # noqa: E402
 
-from equation_tool import clipboard  # noqa: E402
+from mathshuttle import clipboard  # noqa: E402
 
 SAMPLES = {
     "rm_subscript": r"$P_{\rm{OOD}}^{(t)} = \frac{a}{b}$",

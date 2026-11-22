@@ -19,9 +19,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import win32com.client  # noqa: E402
 
-from equation_tool import clipboard  # noqa: E402
-from equation_tool.convert import convert, office_copy  # noqa: E402
-from equation_tool.pandoc_engine import read_equations  # noqa: E402
+from mathshuttle import clipboard  # noqa: E402
+from mathshuttle.convert import convert, office_copy  # noqa: E402
+from mathshuttle.pandoc_engine import read_equations  # noqa: E402
 
 TEX = r"\frac{\partial f}{\partial x} + \sum_{i=1}^{n} \mathbf{x}_i^2 = \text{const}"
 ALIGN = "\\begin{align}\na &= b + c \\\\\nd &= \\int_0^1 e^{-t}\\,dt\n\\end{align}"

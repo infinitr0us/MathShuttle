@@ -7,9 +7,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from equation_tool import compat  # noqa: E402
-from equation_tool.convert import convert  # noqa: E402
-from equation_tool.pandoc_engine import ConversionError, strip_tex  # noqa: E402
+from mathshuttle import compat  # noqa: E402
+from mathshuttle.convert import convert  # noqa: E402
+from mathshuttle.pandoc_engine import ConversionError, strip_tex  # noqa: E402
 
 M = '<math xmlns="http://www.w3.org/1998/Math/MathML" display="block">%s</math>'
 

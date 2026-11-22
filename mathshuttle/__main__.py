@@ -1,10 +1,10 @@
 """Entry point.
 
-    python -m equation_tool                       start the GUI
-    python -m equation_tool convert -f latex -t omml [FILE]     convert FILE (or stdin) to stdout
-    python -m equation_tool copy [-f latex] [FILE]              put the equation on the clipboard for Word/PowerPoint
-    python -m equation_tool paste [-t latex] [--wrapper W]      convert the equation copied in Word/PowerPoint
-    python -m equation_tool version                             pandoc + embedded texmath version
+    python -m mathshuttle                       start the GUI
+    python -m mathshuttle convert -f latex -t omml [FILE]     convert FILE (or stdin) to stdout
+    python -m mathshuttle copy [-f latex] [FILE]              put the equation on the clipboard for Word/PowerPoint
+    python -m mathshuttle paste [-t latex] [--wrapper W]      convert the equation copied in Word/PowerPoint
+    python -m mathshuttle version                             pandoc + embedded texmath version
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def _utf8_stdio() -> None:
 
 
 def _cli(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="equation_tool", description="LaTeX / MathML / OMML equation converter (texmath via pandoc)")
+    parser = argparse.ArgumentParser(prog="mathshuttle", description="LaTeX / MathML / OMML equation converter (texmath via pandoc)")
     sub = parser.add_subparsers(dest="cmd")
 
     p = sub.add_parser("convert", help="convert between formats")

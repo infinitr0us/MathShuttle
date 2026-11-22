@@ -23,12 +23,14 @@ from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocN
 
 SAMPLE = "\\begin{align}\n  \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\\n  \\nabla \\times \\mathbf{B} - \\frac{1}{c^2}\\frac{\\partial \\mathbf{E}}{\\partial t} &= \\mu_0 \\mathbf{J}\n\\end{align}"
 
-SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "EquationTool", "settings.json")
+SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "MathShuttle", "settings.json")
+# where the tool kept them under its former name (Equation Tool): read once if there are no settings yet
+OLD_SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "EquationTool", "settings.json")
 DEFAULT_GEOMETRY = "1200x640"
 DEBOUNCE_MS = 450
 MAX_SAVED_INPUT = 200_000  # characters of input kept for the next start
 
-HELP = """Equation Tool %s  -  texmath (via pandoc) running locally
+HELP = """MathShuttle %s  -  texmath (via pandoc) running locally
 
 INPUT (From)
   LaTeX   Any delimiters are recognised: bare, $...$, \\(...\\), $$...$$, \\[...\\],
@@ -94,7 +96,7 @@ def _enable_dpi_awareness() -> None:
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Equation Tool  -  LaTeX / MathML / OMML converter")
+        self.title("MathShuttle  -  LaTeX / MathML / OMML converter")
         self._seq = 0
         self._after_id: Optional[str] = None
         self._results: "queue.Queue[tuple]" = queue.Queue()
@@ -235,8 +237,11 @@ class App(tk.Tk):
 
     # ---- settings -----------------------------------------------------------------------------
     def _load_settings(self) -> dict:
+        path = SETTINGS_PATH
+        if not os.path.exists(path) and SETTINGS_PATH.endswith(os.path.join("MathShuttle", "settings.json")):
+            path = OLD_SETTINGS_PATH  # first start after the rename; they are saved under the new name on exit
         try:
-            with open(SETTINGS_PATH, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
             return {}
@@ -302,7 +307,7 @@ class App(tk.Tk):
         except PandocNotFound as e:
             self.engine_var.set("pandoc not found")
             self._set_status("pandoc not found  -  install it (winget install JohnMacFarlane.Pandoc) "
-                             "or set EQUATION_TOOL_PANDOC, then restart", error=True)
+                             "or set MATHSHUTTLE_PANDOC, then restart", error=True)
             messagebox.showerror("pandoc not found", str(e))
             return
         except Exception as e:  # pragma: no cover
@@ -503,7 +508,7 @@ class App(tk.Tk):
     def edit_macros(self) -> None:
         """Macro files and extra definitions applied to every LaTeX input."""
         win = tk.Toplevel(self)
-        win.title("Equation Tool - macros")
+        win.title("MathShuttle - macros")
         win.transient(self)
         pad = {"padx": 8, "pady": 4}
         ttk.Label(win, text="Macro files (definitions are read from them; everything else is ignored):").pack(anchor="w", **pad)
@@ -570,7 +575,7 @@ class App(tk.Tk):
         except (PandocNotFound, ConversionError) as e:
             engine = str(e)
         win = tk.Toplevel(self)
-        win.title("Equation Tool - help")
+        win.title("MathShuttle - help")
         txt = tk.Text(win, wrap="word", font=self.mono, padx=10, pady=10, width=92, height=32)
         txt.insert("1.0", HELP + "\nENGINE\n" + "".join("  %s\n" % line for line in engine.splitlines()))
         txt.configure(state="disabled")

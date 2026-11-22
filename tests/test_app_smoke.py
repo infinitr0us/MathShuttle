@@ -11,8 +11,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from equation_tool import clipboard  # noqa: E402
-from equation_tool.app import App  # noqa: E402
+from mathshuttle import clipboard  # noqa: E402
+from mathshuttle.app import App  # noqa: E402
 
 
 SETTINGS_TMP = os.path.join(os.path.dirname(__file__), "_settings_tmp.json")
@@ -22,7 +22,7 @@ SETTINGS_TMP = os.path.join(os.path.dirname(__file__), "_settings_tmp.json")
 def root():
     # One Tk root for the module: Anaconda's Tk occasionally fails to initialise when a
     # process creates and destroys several roots in a row.
-    import equation_tool.app as app_module
+    import mathshuttle.app as app_module
     app_module.SETTINGS_PATH = SETTINGS_TMP
     a = App()
     a.withdraw()
@@ -119,7 +119,7 @@ def test_swap_moves_output_to_input(app):
 @pytest.fixture
 def slow_convert(monkeypatch):
     """Make conversions take 0.4 s (so that they can be overtaken) and record the calls."""
-    import equation_tool.app as app_module
+    import mathshuttle.app as app_module
     real, calls = app_module.convert, []
 
     def convert(*args, **kwargs):
@@ -190,7 +190,7 @@ def test_swap_does_not_block_and_is_cancelled_by_a_change(app, slow_convert):
 
 def test_long_input_is_saved_whole(app, tmp_path, monkeypatch):
     import json
-    import equation_tool.app as app_module
+    import mathshuttle.app as app_module
     monkeypatch.setattr(app_module, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     text = "$" + "x" * 30000 + "$"
     set_input(app, text)
@@ -223,7 +223,7 @@ def test_bad_saved_geometry_is_ignored(app, tmp_path, monkeypatch):
         assert applied == ["1200x640", "1100x600", "1100x600+100+100", "1100x600"]
     finally:
         real(before)
-    import equation_tool.app as app_module
+    import mathshuttle.app as app_module
     settings = tmp_path / "settings.json"
     settings.write_text("[1, 2]", encoding="utf-8")
     monkeypatch.setattr(app_module, "SETTINGS_PATH", str(settings))

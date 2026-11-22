@@ -1,9 +1,10 @@
-# Equation Tool
+# MathShuttle
 
-A local, offline replacement for the [texmath web demo](https://johnmacfarlane.net/texmath.html):
-convert equations between **LaTeX, MathML and OMML** (Word/PowerPoint "Office Math"), plus
-eqn and Typst output — and exchange equations with Word / PowerPoint directly through the
-clipboard as native, editable equations.
+Move equations between LaTeX and Word / PowerPoint, both ways, offline. Copy LaTeX (with your
+paper's macros) and paste it into Office as a native, editable equation; copy an equation in
+Office and get LaTeX you can put in a paper. MathShuttle also converts between **LaTeX, MathML
+and OMML** (Office Math), with eqn and Typst output, as a local stand-in for the
+[texmath web demo](https://johnmacfarlane.net/texmath.html). Windows, Python standard library.
 
 The conversion engine *is* texmath: it runs inside [pandoc](https://pandoc.org) (same author),
 which is the only runtime dependency besides Python's standard library.
@@ -30,14 +31,14 @@ the tool converts all 784, and 764 of them come back from Word as the same symbo
 
 ## Quick start
 
-* `dist\EquationTool\EquationTool.exe` — the standalone app (no Python needed).
+* `dist\MathShuttle\MathShuttle.exe`: the standalone app (no Python needed).
   Build it with `.\build_exe.ps1` (see below); add `-Shortcut` for a Start-menu entry.
-* `EquationTool.pyw` — double-click to run from source with any Python ≥ 3.9 (tkinter only).
-* `python -m equation_tool` — same GUI; with arguments it becomes a CLI (see below).
+* `MathShuttle.pyw`: double-click to run from source with any Python ≥ 3.9 (tkinter only).
+* `python -m mathshuttle`: the same GUI; with arguments it becomes a CLI (see below).
 
 Requirement: **pandoc** (`winget install JohnMacFarlane.Pandoc`). The app looks for
 `pandoc.exe` next to itself, on `PATH`, then in `%LOCALAPPDATA%\Pandoc`; set
-`EQUATION_TOOL_PANDOC` to point at a specific copy.
+`MATHSHUTTLE_PANDOC` to point at a specific copy.
 
 ## Word / PowerPoint workflow
 
@@ -84,8 +85,8 @@ Word's XSLT, MathType or JATS journal XML), named entities (`&InvisibleTimes;`, 
 Mathematica / Maple), several documents each with its own XML declaration.
 
 Tip: LaTeX **→** OMML text output is still there for people who work with the XML directly
-(`document.xml`, python-docx, …); for pasting into Office the clipboard route above is the one
-to use — raw OMML cannot be pasted.
+(`document.xml`, python-docx, …); for pasting into Office use the clipboard route above, since
+raw OMML cannot be pasted.
 
 ## LaTeX input: modes and delimiters
 
@@ -106,8 +107,8 @@ separated by a blank line; *Copy for Word/PowerPoint* takes the first).
 **LaTeX that texmath does not know** is rewritten before conversion (the LaTeX output keeps what
 you wrote): plain-TeX font switches (`{\rm OOD}`, `\rm{OOD}`, `\bf`, `\it`, `\cal`, `\sf`, `\tt`,
 scoped like TeX does), `\notag`, `\def` / `\let`, `\mathbbm`, `\Bbb`, `\frak`, `dcases`, `rcases`,
-`matrix*` (and `pmatrix*`…), `\tbinom` / `\dbinom` / `\nicefrac` (plain size), `\textcolor`,
-`\smash`, `\vphantom`, `\mathclap`, `\middle`. Rewrites that lose something (a colour, a strut,
+`cases*` / `dcases*` (text column), `matrix*` (and `pmatrix*`…), `\tbinom` / `\dbinom` /
+`\nicefrac` (plain size), `\textcolor`, `\smash`, `\vphantom`, `\mathclap`. Rewrites that lose something (a colour, a strut,
 the size of a fraction) are noted in the status bar. Also corrected: texmath 0.13 writes `\mathbf{x}`
 as bold *italic*, `\|` as "parallel to" (U+2225, not the norm bar U+2016), `\setminus` as a
 backslash and `\varnothing` as a diameter sign.
@@ -117,11 +118,13 @@ backslash and `\varnothing` as a diameter sign.
 **Macros…** (or `--macros FILE` on the command line, repeatable) takes your papers' macro files
 (`math_commands.tex`, a preamble) plus definitions typed in the dialog. Read from them:
 `\newcommand` / `\renewcommand` / `\providecommand` (with arguments and an optional default),
-`\def` (undelimited parameters), `\let`, `\DeclareMathOperator(*)`, `\DeclarePairedDelimiter`;
-anything else in the file (`\usepackage`, text) is ignored, and a definition that cannot be used
-(`\def\foo#1.{…}`) is reported. Each equation gets only the definitions it uses (and those they
-use), so one bad macro in a 300-line file does not break the others; a definition in the input
-itself wins over the file. Files are re-read when they change.
+`\def` (also with delimited parameters), `\let`, `\DeclareMathOperator(*)`,
+`\DeclarePairedDelimiter` (with `\abs*{x}` and `\abs[\big]{x}`); anything else in the file
+(`\usepackage`, text) is ignored, and a definition that is never closed is reported. The macros an
+equation uses (and those they use) are expanded by pandoc's LaTeX reader, which follows TeX
+(`\let` copies the definition it sees, a font switch in a macro acts where the macro is used),
+so one bad macro in a 300-line file does not break the others; a definition in the input itself
+wins over the file. Files are re-read when they change.
 
 **Mode** = Auto keeps the detected mode; Display / Inline override it (affects `display="block"`
 in MathML, `<m:oMathPara>` vs `<m:oMath>` in OMML, `$ x $` vs `$x$` in Typst, `.EQ` vs inline eqn).
@@ -148,11 +151,11 @@ LaTeX → LaTeX never re-renders the equation; only the delimiters change.
 ## Command line
 
 ```
-python -m equation_tool convert -f latex -t omml [--mode display|inline] [--wrapper align]
+python -m mathshuttle convert -f latex -t omml [--mode display|inline] [--wrapper align]
                                 [--macros FILE ...] [--no-tidy] [FILE]
-python -m equation_tool copy  [-f latex] [--macros FILE ...] [FILE]   # → clipboard, ready to paste into Office
-python -m equation_tool paste [-t latex] [--wrapper W] [--no-tidy]    # equation copied in Office → stdout
-python -m equation_tool version                                       # pandoc + embedded texmath version
+python -m mathshuttle copy  [-f latex] [--macros FILE ...] [FILE]   # → clipboard, ready to paste into Office
+python -m mathshuttle paste [-t latex] [--wrapper W] [--no-tidy]    # equation copied in Office → stdout
+python -m mathshuttle version                                       # pandoc + embedded texmath version
 ```
 `FILE` defaults to stdin. Input and output are UTF-8 (also through pipes and redirection); an input
 file may also be UTF-16 with a BOM (what `>` writes in Windows PowerShell 5.1).
@@ -167,20 +170,20 @@ carries a fix you care about, upgrade pandoc once a pandoc release built against
 normally follow within days or weeks.
 
 The right-hand pane of the status bar, the Help window (`?` / F1) and
-`python -m equation_tool version` show the pandoc and embedded texmath versions; the latter
+`python -m mathshuttle version` show the pandoc and embedded texmath versions; the latter
 two also print which `pandoc.exe` is in use. Check that path before upgrading: a copy bundled
-with `build_exe.ps1 -BundlePandoc` or selected through `EQUATION_TOOL_PANDOC` takes precedence
+with `build_exe.ps1 -BundlePandoc` or selected through `MATHSHUTTLE_PANDOC` takes precedence
 over the installed pandoc and is not touched by `winget upgrade` - rebuild with `-BundlePandoc`
 (or replace that copy) and restart the app. A Scoop shim on `PATH` is followed to the real
 executable when reading the texmath version and when bundling. The current directory is never
-searched for `pandoc.exe`, and an `EQUATION_TOOL_PANDOC` that names no file is an error.
+searched for `pandoc.exe`, and an `MATHSHUTTLE_PANDOC` that names no file is an error.
 
 ## Building the exe
 
 ```powershell
-.\build_exe.ps1                     # creates .venv, installs PyInstaller, builds dist\EquationTool\
+.\build_exe.ps1                     # creates .venv, installs PyInstaller, builds dist\MathShuttle\
 .\build_exe.ps1 -Shortcut           # + Start-menu shortcut   (-DesktopShortcut for the desktop)
-.\build_exe.ps1 -BundlePandoc       # + copies pandoc.exe into dist\EquationTool\ (self-contained, see Licence)
+.\build_exe.ps1 -BundlePandoc       # + copies pandoc.exe into dist\MathShuttle\ (self-contained, see Licence)
 ```
 
 ## Tests
@@ -207,7 +210,7 @@ otherwise a table pastes as a centred matrix.
 ## Layout
 
 ```
-equation_tool/
+mathshuttle/
   pandoc_engine.py   find/run pandoc; read latex|mathml|omml → Equation(tex, display); write mathml|omml|eqn|typst
   latex_wrap.py      delimiter / environment detection and re-wrapping for LaTeX output
   compat.py          LaTeX texmath does not take → LaTeX it does; macro files

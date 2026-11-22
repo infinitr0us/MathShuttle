@@ -63,8 +63,16 @@ _api_version: Optional[list] = None
 _mathml_flag: Optional[str] = None
 
 
+def _env_pandoc() -> "tuple[str, Optional[str]]":
+    """(variable, value) of MATHSHUTTLE_PANDOC, or of EQUATION_TOOL_PANDOC (the tool's former name)."""
+    for name in ("MATHSHUTTLE_PANDOC", "EQUATION_TOOL_PANDOC"):
+        if os.environ.get(name):
+            return name, os.environ[name]
+    return "MATHSHUTTLE_PANDOC", None
+
+
 def _candidate_paths():
-    env = os.environ.get("EQUATION_TOOL_PANDOC")
+    env = _env_pandoc()[1]
     if env:
         yield env
     # next to the frozen executable / this package (lets a copy of pandoc.exe be bundled)
@@ -86,9 +94,9 @@ def _candidate_paths():
 def find_pandoc() -> str:
     global _pandoc_path
     if _pandoc_path is None:
-        env = os.environ.get("EQUATION_TOOL_PANDOC")
+        name, env = _env_pandoc()
         if env and not os.path.isfile(env):  # a typo must not silently select some other pandoc
-            raise PandocNotFound("EQUATION_TOOL_PANDOC is set to %r, which is not an existing file." % env)
+            raise PandocNotFound("%s is set to %r, which is not an existing file." % (name, env))
         for p in _candidate_paths():
             if p and os.path.isfile(p):
                 _pandoc_path = p
@@ -96,7 +104,7 @@ def find_pandoc() -> str:
         else:
             raise PandocNotFound(
                 "pandoc.exe was not found. Install it with  winget install JohnMacFarlane.Pandoc\n"
-                "(or set EQUATION_TOOL_PANDOC to the full path of pandoc.exe).")
+                "(or set MATHSHUTTLE_PANDOC to the full path of pandoc.exe).")
     return _pandoc_path
 
 
@@ -164,7 +172,7 @@ def engine_report() -> str:
     lines = [engine_description(), command if binary == command else "%s  ->  %s" % (command, binary)]
     if not texmath_version():
         lines.append("texmath version unknown: %s carries no texmath package id (a launcher?). "
-                     "Set EQUATION_TOOL_PANDOC to the real pandoc.exe to inspect it." % os.path.basename(binary))
+                     "Set MATHSHUTTLE_PANDOC to the real pandoc.exe to inspect it." % os.path.basename(binary))
     return "\n".join(lines)
 
 

@@ -6,9 +6,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from equation_tool import pandoc_engine as pe  # noqa: E402
-from equation_tool.convert import convert  # noqa: E402
-from equation_tool.pandoc_engine import ConversionError, Equation, read_equations, write_equation  # noqa: E402
+from mathshuttle import pandoc_engine as pe  # noqa: E402
+from mathshuttle.convert import convert  # noqa: E402
+from mathshuttle.pandoc_engine import ConversionError, Equation, read_equations, write_equation  # noqa: E402
 
 ALIGN = "\\begin{align}\na &= b + c \\\\\nd &= \\int_0^1 e^{-t}\\,dt\n\\end{align}"
 
@@ -323,7 +323,7 @@ OFFICE_SHAPES = [  # LaTeX, cells per row in the MathML for Office (None: unchan
 @pytest.mark.parametrize("tex, cells, back", OFFICE_SHAPES)
 def test_mathml_for_office_shapes_ragged_tables_and_arrays(tex, cells, back):
     import xml.etree.ElementTree as ET
-    from equation_tool.convert import mathml_for_office
+    from mathshuttle.convert import mathml_for_office
     ns = "{http://www.w3.org/1998/Math/MathML}"
     office = mathml_for_office(tex, "latex")[0]  # what Copy for Word/PowerPoint puts on the clipboard
     if cells is None:
@@ -338,7 +338,7 @@ def test_mathml_for_office_shapes_ragged_tables_and_arrays(tex, cells, back):
 
 def test_mathml_for_office_shapes_only_the_alignment_around_an_array():
     import xml.etree.ElementTree as ET
-    from equation_tool.convert import mathml_for_office
+    from mathshuttle.convert import mathml_for_office
     ns = "{http://www.w3.org/1998/Math/MathML}"
     office = mathml_for_office("\\begin{align} a &= \\begin{array}{rl} 1 & 2 \\end{array} \\\\ c &= d \\end{align}", "latex")[0]
     assert [t.get("columnspacing") for t in ET.fromstring(office).iter(ns + "mtable")] == ["0em", None]

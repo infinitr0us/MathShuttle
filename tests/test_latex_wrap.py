@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from equation_tool.latex_wrap import classify, wrap  # noqa: E402
+from mathshuttle.latex_wrap import classify, wrap  # noqa: E402
 
 ALIGN = "\\begin{align}\na &= b \\\\\nc &= d\n\\end{align}"
 ALIGNAT = "\\begin{alignat}\n{2}\na &= b & c &= d\n\\end{alignat}"

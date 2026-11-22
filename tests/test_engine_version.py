@@ -10,8 +10,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from equation_tool import pandoc_engine as pe  # noqa: E402
-from equation_tool.__main__ import main  # noqa: E402
+from mathshuttle import pandoc_engine as pe  # noqa: E402
+from mathshuttle.__main__ import main  # noqa: E402
 
 
 def test_scan_finds_the_package_id(tmp_path):
@@ -59,7 +59,7 @@ def test_launcher_without_shim_file_reports_unknown(tmp_path, monkeypatch):
     assert pe.engine_description() == "pandoc 3.11  (texmath version unknown)"
     report = pe.engine_report().splitlines()
     assert report[:2] == ["pandoc 3.11  (texmath version unknown)", str(launcher)]
-    assert "EQUATION_TOOL_PANDOC" in report[2]
+    assert "MATHSHUTTLE_PANDOC" in report[2]
 
 
 def test_engine_report_shows_shim_and_target(tmp_path, monkeypatch):

@@ -10,9 +10,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from equation_tool import tidy  # noqa: E402
-from equation_tool.convert import convert  # noqa: E402
-from equation_tool.pandoc_engine import strip_tex  # noqa: E402
+from mathshuttle import tidy  # noqa: E402
+from mathshuttle.convert import convert  # noqa: E402
+from mathshuttle.pandoc_engine import strip_tex  # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "word")
 
