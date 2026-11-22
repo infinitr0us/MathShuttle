@@ -1,0 +1,2 @@
+<!-- Word 16.0.20527, typed as: \[ \mathcal{L} = \frac{1}{n}\sum_{i=1}^{n} w_i \ell(x_i) \] -->
+<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mi>ℒ</mi><mo>=</mo><mfrac><mn>1</mn><mi>n</mi></mfrac><mrow><munderover><mo stretchy="false">∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover><mrow><msub><mi>w</mi><mi>i</mi></msub></mrow></mrow><mi>𝓁</mi><mrow><mo>(</mo><msub><mi>x</mi><mi>i</mi></msub><mo>)</mo></mrow></math>

@@ -12,6 +12,22 @@ which is the only runtime dependency besides Python's standard library.
 From: LaTeX | MathML | OMML          To: LaTeX | MathML | OMML | eqn | Typst
 ```
 
+### Next to Office's own LaTeX support
+
+Microsoft 365 (Version 2606 and later) converts LaTeX pasted with `$…$` / `\[…\]` delimiters
+into an equation itself. What this tool adds:
+
+* **Your macros.** Word's paste rejects `\newcommand` and `\DeclareMathOperator`; the tool reads
+  your papers' macro files (`math_commands.tex`, a preamble) once and expands them in every
+  equation (see *Macros* below).
+* **LaTeX from Office that you can put in a paper** (`\mathrm{OOD}`, `\operatorname{softmax}`,
+  `\boldsymbol{\theta}`, `\binom`, `cases`, `a &= b`), without opening Word's equation options.
+* MathML, OMML, Typst and eqn output; a command line; Office versions without LaTeX paste
+  (Office 2021 / 2024 LTSC, older Mac Office).
+
+On a 784-equation PhD thesis (Word 16.0.20527): Word's own paste turned 781 into equations;
+the tool converts all 784, and 764 of them come back from Word as the same symbols and fonts.
+
 ## Quick start
 
 * `dist\EquationTool\EquationTool.exe` — the standalone app (no Python needed).
@@ -41,6 +57,28 @@ clipboard and converts it (to LaTeX by default; any other target works too). Equ
 that Office exports as a bare `<mtable>` are recognised and come back as `aligned`, not `matrix`
 (continuation lines such as `&+ c` included).
 
+With **Tidy LaTeX** (on by default; `--no-tidy` on the command line), the LaTeX is what an author
+would write rather than texmath's literal rendering of Office's structure:
+
+| Word holds | texmath alone | Tidy LaTeX |
+|---|---|---|
+| upright `OOD` (`\rm`, `\mathrm`) | `P_{OOD}` (italic) | `P_{\mathrm{OOD}}` |
+| a function name | `{softmax}(z)` (reads back as s·o·f·t·m·a·x) | `\operatorname{softmax}(z)` |
+| bold italic θ, w | `\mathbf{θ}` (pdfLaTeX rejects it), `\mathbf{w}` | `\boldsymbol{\theta}`, `\boldsymbol{w}` |
+| a binomial | `\left( \frac{n}{k} \right)` | `\binom{n}{k}` |
+| an aligned block | `a & {= b}` (the `=` loses its spacing) | `a & = b` |
+| cases | `\left\{ \begin{matrix} … \right.` | `\begin{cases} … \end{cases}` |
+| ℓ, set minus, ∅, bold numbers | `\mathcal{l}`, `\backslash`, `\varnothing`, `\mathbf{2}\mathbf{5}.\mathbf{2}` | `\ell`, `\setminus`, `\emptyset`, `\mathbf{25.2}` |
+
+Also: no `\limits` on sums in display maths, no empty scripts (`x_{i}^{}`). Each result is checked to
+convert again; if a clean-up would break an equation, texmath's own LaTeX is kept.
+
+What Word itself loses (checked with Word / PowerPoint 16.0.20527, so no tool can bring it back from
+the clipboard): its MathML import turns every **bold Latin letter bold italic** (`\mathbf{x}` comes
+back as `\boldsymbol{x}`; Word's *own* LaTeX paste keeps it upright), stores an operator name as
+upright text, not as a function (`\operatorname{f}` comes back as `\mathrm{f}`), and drops `\tag`
+numbers (the tool says so when it copies one).
+
 MathML input may also come from elsewhere: prefixed elements (`<mml:math>`, as written by
 Word's XSLT, MathType or JATS journal XML), named entities (`&InvisibleTimes;`, from
 Mathematica / Maple), several documents each with its own XML declaration.
@@ -64,6 +102,26 @@ Everything pandoc's LaTeX reader understands is accepted, in any mix:
 `\label`, `\tag`, `\nonumber`, `%` comments and `\newcommand` definitions placed before the
 equation are handled; text with several equations converts each of them (output blocks are
 separated by a blank line; *Copy for Word/PowerPoint* takes the first).
+
+**LaTeX that texmath does not know** is rewritten before conversion (the LaTeX output keeps what
+you wrote): plain-TeX font switches (`{\rm OOD}`, `\rm{OOD}`, `\bf`, `\it`, `\cal`, `\sf`, `\tt`,
+scoped like TeX does), `\notag`, `\def` / `\let`, `\mathbbm`, `\Bbb`, `\frak`, `dcases`, `rcases`,
+`matrix*` (and `pmatrix*`…), `\tbinom` / `\dbinom` / `\nicefrac` (plain size), `\textcolor`,
+`\smash`, `\vphantom`, `\mathclap`, `\middle`. Rewrites that lose something (a colour, a strut,
+the size of a fraction) are noted in the status bar. Also corrected: texmath 0.13 writes `\mathbf{x}`
+as bold *italic*, `\|` as "parallel to" (U+2225, not the norm bar U+2016), `\setminus` as a
+backslash and `\varnothing` as a diameter sign.
+
+### Macros
+
+**Macros…** (or `--macros FILE` on the command line, repeatable) takes your papers' macro files
+(`math_commands.tex`, a preamble) plus definitions typed in the dialog. Read from them:
+`\newcommand` / `\renewcommand` / `\providecommand` (with arguments and an optional default),
+`\def` (undelimited parameters), `\let`, `\DeclareMathOperator(*)`, `\DeclarePairedDelimiter`;
+anything else in the file (`\usepackage`, text) is ignored, and a definition that cannot be used
+(`\def\foo#1.{…}`) is reported. Each equation gets only the definitions it uses (and those they
+use), so one bad macro in a 300-line file does not break the others; a definition in the input
+itself wins over the file. Files are re-read when they change.
 
 **Mode** = Auto keeps the detected mode; Display / Inline override it (affects `display="block"`
 in MathML, `<m:oMathPara>` vs `<m:oMath>` in OMML, `$ x $` vs `$x$` in Typst, `.EQ` vs inline eqn).
@@ -90,10 +148,11 @@ LaTeX → LaTeX never re-renders the equation; only the delimiters change.
 ## Command line
 
 ```
-python -m equation_tool convert -f latex -t omml [--mode display|inline] [--wrapper align] [FILE]
-python -m equation_tool copy  [-f latex] [FILE]          # → clipboard, ready to paste into Office
-python -m equation_tool paste [-t latex] [--wrapper W]   # equation copied in Office → stdout
-python -m equation_tool version                          # pandoc + embedded texmath version
+python -m equation_tool convert -f latex -t omml [--mode display|inline] [--wrapper align]
+                                [--macros FILE ...] [--no-tidy] [FILE]
+python -m equation_tool copy  [-f latex] [--macros FILE ...] [FILE]   # → clipboard, ready to paste into Office
+python -m equation_tool paste [-t latex] [--wrapper W] [--no-tidy]    # equation copied in Office → stdout
+python -m equation_tool version                                       # pandoc + embedded texmath version
 ```
 `FILE` defaults to stdin. Input and output are UTF-8 (also through pipes and redirection); an input
 file may also be UTF-16 with a BOM (what `>` writes in Windows PowerShell 5.1).
@@ -127,11 +186,23 @@ searched for `pandoc.exe`, and an `EQUATION_TOOL_PANDOC` that names no file is a
 ## Tests
 
 ```
-python -m pytest tests            # unit + pandoc round trips + headless GUI (needs pandoc, a desktop)
-python tests\office_smoke.py      # optional: real Word + PowerPoint via COM (needs pywin32, Office)
+python -m pytest tests                  # unit + pandoc round trips + headless GUI (needs pandoc, a desktop)
+python tests\office_smoke.py            # optional: real Word + PowerPoint via COM (needs pywin32, Office)
+python tools\capture_word_fixtures.py   # optional: re-capture tests\fixtures\word from your Word
 ```
 The Office smoke test pastes into hidden Word/PowerPoint instances, copies the equation back,
-converts it to LaTeX and closes everything without saving. Both tests overwrite the clipboard.
+converts it to LaTeX and closes everything without saving. These overwrite the clipboard (in
+pytest only `test_copy_for_office_and_paste_back`; deselect it with `-k "not copy_for_office"`).
+`tests\fixtures\word` holds what Word 16.0.20527 really writes (MathML and OMML) for typical
+equations typed into it; the tidy tests run on those.
+
+### What Word does with the clipboard (16.0.20527)
+
+Word pastes from the plain-text clipboard format, not from the registered `MathML` formats that
+Microsoft documents as taking priority: with the text `x` next to the MathML it inserts the text x,
+and with LaTeX there it runs its own LaTeX import. So *Copy for Word/PowerPoint* puts the MathML
+in the plain-text format too. Equation arrays need `columnspacing="0em"` (how Word exports them),
+otherwise a table pastes as a centred matrix.
 
 ## Layout
 
@@ -139,7 +210,9 @@ converts it to LaTeX and closes everything without saving. Both tests overwrite 
 equation_tool/
   pandoc_engine.py   find/run pandoc; read latex|mathml|omml → Equation(tex, display); write mathml|omml|eqn|typst
   latex_wrap.py      delimiter / environment detection and re-wrapping for LaTeX output
-  convert.py         convert(text, src, dst, mode, wrapper) used by GUI and CLI
+  compat.py          LaTeX texmath does not take → LaTeX it does; macro files
+  tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
+  convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
   clipboard.py       Win32 clipboard via ctypes: "MathML" format in/out
   app.py             tkinter GUI
   __main__.py        GUI / CLI entry
@@ -147,8 +220,9 @@ equation_tool/
 
 ## Known texmath behaviour (same as the website)
 
-* Office → LaTeX output is texmath's rendering style: `\sum\limits_{i}`, `\widehat{x}`,
-  `\parallel` for `\|`, `\rightarrow` for `\to`, `\operatorname{f}` → `{f}`, extra braces.
+* Office → LaTeX output follows texmath's style where *Tidy LaTeX* has no rule: `\widehat{x}`,
+  `\rightarrow` for `\to`, `\left( … \right)` for Word's (always stretchy) brackets, extra braces
+  around sub-expressions.
 * In the OMML *text* output, `gather`, `multline`, `eqnarray`, `flalign` become an OMML matrix
   (`<m:m>`); only `align`-style arrays become an equation array (`<m:eqArr>`). (The clipboard
   route to Office also makes `eqnarray` an equation array, see above.)

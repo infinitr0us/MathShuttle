@@ -1,0 +1,2 @@
+<!-- Word 16.0.20527, typed as: \[\begin{aligned} a &= b + c \\ d &= e \end{aligned}\] -->
+<m:oMathPara><m:oMath><m:eqArr><m:eqArrPr><m:maxDist m:val="1"/><m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr></m:ctrlPr></m:eqArrPr><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>a&amp;=b+c</m:t></m:r></m:e><m:e><m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>d&amp;=e</m:t></m:r></m:e></m:eqArr></m:oMath></m:oMathPara>

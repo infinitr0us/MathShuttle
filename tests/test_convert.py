@@ -290,7 +290,7 @@ def test_mathml_for_office_marks_equation_arrays(tex, cells):
     # except eqnarray, whose r/c/l columns became an align-style array (as Word now holds it)
     back = convert(office, "mathml", "latex").text
     if "eqnarray" in tex:
-        assert back == "\\[\n\\begin{aligned}\na & {= b} \\\\\nc & {= d}\n\\end{aligned}\n\\]"
+        assert back == "\\[\n\\begin{aligned}\na & = b \\\\\nc & = d\n\\end{aligned}\n\\]"
     else:
         assert back == convert(plain, "mathml", "latex").text
     assert 'columnspacing' not in convert(tex, "latex", "mathml").text  # the MathML output stays texmath's
@@ -299,15 +299,15 @@ def test_mathml_for_office_marks_equation_arrays(tex, cells):
 TABLE = "\\[\n\\begin{aligned}\n%s\n\\end{aligned}\n\\]"
 OFFICE_SHAPES = [  # LaTeX, cells per row in the MathML for Office (None: unchanged), LaTeX back from it
     # a trailing \\ or a line without & gives texmath rows with fewer cells: padded, a trailing empty row dropped
-    ("\\begin{align} a &= b \\\\ c &= d \\\\ \\end{align}", [2, 2], TABLE % "a & {= b} \\\\\nc & {= d}"),
-    ("\\begin{aligned} a &= b \\\\ c &= d \\\\ \\end{aligned}", [2, 2], TABLE % "a & {= b} \\\\\nc & {= d}"),
-    ("\\begin{align} a &= b \\\\ c \\end{align}", [2, 2], TABLE % "a & {= b} \\\\\nc & "),
-    ("\\begin{eqnarray} a &=& b \\\\ c \\end{eqnarray}", [2, 2], TABLE % "a & {= b} \\\\\nc & "),
-    ("\\begin{align} a &= b & c &= d \\\\ e &= f \\end{align}", [4, 4], TABLE % "a & {= b} & c & {= d} \\\\\ne & {= f} & & "),
+    ("\\begin{align} a &= b \\\\ c &= d \\\\ \\end{align}", [2, 2], TABLE % "a & = b \\\\\nc & = d"),
+    ("\\begin{aligned} a &= b \\\\ c &= d \\\\ \\end{aligned}", [2, 2], TABLE % "a & = b \\\\\nc & = d"),
+    ("\\begin{align} a &= b \\\\ c \\end{align}", [2, 2], TABLE % "a & = b \\\\\nc & "),
+    ("\\begin{eqnarray} a &=& b \\\\ c \\end{eqnarray}", [2, 2], TABLE % "a & = b \\\\\nc & "),
+    ("\\begin{align} a &= b & c &= d \\\\ e &= f \\end{align}", [4, 4], TABLE % "a & = b & c & = d \\\\\ne & = f & & "),
     # an array is an equation array only when it reads like one; a table of values stays a matrix
     ("\\[\\left\\{\\begin{array}{rl} x+y &= 1 \\\\ x-y &= 0 \\end{array}\\right.\\]", [2, 2],
-     "\\[\n\\left\\{ \\begin{aligned}\n{x + y} & {= 1} \\\\\n{x - y} & {= 0}\n\\end{aligned} \\right.\n\\]"),
-    ("\\[\\begin{array}{rcl} x+y &=& 1 \\\\ x &=& 2 \\end{array}\\]", [2, 2], TABLE % "{x + y} & {= 1} \\\\\nx & {= 2}"),
+     "\\[\n\\left\\{ \\begin{aligned}\nx + y & = 1 \\\\\nx - y & = 0\n\\end{aligned} \\right.\n\\]"),
+    ("\\[\\begin{array}{rcl} x+y &=& 1 \\\\ x &=& 2 \\end{array}\\]", [2, 2], TABLE % "x + y & = 1 \\\\\nx & = 2"),
     ("\\[\\begin{array}{rcl}1&2&3\\\\4&5&6\\end{array}\\]", None, None),  # used to lose its middle column
     ("\\[\\begin{array}{rlr}1&2&3\\\\4&5&6\\end{array}\\]", None, None),
     ("\\[f=\\left\\{\\begin{array}{rl}1, & x>0\\\\0, & \\text{else}\\end{array}\\right.\\]", None, None),

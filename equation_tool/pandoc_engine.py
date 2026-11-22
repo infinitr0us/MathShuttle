@@ -24,6 +24,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import List, Optional
 
+from . import tidy as _tidy
+
 MATHML_NS = "http://www.w3.org/1998/Math/MathML"
 OMML_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 WML_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -218,11 +220,21 @@ def _check_texmath_warning(stderr: str) -> None:
 
 
 # --- reading --------------------------------------------------------------------------
+def strip_tex(tex: str) -> str:
+    """`tex` without surrounding white space - and without a control space ``\\ `` left dangling at the
+    end (texmath ends ``\\left\\{ ... \\right.\\ ``): stripping its space would leave a lone backslash,
+    which escapes whatever delimiter is written after it (``\\right.\\$``)."""
+    tex = tex.strip()
+    while tex.endswith("\\") and (len(tex) - len(tex.rstrip("\\"))) % 2:
+        tex = tex[:-1].rstrip()
+    return tex
+
+
 def _collect_math(node, out: List[Equation]) -> None:
     if isinstance(node, dict):
         if node.get("t") == "Math":
             kind, tex = node["c"]
-            out.append(Equation(tex.strip(), kind["t"] == "DisplayMath"))
+            out.append(Equation(strip_tex(tex), kind["t"] == "DisplayMath"))
             return
         for v in node.values():
             _collect_math(v, out)
@@ -328,7 +340,7 @@ def read_latex(text: str, default_display: bool = True) -> List[Equation]:
         eqs = _read_json("latex", text.encode("utf-8"))
         if eqs:
             return eqs
-    return [Equation(text.strip(), default_display)]
+    return [Equation(strip_tex(text), default_display)]
 
 
 _XML_ENTITIES = ("lt", "gt", "amp", "quot", "apos")
@@ -480,7 +492,18 @@ def _serialize_math(math: ET.Element) -> bytes:
     return ET.tostring(math, encoding="unicode").encode("utf-8")
 
 
-def read_mathml(text: str, fix_office_alignment: bool = True) -> List[Equation]:
+def _converts(tex: str, display: bool) -> bool:
+    try:
+        write_mathml(Equation(tex, display))
+        return True
+    except ConversionError:
+        return False
+
+
+def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True) -> List[Equation]:
+    """Equations in MathML.  With `tidy`, identifiers that texmath would misread (upright names,
+    function names, bold italic symbols, binomials) come back as the LaTeX an author writes
+    (:mod:`tidy`); an equation for which that does not give valid TeX is read as texmath reads it."""
     if not text.strip():
         raise ConversionError("The input is empty.")
     body = _named_entities_to_numeric(_strip_xml_prolog(text))
@@ -496,13 +519,31 @@ def read_mathml(text: str, fix_office_alignment: bool = True) -> List[Equation]:
         _strip_namespaces(math)  # pandoc only recognises a bare <math>, not <mml:math>
         if fix_office_alignment:
             _mark_equation_array_alignment(math)
-    eqs = _read_json("html", b"".join(_serialize_math(m) for m in maths))
+    raw = [_serialize_math(m) for m in maths]
+    mapping: dict = {}
+    marked = raw
+    if tidy and _tidy.can_mark(text):
+        for math in maths:
+            _tidy.mark_identifiers(math, mapping)
+        marked = [_serialize_math(m) for m in maths]  # also when only a fraction's thickness changed
+    eqs = _read_json("html", b"".join(marked))
     if len(eqs) < len(maths):  # pandoc turns a <math> that texmath rejects into plain text, silently
         if len(maths) == 1:
             raise ConversionError("texmath could not interpret this MathML (unsupported or malformed elements).")
-        bad = [str(i) for i, m in enumerate(maths, 1) if not _read_json("html", _serialize_math(m))]
+        bad = [str(i) for i, m in enumerate(raw, 1) if not _read_json("html", m)]
         raise ConversionError("texmath could not interpret <math> element %s of the %d in the input "
                               "(unsupported or malformed elements)." % (", ".join(bad) or "?", len(maths)))
+    if mapping:
+        plain: Optional[List[Equation]] = None
+        for i, eq in enumerate(eqs):
+            if "QQXJ" not in eq.tex:
+                continue
+            tex = _tidy.restore(eq.tex, mapping)
+            if tex is None or not _converts(tex, eq.display):
+                if plain is None:
+                    plain = _read_json("html", b"".join(raw))
+                tex = plain[i].tex
+            eqs[i] = Equation(tex, eq.display)
     _check_not_empty(eqs, "MathML")
     return eqs
 
@@ -569,34 +610,57 @@ def _check_not_empty(eqs: List[Equation], what: str) -> None:
                               "texmath does not support." % where)
 
 
-def read_omml(text: str) -> List[Equation]:
-    if not text.strip():
-        raise ConversionError("The input is empty.")
-    fragments = _parse_omml_fragments(text)
-    for f in fragments:
-        f.tail = None  # tostring() would copy the text that follows the element into the paragraph
-    paras = "".join("<w:p>%s</w:p>" % ET.tostring(f, encoding="unicode") for f in fragments)
+def _omml_docx(paras: List[str]) -> bytes:
+    """A minimal .docx holding one paragraph per OMML fragment (pandoc reads OMML only inside a docx)."""
     document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                '<w:document xmlns:w="%s" xmlns:m="%s"><w:body>%s</w:body></w:document>') % (WML_NS, OMML_NS, paras)
+                '<w:document xmlns:w="%s" xmlns:m="%s"><w:body>%s</w:body></w:document>') % (
+                    WML_NS, OMML_NS, "".join("<w:p>%s</w:p>" % p for p in paras))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", _DOCX_CONTENT_TYPES)
         z.writestr("_rels/.rels", _DOCX_RELS)
         z.writestr("word/document.xml", document)
-    eqs = _read_json("docx", buf.getvalue())
+    return buf.getvalue()
+
+
+def read_omml(text: str, tidy: bool = True) -> List[Equation]:
+    """Equations in OMML; `tidy` as for :func:`read_mathml` (upright runs, function names, bold italic)."""
+    if not text.strip():
+        raise ConversionError("The input is empty.")
+    fragments = _parse_omml_fragments(text)
+    for f in fragments:
+        f.tail = None  # tostring() would copy the text that follows the element into the paragraph
+    raw = [ET.tostring(f, encoding="unicode") for f in fragments]
+    mapping: dict = {}
+    if tidy and _tidy.can_mark(text):
+        for f in fragments:
+            _tidy.mark_omml(f, mapping, OMML_NS)
+    paras = [ET.tostring(f, encoding="unicode") for f in fragments] if mapping else raw
+    eqs = _read_json("docx", _omml_docx(paras))
     if not eqs:
         raise ConversionError("texmath could not interpret this OMML.")
+    if mapping:
+        plain: Optional[List[Equation]] = None
+        for i, eq in enumerate(eqs):
+            if "QQXJ" not in eq.tex:
+                continue
+            tex = _tidy.restore(eq.tex, mapping)
+            if tex is None or not _converts(tex, eq.display):
+                if plain is None:
+                    plain = _read_json("docx", _omml_docx(raw))
+                tex = plain[i].tex if i < len(plain) else eq.tex
+            eqs[i] = Equation(tex, eq.display)
     _check_not_empty(eqs, "OMML")
     return eqs
 
 
-def read_equations(text: str, fmt: str, default_display: bool = True) -> List[Equation]:
+def read_equations(text: str, fmt: str, default_display: bool = True, tidy: bool = True) -> List[Equation]:
     if fmt == "latex":
         return read_latex(text, default_display)
     if fmt == "mathml":
-        return read_mathml(text)
+        return read_mathml(text, tidy=tidy)
     if fmt == "omml":
-        return read_omml(text)
+        return read_omml(text, tidy=tidy)
     raise ValueError("unknown input format %r" % fmt)
 
 
@@ -726,9 +790,11 @@ def _array_tables(eq: Equation, root: ET.Element) -> Optional[set]:
     return {i for i, (a, b) in enumerate(zip(before, after)) if a != b}
 
 
-def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False) -> str:
-    """MathML for the equation.  With `annotate`, the TeX source is kept in a <semantics>/<annotation>;
-    `for_office` shapes aligned blocks for Word / PowerPoint (see `_office_equation_arrays`)."""
+def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False,
+                 source: Optional[str] = None) -> str:
+    """MathML for the equation.  With `annotate`, the TeX source is kept in a <semantics>/<annotation>
+    (`source` when given: the user's TeX, if `eq` holds a rewritten version of it); `for_office` shapes
+    aligned blocks for Word / PowerPoint (see `_office_equation_arrays`)."""
     out, err = _run(["-f", "json", "-t", "html", _LF, *_mathml_flags()], _doc_json(eq))
     _check_texmath_warning(err)
     m = _MATH_RE.search(out.decode("utf-8"))
@@ -741,6 +807,9 @@ def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False)
         for child in list(sem):
             if child.tag != "{%s}annotation" % MATHML_NS:
                 root.append(child)
+    elif sem is not None and source is not None:
+        for ann in sem.findall("{%s}annotation" % MATHML_NS):
+            ann.text = source
     if for_office:
         _office_equation_arrays(root, _array_tables(eq, root))
     return _pretty(root)
@@ -796,7 +865,8 @@ def write_typst(eq: Equation) -> str:
 
 def write_equation(eq: Equation, fmt: str, **opts) -> str:
     if fmt == "mathml":
-        return write_mathml(eq, annotate=opts.get("annotate", False), for_office=opts.get("for_office", False))
+        return write_mathml(eq, annotate=opts.get("annotate", False), for_office=opts.get("for_office", False),
+                            source=opts.get("source"))
     if fmt == "omml":
         return write_omml(eq)
     if fmt == "eqn":

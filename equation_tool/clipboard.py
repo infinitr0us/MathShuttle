@@ -165,7 +165,10 @@ _XML_DECL = '<?xml version="1.0" encoding="UTF-8"?>\n'
 def copy_mathml_for_office(mathml: str, plain_text: Optional[str] = None) -> None:
     """Put MathML on the clipboard so that Ctrl+V in Word/PowerPoint inserts a native equation.
 
-    `plain_text` (default: the MathML itself) is what a plain-text paste receives.
+    `plain_text` (default: the MathML itself) is what a plain-text paste receives.  Keep the default
+    for Office: Word (16.0.20527, checked 2026-11-22) pastes from the plain-text format, not from the
+    registered "MathML" ones - with ``x`` there it inserts the text x and no equation, and with LaTeX
+    there it runs its own LaTeX import (Microsoft 365 >= 2606) instead of using this MathML.
     """
     body = mathml.strip()
     if not body.startswith("<?xml"):

@@ -1,0 +1,2 @@
+<!-- Word 16.0.20527, typed as: \[\begin{aligned} a &= b + c \\ d &= e \end{aligned}\] -->
+<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mtable columnspacing="0em"><mtr><mtd columnalign="right"><mi>a</mi></mtd><mtd columnalign="left"><mo>=</mo><mi>b</mi><mo>+</mo><mi>c</mi></mtd></mtr><mtr><mtd columnalign="right"><mi>d</mi></mtd><mtd columnalign="left"><mo>=</mo><mi>e</mi></mtd></mtr></mtable></math>

@@ -122,10 +122,10 @@ def slow_convert(monkeypatch):
     import equation_tool.app as app_module
     real, calls = app_module.convert, []
 
-    def convert(*args):
+    def convert(*args, **kwargs):
         calls.append(args)
         time.sleep(0.4)
-        return real(*args)
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(app_module, "convert", convert)
     return calls

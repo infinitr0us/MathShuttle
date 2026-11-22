@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
-from .convert import MODES, convert, mathml_for_office
+from .compat import load_macros
+from .convert import MODES, convert, office_copy
 from .latex_wrap import WRAPPER_KEYS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_report
 
@@ -55,17 +57,23 @@ def _cli(argv: list[str]) -> int:
     p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto")
     p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto", help="delimiters for LaTeX output")
     p.add_argument("--annotate", action="store_true", help="keep the TeX source inside MathML output")
+    p.add_argument("--macros", action="append", default=[], metavar="FILE",
+                   help="macro definitions for LaTeX input (repeatable): math_commands.tex, a preamble...")
+    p.add_argument("--no-tidy", dest="tidy", action="store_false",
+                   help="LaTeX from MathML / OMML exactly as texmath writes it")
     p.add_argument("file", nargs="?", help="input file (default: stdin)")
 
     p = sub.add_parser("copy", help="convert and place on the clipboard for Word/PowerPoint")
     p.add_argument("-f", "--from", dest="src", choices=READ_FORMATS, default="latex")
     p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto")
+    p.add_argument("--macros", action="append", default=[], metavar="FILE")
     p.add_argument("file", nargs="?")
 
     p = sub.add_parser("paste", help="convert the equation copied in Word/PowerPoint")
     p.add_argument("-t", "--to", dest="dst", choices=WRITE_FORMATS, default="latex")
     p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto")
     p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto")
+    p.add_argument("--no-tidy", dest="tidy", action="store_false")
 
     sub.add_parser("version", help="show the pandoc / texmath versions in use")
 
@@ -77,20 +85,27 @@ def _cli(argv: list[str]) -> int:
         errors += (clipboard.ClipboardError,)
     try:
         if args.cmd == "convert":
-            result = convert(_read_source(args.file), args.src, args.dst, args.mode, args.wrapper, args.annotate)
+            for path in args.macros:
+                if not os.path.isfile(path):
+                    raise InputError("macro file %s does not exist" % path)
+            result = convert(_read_source(args.file), args.src, args.dst, args.mode, args.wrapper, args.annotate,
+                             macros=load_macros(args.macros), tidy=args.tidy)
             sys.stdout.write(result.text + "\n")
             for note in result.notes:
                 sys.stderr.write(note + "\n")
         elif args.cmd == "copy":
-            mathml, note = mathml_for_office(_read_source(args.file), args.src, args.mode)
-            clipboard.copy_mathml_for_office(mathml)
-            sys.stderr.write((note + "\n") if note else "Equation copied - paste it into Word / PowerPoint.\n")
+            for path in args.macros:
+                if not os.path.isfile(path):
+                    raise InputError("macro file %s does not exist" % path)
+            copy = office_copy(_read_source(args.file), args.src, args.mode, load_macros(args.macros))
+            clipboard.copy_mathml_for_office(copy.mathml)  # the plain text must be the MathML too (see there)
+            sys.stderr.write("".join(n + "\n" for n in copy.notes) or "Equation copied - paste it into Word / PowerPoint.\n")
         elif args.cmd == "paste":
             mathml = clipboard.read_equation_from_office()
             if not mathml:
                 sys.stderr.write("No equation on the clipboard (copy one in Word / PowerPoint first).\n")
                 return 2
-            sys.stdout.write(convert(mathml, "mathml", args.dst, args.mode, args.wrapper).text + "\n")
+            sys.stdout.write(convert(mathml, "mathml", args.dst, args.mode, args.wrapper, tidy=args.tidy).text + "\n")
         elif args.cmd == "version":
             sys.stdout.write(engine_report() + "\n")
         else:

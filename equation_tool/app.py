@@ -11,12 +11,13 @@ import sys
 import threading
 import tkinter as tk
 import traceback
+from tkinter import filedialog
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from typing import Optional
 
-from . import __version__, clipboard
-from .convert import FORMAT_LABELS, MODES, Result, convert, mathml_for_office
+from . import __version__, clipboard, compat
+from .convert import FORMAT_LABELS, MODES, Result, convert, macro_notes, office_copy
 from .latex_wrap import WRAPPERS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description, engine_report
 
@@ -35,6 +36,12 @@ INPUT (From)
           \\label, \\tag, \\nonumber, \\newcommand definitions, and several equations
           mixed with prose (each one is converted).  Input without any delimiter is
           one bare equation (even with $...$ inside \\text{} / \\mbox{}); it uses the Mode box.
+          Plain-TeX font switches ({\\rm OOD}, \\cal L), \\notag, \\def / \\let macros,
+          \\mathbbm, dcases, \\smash ... are rewritten for texmath, which does not know them.
+  Macros...  your papers' macro files (math_commands.tex, a preamble) and extra
+          definitions: \\newcommand, \\def, \\let, \\DeclareMathOperator,
+          \\DeclarePairedDelimiter.  Every LaTeX input may then use those macros;
+          LaTeX -> LaTeX output keeps them as you wrote them.
   MathML  <math> element(s), with or without the xmlns / XML prolog, also prefixed
           (<mml:math>) and with named entities (&InvisibleTimes;).
   OMML    <m:oMath> or <m:oMathPara>, alone or inside any Word XML.
@@ -43,6 +50,9 @@ OUTPUT (To)
   LaTeX   The "LaTeX wrapper" box picks the delimiters / environment.  Auto keeps
           the input's environment and otherwise uses \\[ \\] (display) or $ $ (inline).
           align <-> aligned, gather <-> gathered are converted as needed.
+          Tidy LaTeX (MathML / OMML input): writes what an author would - \\mathrm{OOD},
+          \\operatorname{softmax}, \\boldsymbol{\\theta}, \\binom, cases, a & = b - instead of
+          texmath's literal rendering.
   MathML / OMML / eqn / Typst   Mode = Auto follows the input; Display / Inline force it.
 
 WORD / POWERPOINT
@@ -120,7 +130,10 @@ class App(tk.Tk):
         self.mode_var = tk.StringVar(value="auto")
         self.wrapper_var = tk.StringVar(value="auto")
         self.annotate_var = tk.BooleanVar(value=False)
+        self.tidy_var = tk.BooleanVar(value=True)
         self.auto_var = tk.BooleanVar(value=True)
+        self.macro_files: list = []  # macro files and extra definitions for LaTeX input (Macros...)
+        self.macro_text = ""
 
         # --- option rows (fixed height) ---
         top = ttk.Frame(self)
@@ -133,6 +146,8 @@ class App(tk.Tk):
         ttk.Label(top, text="Mode:").grid(row=0, column=2, sticky="w", **pad)
         self.mode_box = self._combo(top, MODES, self.mode_var, 9)
         self.mode_box.grid(row=0, column=3, sticky="w", **pad)
+        self.macros_button = ttk.Button(top, text="Macros...", command=self.edit_macros)
+        self.macros_button.grid(row=0, column=4, sticky="w", padx=(12, 4))
         ttk.Button(top, text="\u21c4 Swap", command=self.swap, width=8).grid(row=0, column=5, rowspan=2, padx=8)
         ttk.Button(top, text="?", width=3, command=self.show_help).grid(row=0, column=6, rowspan=2, padx=(8, 0))
 
@@ -147,6 +162,8 @@ class App(tk.Tk):
         self.annotate_chk = ttk.Checkbutton(opts, text="TeX annotation", variable=self.annotate_var,
                                             command=self._schedule)
         self.annotate_chk.pack(side="left", padx=(12, 4))
+        self.tidy_chk = ttk.Checkbutton(opts, text="Tidy LaTeX", variable=self.tidy_var, command=self._schedule)
+        self.tidy_chk.pack(side="left", padx=(12, 4))
 
         # --- status bar and button bar are packed before the panes so they always stay visible ---
         # Two panes: conversion progress / messages on the left, the engine version (pandoc +
@@ -247,6 +264,11 @@ class App(tk.Tk):
                 var.set(s[key])
         self.auto_var.set(bool(s.get("auto_convert", True)))
         self.annotate_var.set(bool(s.get("annotate", False)))
+        self.tidy_var.set(bool(s.get("tidy", True)))
+        files = s.get("macro_files")
+        self.macro_files = [f for f in files if isinstance(f, str)] if isinstance(files, list) else []
+        self.macro_text = s.get("macro_text") if isinstance(s.get("macro_text"), str) else ""
+        self._update_macros_label()
         self._restore_geometry(s.get("geometry", DEFAULT_GEOMETRY))
         self.minsize(960, 420)
         self.input.insert("1.0", s.get("input") or SAMPLE)
@@ -257,7 +279,8 @@ class App(tk.Tk):
         text = self.input.get("1.0", "end-1c")
         data = {"src": self.src_var.get(), "dst": self.dst_var.get(), "mode": self.mode_var.get(),
                 "wrapper": self.wrapper_var.get(), "auto_convert": self.auto_var.get(),
-                "annotate": self.annotate_var.get(), "geometry": self.geometry(),
+                "annotate": self.annotate_var.get(), "tidy": self.tidy_var.get(),
+                "macro_files": self.macro_files, "macro_text": self.macro_text, "geometry": self.geometry(),
                 # whole or not at all: a cut could land inside an equation, and a very large input
                 # (a whole document.xml) would be reloaded and converted again at every start
                 "input": text if len(text) <= MAX_SAVED_INPUT else ""}
@@ -292,6 +315,18 @@ class App(tk.Tk):
     def _update_option_states(self) -> None:
         self.wrapper_box.configure(state="readonly" if self.dst_var.get() == "latex" else "disabled")
         self.annotate_chk.configure(state="normal" if self.dst_var.get() == "mathml" else "disabled")
+        self.tidy_chk.configure(state="normal" if self.src_var.get() != "latex" else "disabled")
+
+    def _macro_key(self) -> tuple:
+        return (tuple(self.macro_files), self.macro_text)
+
+    def _macros(self, key: Optional[tuple] = None) -> Optional[compat.Macros]:
+        files, text = key or self._macro_key()
+        return compat.load_macros(files, text)
+
+    def _update_macros_label(self) -> None:
+        macros = self._macros()
+        self.macros_button.configure(text="Macros (%d)..." % len(macros) if macros else "Macros...")
 
     def _on_option_change(self) -> None:
         self._update_option_states()
@@ -311,8 +346,9 @@ class App(tk.Tk):
 
     # ---- actions --------------------------------------------------------------------------------
     def _conversion_args(self) -> tuple:
+        """(text, src, dst, mode, wrapper, annotate, tidy, macro key): everything a result depends on."""
         return (self.input.get("1.0", "end-1c"), self.src_var.get(), self.dst_var.get(), self.mode_var.get(),
-                self.wrapper_var.get(), self.annotate_var.get())
+                self.wrapper_var.get(), self.annotate_var.get(), self.tidy_var.get(), self._macro_key())
 
     def _new_conversion(self) -> None:
         """Results of conversions still running are stale from now on, and so is a pending debounced
@@ -343,7 +379,7 @@ class App(tk.Tk):
     def _worker(self, seq: int, args, swap: bool) -> None:
         """Runs in a background thread; only ever touches the queue."""
         try:
-            result: object = convert(*args)
+            result: object = convert(*args[:6], macros=self._macros(args[7]), tidy=args[6])
         except (ConversionError, PandocNotFound) as e:
             result = e
         except Exception:  # pragma: no cover
@@ -401,14 +437,14 @@ class App(tk.Tk):
             self._set_status("Nothing to copy", error=True)
             return
         try:
-            mathml, note = mathml_for_office(text, self.src_var.get(), self.mode_var.get())
-            clipboard.copy_mathml_for_office(mathml)
+            copy = office_copy(text, self.src_var.get(), self.mode_var.get(), self._macros(), self.tidy_var.get())
+            clipboard.copy_mathml_for_office(copy.mathml)  # the plain text must be the MathML too (see there)
         except (ConversionError, PandocNotFound, clipboard.ClipboardError) as e:
             self._set_output(str(e), error=True)
             self._set_status("Could not copy the equation", error=True)
             return
         msg = "Equation copied  -  press Ctrl+V in Word / PowerPoint / OneNote to insert it as a native equation"
-        self._set_status(msg if not note else msg + "   " + note)
+        self._set_status("   ".join([msg] + copy.notes))
 
     def paste_from_office(self) -> None:
         try:
@@ -462,6 +498,70 @@ class App(tk.Tk):
         self._set_output("")
         self._set_status("")
         self.input.focus_set()
+
+    def edit_macros(self) -> None:
+        """Macro files and extra definitions applied to every LaTeX input."""
+        win = tk.Toplevel(self)
+        win.title("Equation Tool - macros")
+        win.transient(self)
+        pad = {"padx": 8, "pady": 4}
+        ttk.Label(win, text="Macro files (definitions are read from them; everything else is ignored):").pack(anchor="w", **pad)
+        files = list(self.macro_files)
+        listbox = tk.Listbox(win, height=5, width=90, font=self.mono)
+        listbox.pack(fill="x", **pad)
+        for f in files:
+            listbox.insert("end", f)
+        row = ttk.Frame(win)
+        row.pack(fill="x", **pad)
+
+        def add():
+            for path in filedialog.askopenfilenames(parent=win, title="Macro files",
+                                                    filetypes=[("LaTeX", "*.tex *.sty *.cls"), ("All files", "*.*")]):
+                path = os.path.normpath(path)
+                if path not in files:
+                    files.append(path)
+                    listbox.insert("end", path)
+            refresh()
+
+        def remove():
+            for i in reversed(listbox.curselection()):
+                del files[i]
+                listbox.delete(i)
+            refresh()
+
+        ttk.Button(row, text="Add files...", command=add).pack(side="left")
+        ttk.Button(row, text="Remove", command=remove).pack(side="left", padx=6)
+        ttk.Label(win, text="More definitions (\\newcommand, \\def, \\let, \\DeclareMathOperator, \\DeclarePairedDelimiter):").pack(anchor="w", **pad)
+        text = tk.Text(win, height=8, width=90, font=self.mono, undo=True)
+        text.insert("1.0", self.macro_text)
+        text.pack(fill="both", expand=True, **pad)
+        info = tk.StringVar()
+        ttk.Label(win, textvariable=info, wraplength=700, justify="left").pack(anchor="w", **pad)
+
+        def refresh(*_):
+            macros = compat.load_macros(files, text.get("1.0", "end-1c"))
+            if not macros:
+                info.set("No macros: LaTeX input uses only what it defines itself.")
+                return
+            names = sorted(macros.definitions)
+            shown = ", ".join(names[:30]) + (" ..." if len(names) > 30 else "")
+            info.set("\n".join(["%d definitions: %s" % (len(names), shown)] + macro_notes(macros)))
+
+        text.bind("<KeyRelease>", refresh)
+        refresh()
+
+        def ok():
+            self.macro_files = list(files)
+            self.macro_text = text.get("1.0", "end-1c")
+            self._update_macros_label()
+            self._save_settings()
+            win.destroy()
+            self._schedule()
+
+        buttons = ttk.Frame(win)
+        buttons.pack(fill="x", **pad)
+        ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side="right")
+        ttk.Button(buttons, text="OK", command=ok).pack(side="right", padx=6)
 
     def show_help(self) -> None:
         try:
