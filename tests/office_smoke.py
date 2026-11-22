@@ -82,10 +82,17 @@ def test_word(copy, eq_array: bool, expected_back=None):
     word.Visible = False
     doc = word.Documents.Add()
     try:
-        # as the app copies it; the plain-text format holds the MathML too, since Word pastes from that one
-        clipboard.copy_mathml_for_office(copy.mathml)
-        paste(word.Selection.Paste)
-        time.sleep(0.5)
+        for attempt in range(2):
+            # as the app copies it; the plain-text format holds the MathML too, since Word pastes from that one.
+            # Right after another Office application owned the clipboard, Word occasionally pastes nothing.
+            clipboard.copy_mathml_for_office(copy.mathml)
+            time.sleep(0.3)
+            paste(word.Selection.Paste)
+            time.sleep(0.5)
+            if doc.OMaths.Count:
+                break
+            print("  (nothing pasted, retrying once)")
+            doc.Content.Delete()
         n = doc.OMaths.Count
         print("  OMaths.Count after paste:", n)
         assert n >= 1, "Word did not create a native equation from the MathML clipboard"

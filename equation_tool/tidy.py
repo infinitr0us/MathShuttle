@@ -19,6 +19,8 @@ cleans the TeX texmath wrote.  The caller checks that the result still converts.
 """
 from __future__ import annotations
 
+import copy
+import itertools
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -51,7 +53,23 @@ def _letters(n: int) -> str:
 
 
 def _base(ch: str) -> str:
-    """The plain character behind a mathematical alphanumeric (𝜽 -> θ, 𝐱 -> x)."""
+    """The plain character behind a mathematical alphanumeric (𝜽 -> θ, 𝐱 -> x), from its Unicode name:
+    NFKC would fold the Greek variants together (𝝓 PHI SYMBOL -> φ, but it is ϕ)."""
+    try:
+        name = unicodedata.name(ch)
+    except ValueError:
+        return ch
+    m = re.match(r"MATHEMATICAL (?:BOLD |ITALIC |SCRIPT |FRAKTUR |DOUBLE-STRUCK |SANS-SERIF |MONOSPACE )+(.*)$", name)
+    if not m:
+        return ch
+    rest = m.group(1)
+    for candidate in ("GREEK " + rest.replace("SMALL ", "SMALL LETTER ").replace("CAPITAL ", "CAPITAL LETTER "),
+                      "GREEK " + rest, "GREEK LUNATE " + rest, rest.replace("SMALL ", "LATIN SMALL LETTER ")
+                      .replace("CAPITAL ", "LATIN CAPITAL LETTER "), rest):
+        try:
+            return unicodedata.lookup(candidate)
+        except KeyError:
+            continue
     return unicodedata.normalize("NFKC", ch)
 
 
@@ -94,35 +112,42 @@ def _identifier_tex(mi: ET.Element, applied: bool) -> Optional[str]:
         return None
     if style == "bold-italic":
         return "\\boldsymbol{%s}" % symbol
-    if base in _GREEK and base.islower():  # bold upright lowercase Greek does not exist in LaTeX
+    if base in _GREEK and not base.isupper():  # bold upright lowercase Greek does not exist in LaTeX
         return "\\boldsymbol{%s}" % symbol
     if base in _GREEK:
         return "\\mathbf{%s}" % symbol
     return None  # bold upright Latin: texmath writes \mathbf{x} itself
 
 
-def mark_identifiers(math: ET.Element, mapping: Dict[str, str]) -> None:
-    """Replace the <mi>s texmath would misread by placeholder names (recorded in `mapping`),
-    and write zero-thickness fractions as ``0pt``, which texmath reads as a binomial.
+def _is_mo(el: Optional[ET.Element], *texts: str) -> bool:
+    return el is not None and el.tag == "mo" and (el.text or "").strip() in texts
+
+
+def mark_identifiers(math: ET.Element, mapping: Dict[str, str], start: int = 0) -> None:
+    """Replace the <mi>s texmath would misread by placeholder names (recorded in `mapping`, numbered
+    from `start` so that the keys of several equations differ), and fix two readings of texmath's:
+    a zero-thickness fraction between ( and ) is a binomial (texmath only knows ``0pt`` for that), and
+    U+2225 with form prefix / postfix is a norm bar (texmath writes \\| so; a relation has no form).
     The element must have no namespace (tags ``mi``, ``mo``...)."""
-    for frac in math.iter("mfrac"):
-        thickness = (frac.get("linethickness") or "").strip()
-        if thickness and re.fullmatch(r"0*\.?0*(?:pt|px|em|ex|mm|cm|in)?", thickness) and thickness != "0pt":
-            frac.set("linethickness", "0pt")
     for parent in math.iter():
         children = list(parent)
         for i, child in enumerate(children):
-            if child.tag != "mi":
-                continue
-            nxt = children[i + 1] if i + 1 < len(children) else None
-            applied = nxt is not None and nxt.tag == "mo" and (nxt.text or "").strip() == "\u2061"
-            tex = _identifier_tex(child, applied)
-            if tex is None:
-                continue
-            key = _PLACEHOLDER % _letters(len(mapping))
-            mapping[key] = tex
-            child.text = key
-            child.attrib.pop("mathvariant", None)
+            if child.tag == "mfrac":
+                thickness = (child.get("linethickness") or "").strip()
+                fenced = (0 < i < len(children) - 1 and _is_mo(children[i - 1], "(") and _is_mo(children[i + 1], ")"))
+                if fenced and re.fullmatch(r"0*\.?0*(?:pt|px|em|ex|mm|cm|in)?", thickness) and thickness:
+                    child.set("linethickness", "0pt")
+            elif child.tag == "mo" and (child.text or "").strip() == "\u2225" and child.get("form") in ("prefix", "postfix"):
+                child.text = "\u2016"
+            elif child.tag == "mi":
+                nxt = children[i + 1] if i + 1 < len(children) else None
+                tex = _identifier_tex(child, _is_mo(nxt, "\u2061"))
+                if tex is None:
+                    continue
+                key = _PLACEHOLDER % _letters(start + len(mapping))
+                mapping[key] = tex
+                child.text = key
+                child.attrib.pop("mathvariant", None)
 
 
 def _run_tex(text: str, style: Optional[str], function_name: bool) -> Optional[str]:
@@ -143,23 +168,53 @@ def _run_tex(text: str, style: Optional[str], function_name: bool) -> Optional[s
     return None
 
 
-def mark_omml(fragment: ET.Element, mapping: Dict[str, str], ns: str) -> None:
+def _split_styled_runs(fragment: ET.Element, m: str) -> None:
+    """Word stores ``ℒ=`` as one run with a script style (m:scr) and the text "L="; texmath applies the
+    style to the whole run (``\\mathcal{L =}``).  A style (m:scr, m:sty) only changes letters, so such
+    a run is split: the letters keep the style, the other characters get a run without it."""
+    parents = {child: parent for parent in fragment.iter() for child in parent}
+    for run in list(fragment.iter(m + "r")):
+        rpr = run.find(m + "rPr")
+        t = run.find(m + "t")
+        if rpr is None or t is None or not t.text or rpr.find(m + "nor") is not None:
+            continue
+        if not any(e.tag in (m + "scr", m + "sty") for e in rpr):
+            continue
+        pieces = ["".join(g) for _, g in itertools.groupby(t.text, key=str.isalpha)]
+        if len(pieces) < 2:
+            continue
+        parent = parents[run]
+        index = list(parent).index(run)
+        parent.remove(run)
+        for offset, piece in enumerate(pieces):
+            new = copy.deepcopy(run)
+            new.find(m + "t").text = piece
+            if not piece[0].isalpha():
+                new_rpr = new.find(m + "rPr")
+                for e in [e for e in new_rpr if e.tag in (m + "scr", m + "sty")]:
+                    new_rpr.remove(e)
+            new.tail = run.tail if offset == len(pieces) - 1 else None
+            parent.insert(index + offset, new)
+
+
+def mark_omml(fragment: ET.Element, mapping: Dict[str, str], ns: str, start: int = 0) -> None:
     """:func:`mark_identifiers` for OMML: upright multi-letter runs, function names (m:fName),
     upright single letters (``\\mathrm{d}``) and bold italic symbols get placeholders."""
     m = "{%s}" % ns
+    _split_styled_runs(fragment, m)
     names = {id(r) for f in fragment.iter(m + "fName") for r in f.iter(m + "r")}
     for run in fragment.iter(m + "r"):
         t = run.find(m + "t")
         if t is None or not (t.text or "").strip():
             continue
         rpr = run.find(m + "rPr")
-        if rpr is not None and rpr.find(m + "nor") is not None:
-            continue  # normal text (\text{...})
+        if rpr is not None and (rpr.find(m + "nor") is not None or rpr.find(m + "scr") is not None):
+            continue  # normal text (\text{...}); script / fraktur / double-struck, which texmath reads itself
         sty = rpr.find(m + "sty") if rpr is not None else None
         tex = _run_tex(t.text.strip(), sty.get(m + "val") if sty is not None else None, id(run) in names)
         if tex is None:
             continue
-        key = _PLACEHOLDER % _letters(len(mapping))
+        key = _PLACEHOLDER % _letters(start + len(mapping))
         mapping[key] = tex
         t.text = key
         if sty is not None:
@@ -167,13 +222,53 @@ def mark_omml(fragment: ET.Element, mapping: Dict[str, str], ns: str) -> None:
 
 
 def can_mark(text: str) -> bool:
+    """`text`: the input and the text of its identifiers (texmath joins adjacent ones)."""
     return "QQXJ" not in text
+
+
+# commands texmath writes with brace-group arguments; the second group of the two-argument ones
+_ARG_COMMANDS = frozenset(
+    "sqrt frac dfrac tfrac cfrac binom dbinom tbinom genfrac overset underset stackrel overline underline hat "
+    "tilde bar vec dot ddot dddot breve check acute grave mathring widehat widetilde overbrace underbrace "
+    "overrightarrow overleftarrow overleftrightarrow underrightarrow underleftarrow xrightarrow xleftarrow "
+    "mathbf mathrm mathit mathcal mathbb mathfrak mathsf mathtt mathscr boldsymbol bm pmb operatorname text "
+    "textrm textit textbf mbox substack color phantom boxed cancel".split())
+_TWO_ARG_COMMANDS = frozenset("frac dfrac tfrac cfrac binom dbinom tbinom genfrac overset underset stackrel".split())
+
+
+def _is_argument(tex: str, start: int) -> bool:
+    """Whether the brace group opening at tex[start] is an argument (of a command, or a script)."""
+    before = tex[:start].rstrip()
+    if not before:
+        return False
+    if before[-1] in "_^":
+        return True
+    word = re.search(r"\\([a-zA-Z]+)\*?$", before)
+    if word:
+        return word.group(1) in _ARG_COMMANDS
+    if before[-1] == "}":  # the second group of \frac{..}{..}?
+        depth, i = 0, len(before) - 1
+        while i >= 0:
+            if before[i] == "}" and (i == 0 or before[i - 1] != "\\"):
+                depth += 1
+            elif before[i] == "{" and (i == 0 or before[i - 1] != "\\"):
+                depth -= 1
+                if not depth:
+                    break
+            i -= 1
+        word = re.search(r"\\([a-zA-Z]+)\s*$", before[:max(i, 0)])
+        return bool(word and word.group(1) in _TWO_ARG_COMMANDS)
+    return False
 
 
 def restore(tex: str, mapping: Dict[str, str]) -> Optional[str]:
     """`tex` with the placeholders replaced; None if one of them got lost or split."""
-    # texmath groups a multi-letter identifier ({softmax}); the group goes, except as a script argument
-    out = re.sub(r"(?<![_^])\{(%s)\}" % _PLACEHOLDER_RE.pattern, lambda m: mapping.get(m.group(1), m.group(0)), tex)
+    def unbraced(m):
+        # texmath groups a multi-letter identifier ({softmax}); the group goes where it is no argument
+        # (it stays in \sqrt{..}, x_{..}, the second group of \frac)
+        value = mapping.get(m.group(1), m.group(1))
+        return "{%s}" % value if _is_argument(tex, m.start()) else value
+    out = re.sub(r"\{(%s)\}" % _PLACEHOLDER_RE.pattern, unbraced, tex)
     out = _PLACEHOLDER_RE.sub(lambda m: mapping.get(m.group(0), m.group(0)), out)
     if "QQXJ" in out:
         return None
@@ -270,16 +365,14 @@ _RELATION_START = re.compile(
 
 def _cases(tex: str) -> str:
     """``\\left\\{ \\begin{matrix} a & b \\\\ c & d \\end{matrix} \\right.`` -> ``\\begin{cases}``."""
-    pattern = re.compile(r"\\left\s*\\\{\s*\\begin\{(matrix|aligned|array)\}(\s*\{l{1,2}\})?")
+    # only array has a column specification: in matrix / aligned a {ll} is the first cell's content
+    pattern = re.compile(r"\\left\s*\\\{\s*\\begin\{(?:(matrix|aligned)\}|(array)\}\s*\{l{1,2}\})")
     pos = 0
     while True:
         m = pattern.search(tex, pos)
         if not m:
             return tex
-        env = m.group(1)
-        if env == "array" and not m.group(2):
-            pos = m.end()
-            continue
+        env = m.group(1) or m.group(2)
         end, end2 = _env_end(tex, m.end(), env)
         close = re.compile(r"\s*\\right\s*\.").match(tex, end2) if end >= 0 else None
         body = tex[m.end():end] if end >= 0 else ""
@@ -331,7 +424,7 @@ def _drop_display_limits(tex: str) -> str:
     out = []
     last = 0
     stack: List[bool] = []  # per open group / environment: display style inside it?
-    pending: "tuple[int, List[bool]]" = (-1, [])  # (group level, styles) of the next arguments of a command
+    pending: Dict[int, List[bool]] = {}  # per group level: styles of the next arguments of a command there
     prev = ""
     for m in _TOKEN.finditer(tex):
         tok = m.group()
@@ -342,21 +435,23 @@ def _drop_display_limits(tex: str) -> str:
             stack.append(m.group("env") in _DISPLAY_ENVS)
         elif m.group("be") == "end":
             if stack:
+                pending.pop(len(stack), None)
                 stack.pop()
         elif tok == "{":
-            if pending[0] == level and pending[1]:
-                stack.append(pending[1].pop(0))
+            if pending.get(level):
+                stack.append(pending[level].pop(0))
             elif prev in ("_", "^") or (prev.startswith("\\") and prev[1:2].isalpha()):
                 stack.append(False)  # a script, or an argument of a command we do not know
             else:
                 stack.append(True)
         elif tok == "}":
             if stack:
+                pending.pop(len(stack), None)  # arguments pending inside the group that closes
                 stack.pop()
         elif tok in _SMALL_ARGS:
-            pending = (level, [False] * _SMALL_ARGS[tok])
+            pending[level] = [False] * _SMALL_ARGS[tok]
         elif tok in _SAME_STYLE_ARGS:
-            pending = (level, [True] * _SAME_STYLE_ARGS[tok])
+            pending[level] = [True] * _SAME_STYLE_ARGS[tok]
         elif tok == "\\limits" and prev in big and all(stack):
             out.append(tex[last:m.start()])
             last = m.end()
@@ -387,20 +482,28 @@ def _raw_greek(tex: str) -> str:
     lower = "|".join(n for ch, n in _GREEK.items() if not ch.isupper())
     tex = re.sub(r"\\mathbf\{\\(%s)\}" % lower, r"\\boldsymbol{\\\1}", tex)
     # ℓ: texmath writes \mathcal{l}, but calligraphic letters are capitals only
-    return re.sub(r"\{\\mathcal\{l\}\}|\\mathcal\{l\}", r"\\ell", tex)
+    tex = re.sub(r"\{\\mathcal\{l\}\}|\\mathcal\{l\}", r"\\ell", tex)
+    # Word's italic run around ∇ / ∂ (symbols \mathit does not change)
+    return re.sub(r"\\mathit\{\\(nabla|partial)\}", r"\\\1", tex)
 
 
 _RELATION_IN = re.compile(r"[=<>]|\\(?:leq?|geq?|neq?|approx|equiv|sim|in|subset|to|rightarrow|Rightarrow|mapsto|"
                           r"parallel|perp|mid)(?![a-zA-Z@])|&|,|\\\\")
 
 
+_OPERAND_END = re.compile(r"(?:[A-Za-z0-9)\]}!'|]|\\[a-zA-Z]+|\\[}|])\s*$")
+_NOT_OPERANDS = re.compile(r"\\(?:left|right|big[lr]?|Big[lr]?|bigg[lr]?|Bigg[lr]?|cdot|times|cdots|ldots|quad|qquad|"
+                           r"leq?|geq?|neq?|approx|equiv|sim|in|to|mapsto|rightarrow|Rightarrow|div|pm|mp|"
+                           r"oplus|otimes|circ|odot|setminus|cup|cap|wedge|vee|land|lor|frac|sqrt)\s*$")
+
+
 def _norm_bars(tex: str) -> str:
     """``\\parallel x \\parallel`` -> ``\\| x \\|``: a norm written with U+2225 PARALLEL TO (texmath 0.13
     writes \\| as that character, so equations pasted into Office by earlier versions hold it).
-    Only pairs at the same group level whose content has no relation, comma or alignment point:
-    ``a \\parallel b`` stays a relation."""
+    Only pairs at the same group level whose content has no relation, comma or alignment point, and
+    whose first bar does not follow an operand: ``a \\parallel b \\parallel c`` stays two relations."""
     out, last = [], 0
-    opened: Dict[int, int] = {}  # group level -> start of an unmatched \parallel
+    opened: Dict[int, int] = {}  # group level -> start of an unmatched opening \parallel
     depth = 0
     pairs = []
     for m in _TOKEN.finditer(tex):
@@ -415,10 +518,10 @@ def _norm_bars(tex: str) -> str:
                 start = opened.pop(depth)
                 if not _RELATION_IN.search(tex, start + len("\\parallel"), m.start()):
                     pairs.append((start, m.start()))
-                else:
-                    opened[depth] = m.start()
-            else:
-                opened[depth] = m.start()
+                continue
+            before = tex[:m.start()]
+            if not _OPERAND_END.search(before) or _NOT_OPERANDS.search(before):
+                opened[depth] = m.start()  # can open a norm: nothing, an operator or a bracket before it
     for a, b in pairs:
         out.append(tex[last:a] + "\\|")
         out.append(tex[a + len("\\parallel"):b] + "\\|")
@@ -441,7 +544,10 @@ def tidy_tex(tex: str, display: bool) -> str:
     if display:
         out = _drop_display_limits(out)
     out = re.sub(r"(?<!\\)[_^]\{\s*\}", "", out)  # x_{i}^{} -> x_{i}
-    out = re.sub(r"\\lbrack(?![a-zA-Z@]) ?", "[", out)
+    # \lbrack -> [, except where [ would start an option: after a row break (\\[2pt]), \begin{..} or a
+    # command (\sqrt[3])
+    out = re.sub(r"\\lbrack(?![a-zA-Z@]) ?", lambda m: m.group(0) if re.search(
+        r"(?:\\\\|\\cr|\\begin\s*\{[^{}]*\}|\\[a-zA-Z@]+)\s*$", m.string[:m.start()]) else "[", out)
     out = re.sub(r"\\rbrack(?![a-zA-Z@]) ?", "]", out)
     # set minus: Word and texmath's own MathML give a backslash or U+2216 (\smallsetminus)
     out = re.sub(r"\\(?:backslash|smallsetminus)(?![a-zA-Z@])", r"\\setminus", out)

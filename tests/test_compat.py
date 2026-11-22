@@ -36,13 +36,14 @@ def rewrite(tex, macros=None):
     (r"\begin{pmatrix*}[r] 1 & -2 \end{pmatrix*}", r"\begin{pmatrix} 1 & -2 \end{pmatrix}"),
     # layout-only commands
     (r"\smash[b]{x} + y", r"{x} + y"),
-    (r"\vphantom{\int} y", r" y"),
-    (r"\left( a \middle| b \right)", r"\left( a | b \right)"),
+    (r"\vphantom{\int} y", r"{} y"),  # an empty atom stays (\sin\vphantom{x}h is no \sinh)
+    (r"\left( a \middle| b \right)", r"\left( a \middle| b \right)"),  # texmath reads \middle there
     (r"\textcolor{red}{x} + y", r"{\color{red} {x}} + y"),
-    # definitions texmath does not know
-    (r"\def\R{\mathbb{R}} x \in \R", r"\newcommand{\R}{\mathbb{R}} x \in \R"),
-    (r"\def\pair#1#2{(#1, #2)} \pair{a}{b}", r"\newcommand{\pair}[2]{(#1, #2)} \pair{a}{b}"),
-    (r"\let\eps\varepsilon \eps", r"\newcommand{\eps}{\varepsilon} \eps"),
+    # definitions: expanded by pandoc's LaTeX reader (texmath does not know \def and \let)
+    (r"\def\R{\mathbb{R}} x \in \R", r"x \in \mathbb{R}"),
+    (r"\def\pair#1#2{(#1, #2)} \pair{a}{b}", r"(a, b)"),
+    (r"\let\eps\varepsilon \eps", r"\varepsilon"),
+    (r"\def\weird#1.{[#1]} \weird a.", r"[a]"),  # delimited parameters too
     # untouched: comments, text arguments, labels
     (r"x % \rm here" + "\n" + r"+ y", r"x % \rm here" + "\n" + r"+ y"),
     (r"x \label{eq:\notag}", r"x \label{eq:\notag}"),
@@ -120,6 +121,7 @@ MACRO_FILE = r"""
 \DeclarePairedDelimiter{\abs}{\lvert}{\rvert}
 \newcommand{\loss}{\mathcal{L}_{\rm CE}}
 \def\weird#1.{#1}
+\def\broken{x
 % \def\commented{x}
 \usepackage{amsmath}
 """
@@ -134,8 +136,8 @@ def macros(tmp_path):
 
 def test_definitions_are_read(macros):
     assert sorted(macros.definitions) == ["\\R", "\\abs", "\\argmax", "\\eps", "\\loss", "\\norm", "\\pnorm",
-                                          "\\sg", "\\vx"]
-    assert macros.skipped == ["\\weird"]  # delimited parameters
+                                          "\\sg", "\\vx", "\\weird"]
+    assert macros.skipped == ["\\broken"]  # never closed
 
 
 def test_only_needed_definitions_are_prepended(macros):
@@ -157,7 +159,7 @@ def test_own_definitions_win(macros):
 def test_macros_are_applied(macros, tex):
     out = convert(tex, "latex", "mathml", macros=macros)
     assert "\\" not in out.text.split("annotation")[0]  # no macro left over as text
-    assert any("\\weird" in n for n in out.notes)
+    assert any("\\broken" in n for n in out.notes)
 
 
 def test_macros_in_office_copy(macros):

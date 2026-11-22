@@ -318,15 +318,16 @@ class App(tk.Tk):
         self.tidy_chk.configure(state="normal" if self.src_var.get() != "latex" else "disabled")
 
     def _macro_key(self) -> tuple:
-        return (tuple(self.macro_files), self.macro_text)
+        """The macro files (with their modification times: an edited file gives another result), the text."""
+        return (tuple(self.macro_files), self.macro_text, compat.file_stamps(self.macro_files))
 
     def _macros(self, key: Optional[tuple] = None) -> Optional[compat.Macros]:
-        files, text = key or self._macro_key()
+        files, text, _ = key or self._macro_key()
         return compat.load_macros(files, text)
 
     def _update_macros_label(self) -> None:
         macros = self._macros()
-        self.macros_button.configure(text="Macros (%d)..." % len(macros) if macros else "Macros...")
+        self.macros_button.configure(text="Macros (%d)..." % len(macros) if macros is not None else "Macros...")
 
     def _on_option_change(self) -> None:
         self._update_option_states()
@@ -540,7 +541,7 @@ class App(tk.Tk):
 
         def refresh(*_):
             macros = compat.load_macros(files, text.get("1.0", "end-1c"))
-            if not macros:
+            if macros is None:
                 info.set("No macros: LaTeX input uses only what it defines itself.")
                 return
             names = sorted(macros.definitions)

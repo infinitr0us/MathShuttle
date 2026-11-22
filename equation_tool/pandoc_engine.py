@@ -223,11 +223,17 @@ def _check_texmath_warning(stderr: str) -> None:
 def strip_tex(tex: str) -> str:
     """`tex` without surrounding white space - and without a control space ``\\ `` left dangling at the
     end (texmath ends ``\\left\\{ ... \\right.\\ ``): stripping its space would leave a lone backslash,
-    which escapes whatever delimiter is written after it (``\\right.\\$``)."""
-    tex = tex.strip()
-    while tex.endswith("\\") and (len(tex) - len(tex.rstrip("\\"))) % 2:
-        tex = tex[:-1].rstrip()
-    return tex
+    which escapes whatever delimiter is written after it (``\\right.\\$``).  A backslash the input ends
+    with (no space after it) is kept: that is the user's unfinished TeX, which texmath reports."""
+    out = tex.lstrip()
+    while True:
+        stripped = out.rstrip()
+        if stripped == out:
+            return out
+        out = stripped
+        if not (out.endswith("\\") and (len(out) - len(out.rstrip("\\"))) % 2):
+            return out
+        out = out[:-1]  # the backslash of a control space whose space was just stripped
 
 
 def _collect_math(node, out: List[Equation]) -> None:
@@ -254,6 +260,8 @@ def _read_json(fmt: str, source: bytes) -> List[Equation]:
 _PANDOC_MATH_ENVS = frozenset(
     "equation equation* displaymath math align align* alignat alignat* flalign flalign* eqnarray eqnarray* "
     "gather gather* multline multline* dmath dmath* dgroup dgroup* darray darray* subequations".split())
+# mathtools' cases with a text column (compat.py rewrites them for texmath)
+_STARRED_CASES = frozenset(("cases*", "dcases*", "rcases*", "drcases*"))
 # spaces and comments, which LaTeX skips between a command and its argument
 _TEX_GAP = r"(?:\s|%[^\n]*\n)*"
 _LATEX_TOKEN = re.compile(r"\\begin" + _TEX_GAP + r"\{([^{}]*)\}|\\[a-zA-Z@]+|\\.|%[^\n]*|[{}$]", re.S)
@@ -303,7 +311,10 @@ def _has_math_delimiters(text: str) -> bool:
     owners: List[Optional[str]] = []  # per open brace group: the command it is an argument of
     in_text = 0  # open groups that are text-command arguments
     owner, end = None, 0  # command whose argument may start next, end of the previous token
+    skip_to = 0
     for m in _LATEX_TOKEN.finditer(text):
+        if m.start() < skip_to:
+            continue
         tok = m.group()
         if owner is not None and not _ARG_GAP.fullmatch(text, end, m.start()):
             owner = None  # something else came between the command and this token
@@ -318,6 +329,12 @@ def _has_math_delimiters(text: str) -> bool:
                 in_text -= owner in text_commands
         elif tok.startswith("%"):
             pass
+        elif m.group(1) in _STARRED_CASES:
+            # mathtools' starred cases: their text column holds $...$, which is maths inside text
+            close = re.compile(r"\\end" + _TEX_GAP + r"\{%s\}" % re.escape(m.group(1))).search(text, m.end())
+            if close:
+                skip_to = end = close.end()
+            owner = None
         elif not in_text and (tok in ("$", "\\(", "\\[") or m.group(1) in _PANDOC_MATH_ENVS):
             return True
         else:
@@ -517,15 +534,19 @@ def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True)
         raise ConversionError("No <math> element found in the MathML input.")
     for math in maths:
         _strip_namespaces(math)  # pandoc only recognises a bare <math>, not <mml:math>
+        _drop_annotations(math)
         if fix_office_alignment:
             _mark_equation_array_alignment(math)
     raw = [_serialize_math(m) for m in maths]
-    mapping: dict = {}
+    mappings: List[dict] = [{} for _ in maths]
     marked = raw
-    if tidy and _tidy.can_mark(text):
-        for math in maths:
-            _tidy.mark_identifiers(math, mapping)
-        marked = [_serialize_math(m) for m in maths]  # also when only a fraction's thickness changed
+    # the placeholders must not occur in the input - nor appear once texmath joins identifiers (<mi>Q</mi>...)
+    if tidy and _tidy.can_mark(text + "".join("".join(m.itertext()) for m in maths)):
+        count = 0
+        for math, mapping in zip(maths, mappings):
+            _tidy.mark_identifiers(math, mapping, count)
+            count += len(mapping)
+        marked = [_serialize_math(m) for m in maths]  # also when only a fraction or a bar changed
     eqs = _read_json("html", b"".join(marked))
     if len(eqs) < len(maths):  # pandoc turns a <math> that texmath rejects into plain text, silently
         if len(maths) == 1:
@@ -533,10 +554,10 @@ def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True)
         bad = [str(i) for i, m in enumerate(raw, 1) if not _read_json("html", m)]
         raise ConversionError("texmath could not interpret <math> element %s of the %d in the input "
                               "(unsupported or malformed elements)." % (", ".join(bad) or "?", len(maths)))
-    if mapping:
+    if any(mappings):
         plain: Optional[List[Equation]] = None
-        for i, eq in enumerate(eqs):
-            if "QQXJ" not in eq.tex:
+        for i, (eq, mapping) in enumerate(zip(eqs, mappings)):
+            if not mapping:
                 continue
             tex = _tidy.restore(eq.tex, mapping)
             if tex is None or not _converts(tex, eq.display):
@@ -546,6 +567,20 @@ def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True)
             eqs[i] = Equation(tex, eq.display)
     _check_not_empty(eqs, "MathML")
     return eqs
+
+
+def _drop_annotations(math: ET.Element) -> None:
+    """Read what the MathML shows, not a TeX annotation that texmath would prefer: it may be stale, or
+    use macros texmath does not know (the user's, kept by "TeX annotation")."""
+    for parent in list(math.iter()):
+        for child in list(parent):
+            if child.tag == "semantics":
+                shown = [c for c in child if c.tag not in ("annotation", "annotation-xml")]
+                index = list(parent).index(child)
+                parent.remove(child)
+                if shown:
+                    shown[0].tail = child.tail
+                    parent.insert(index, shown[0])
 
 
 _DOCX_CONTENT_TYPES = (
@@ -631,24 +666,32 @@ def read_omml(text: str, tidy: bool = True) -> List[Equation]:
     for f in fragments:
         f.tail = None  # tostring() would copy the text that follows the element into the paragraph
     raw = [ET.tostring(f, encoding="unicode") for f in fragments]
-    mapping: dict = {}
-    if tidy and _tidy.can_mark(text):
-        for f in fragments:
-            _tidy.mark_omml(f, mapping, OMML_NS)
-    paras = [ET.tostring(f, encoding="unicode") for f in fragments] if mapping else raw
+    mappings: List[dict] = [{} for _ in fragments]
+    paras = raw
+    if tidy and _tidy.can_mark(text + "".join("".join(f.itertext()) for f in fragments)):
+        count = 0
+        for f, mapping in zip(fragments, mappings):
+            _tidy.mark_omml(f, mapping, OMML_NS, count)
+            count += len(mapping)
+        paras = [ET.tostring(f, encoding="unicode") for f in fragments]  # runs may have been split
     eqs = _read_json("docx", _omml_docx(paras))
     if not eqs:
         raise ConversionError("texmath could not interpret this OMML.")
-    if mapping:
+    if any(mappings) and len(eqs) != len(fragments):
+        eqs = _read_json("docx", _omml_docx(raw))  # equations and fragments cannot be paired: texmath's reading
+    elif any(mappings):
         plain: Optional[List[Equation]] = None
-        for i, eq in enumerate(eqs):
-            if "QQXJ" not in eq.tex:
+        for i, (eq, mapping) in enumerate(zip(eqs, mappings)):
+            if not mapping:
                 continue
             tex = _tidy.restore(eq.tex, mapping)
             if tex is None or not _converts(tex, eq.display):
                 if plain is None:
                     plain = _read_json("docx", _omml_docx(raw))
-                tex = plain[i].tex if i < len(plain) else eq.tex
+                if len(plain) != len(eqs):
+                    eqs = plain  # cannot be paired: texmath's own reading for all
+                    break
+                tex = plain[i].tex
             eqs[i] = Equation(tex, eq.display)
     _check_not_empty(eqs, "OMML")
     return eqs
