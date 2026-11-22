@@ -134,11 +134,24 @@ def mark_identifiers(math: ET.Element, mapping: Dict[str, str], start: int = 0) 
         for i, child in enumerate(children):
             if child.tag == "mfrac":
                 thickness = (child.get("linethickness") or "").strip()
+                if not (thickness and re.fullmatch(r"0*\.?0*(?:pt|px|em|ex|mm|cm|in)?", thickness)) or len(child) != 2:
+                    continue
                 fenced = (0 < i < len(children) - 1 and _is_mo(children[i - 1], "(") and _is_mo(children[i + 1], ")"))
-                if fenced and re.fullmatch(r"0*\.?0*(?:pt|px|em|ex|mm|cm|in)?", thickness) and thickness:
+                if fenced:
                     child.set("linethickness", "0pt")
-            elif child.tag == "mo" and (child.text or "").strip() == "\u2225" and child.get("form") in ("prefix", "postfix"):
-                child.text = "\u2016"
+                else:
+                    # a bar-less stack (Word's "stack", a \substack): texmath would read \frac (a bar) for
+                    # "0" and \binom (parentheses) for "0pt" - two rows of a table keep what it shows
+                    rows = [ET.Element("mtr") for _ in range(2)]
+                    for row, part in zip(rows, list(child)):
+                        cell = ET.SubElement(row, "mtd")
+                        cell.append(part)
+                    child.tag = "mtable"
+                    child.attrib.clear()
+                    child[:] = rows
+            elif child.tag == "mo" and (child.text or "").strip() == "\u2225" and (
+                    child.get("form") in ("prefix", "postfix") or child.get("fence") == "true"):
+                child.text = "\u2016"  # a norm bar, not the relation "parallel to"
             elif child.tag == "mi":
                 nxt = children[i + 1] if i + 1 < len(children) else None
                 tex = _identifier_tex(child, _is_mo(nxt, "\u2061"))
@@ -180,7 +193,7 @@ def _split_styled_runs(fragment: ET.Element, m: str) -> None:
             continue
         if not any(e.tag in (m + "scr", m + "sty") for e in rpr):
             continue
-        pieces = ["".join(g) for _, g in itertools.groupby(t.text, key=str.isalpha)]
+        pieces = ["".join(g) for _, g in itertools.groupby(t.text, key=str.isalnum)]  # bold A1 stays bold
         if len(pieces) < 2:
             continue
         parent = parents[run]
@@ -189,7 +202,7 @@ def _split_styled_runs(fragment: ET.Element, m: str) -> None:
         for offset, piece in enumerate(pieces):
             new = copy.deepcopy(run)
             new.find(m + "t").text = piece
-            if not piece[0].isalpha():
+            if not piece[0].isalnum():
                 new_rpr = new.find(m + "rPr")
                 for e in [e for e in new_rpr if e.tag in (m + "scr", m + "sty")]:
                     new_rpr.remove(e)

@@ -35,15 +35,17 @@ _VERBATIM_ARG = frozenset("\\label \\tag \\ref \\eqref \\operatorname \\DeclareM
 _SWITCHES = {"\\rm": "\\mathrm", "\\bf": "\\mathbf", "\\it": "\\mathit", "\\sl": "\\mathit", "\\sf": "\\mathsf",
              "\\tt": "\\mathtt", "\\cal": "\\mathcal"}
 # where the scope of a switch ends at the current group level ($: the end of maths nested in text)
-_SCOPE_ENDS = frozenset(("&", "\\\\", "\\cr", "\\right", "\\middle", "$"))
+_SCOPE_ENDS = frozenset(("&", "\\\\", "\\cr", "\\right", "\\middle", "$", "\\)"))
 
 # exact or near-exact equivalents (renamed in place)
 _RENAMES = {"\\notag": "\\nonumber", "\\mathbbm": "\\mathbb", "\\mathbbmss": "\\mathbb", "\\Bbb": "\\mathbb",
             "\\frak": "\\mathfrak", "\\textup": "\\textrm", "\\textsc": "\\textrm", "\\hbox": "\\mbox",
             "\\hphantom": "\\phantom"}
 # symbols texmath 0.13 writes as the wrong character: \| as U+2225 PARALLEL TO (not U+2016, a norm),
-# \setminus as a backslash, \varnothing as U+2300 DIAMETER SIGN
-_SYMBOLS = {"\\|": "\\Vert", "\\setminus": "\\smallsetminus", "\\varnothing": "\\emptyset"}
+# \setminus and \backslash swapped (a backslash and U+2216), \varnothing as U+2300 DIAMETER SIGN.
+# One pass: \backslash -> \setminus is not renamed again.
+_SYMBOLS = {"\\|": "\\Vert", "\\setminus": "\\smallsetminus", "\\backslash": "\\setminus",
+            "\\varnothing": "\\emptyset"}
 # same maths, different size: renamed, with a note
 _RESIZED = {"\\tbinom": "\\binom", "\\dbinom": "\\binom", "\\nicefrac": "\\tfrac"}
 # commands that only adjust the layout: \cmd[opt]{x} -> {x}; value: how many [options] the command takes
@@ -330,14 +332,32 @@ def _split_top(body: str, separators: Tuple[str, ...]) -> List[str]:
 
 
 def _text_cell(cell: str) -> str:
-    """A text column cell of starred cases (``if $x>0$``) as maths: ``\\text{if }x>0``."""
-    parts = re.split(r"(?<!\\)\$", cell)
-    out = []
-    for i, part in enumerate(parts):
-        if i % 2:
-            out.append(part)
-        elif part.strip():
-            out.append("\\text{%s}" % part.strip("\n"))
+    """A text column cell of starred cases (``if $x>0$``) as maths: ``\\text{if }{x>0}``.  Only the $ of
+    the cell itself switch to maths (not those inside ``\\textbf{if $x$}``); comments are dropped."""
+    cell = re.sub(r"(?<!\\)%[^\n]*\n?", "", cell)
+    stripped = cell.strip()
+    m = re.match(r"\\(?:text[a-z]*|mbox|emph)\s*\{", stripped)
+    if m and _group_end(stripped, m.end() - 1) == len(stripped):
+        return stripped  # one text command already: texmath reads it with the maths inside
+    cuts, depth = [], 0
+    for t in _TOKEN.finditer(cell):
+        tok = t.group()
+        if tok == "{":
+            depth += 1
+        elif tok == "}":
+            depth -= 1
+        elif tok == "$" and not depth:
+            cuts.append(t.start())
+    if len(cuts) % 2:
+        cuts.pop()  # an unmatched $ stays text
+    out, last = [], 0
+    for i in range(0, len(cuts), 2):
+        if cell[last:cuts[i]]:
+            out.append("\\text{%s}" % cell[last:cuts[i]])
+        out.append("{%s}" % cell[cuts[i] + 1:cuts[i + 1]])  # a group: $\alpha$ $b$ is no \alphab
+        last = cuts[i + 1] + 1
+    if cell[last:].strip() or not out:
+        out.append("\\text{%s}" % (cell[last:] if out else cell.strip()))
     return "".join(out)
 
 
@@ -405,12 +425,13 @@ def _in_comment(text: str, pos: int) -> bool:
 def _parse_definition(text: str, m) -> Optional[Definition]:
     cmd = m.group("cmd")
     pos = m.end()
+    gap = _GAP.pattern  # spaces and comments, as TeX skips them
     if cmd == "let":
-        lm = re.compile(r"\s*(\\[a-zA-Z@]+)\s*=?\s*(\\[a-zA-Z@]+|\\.|[^\s\\])").match(text, pos)
+        lm = re.compile(gap + r"(\\[a-zA-Z@]+)" + gap + r"=?\s*(\\[a-zA-Z@]+|\\.|[^\s\\])").match(text, pos)
         if not lm:
             return None
         return Definition(lm.group(1), text[m.start():lm.end()], frozenset({lm.group(2)}), span=(m.start(), lm.end()))
-    nm = re.compile(r"\s*(?:\{\s*(\\[a-zA-Z@]+)\s*\}|(\\[a-zA-Z@]+))").match(text, pos)
+    nm = re.compile(gap + r"(?:\{" + gap + r"(\\[a-zA-Z@]+)" + gap + r"\}|(\\[a-zA-Z@]+))").match(text, pos)
     if not nm:
         return None
     name = nm.group(1) or nm.group(2)
@@ -438,7 +459,13 @@ def _parse_definition(text: str, m) -> Optional[Definition]:
     if end < 0:  # the body is never closed
         return None
     source = text[m.start():end]
-    return Definition(name, source, frozenset(_control_words(source[len(m.group()):]) - {name}), span=(m.start(), end))
+    uses = frozenset(_control_words(source[len(m.group()):]) - {name})
+    if cmd.startswith("DeclareMathOperator"):
+        # pandoc expands \DeclareMathOperator* to \mathop{\mathrm{..}}, which loses the limits of the
+        # starred form; texmath knows \operatorname(*) itself
+        source = "\\newcommand{%s}{\\operatorname%s{%s}}" % (name, "*" if cmd.endswith("*") else "",
+                                                             text[b0 + 1:end - 1])
+    return Definition(name, source, uses, span=(m.start(), end))
 
 
 def parse_definitions(text: str) -> "Tuple[List[Definition], List[str]]":
@@ -562,7 +589,11 @@ def _paired(tex: str, paired: Dict[str, Tuple[str, str]]) -> str:
                 i = j
             opening, closing = (size + "l", size + "r") if size else ("", "")
         a0, a1 = _argument(tex, i)
-        new = "%s%s %s%s%s " % (opening, left, _unbrace(tex[a0:a1]), closing, right)
+        if a1 <= a0:
+            from .pandoc_engine import ConversionError
+            raise ConversionError("%s needs an argument (it was declared with \\DeclarePairedDelimiter)" % m.group(1))
+        # one group: \abs{x}^2 puts the whole |x| under the exponent; the argument keeps its own scope
+        new = "{%s%s {%s}%s%s}" % (opening, left, _unbrace(tex[a0:a1]), closing, right)
         tex = tex[:m.start()] + new + tex[a1:]
         pos = m.start()  # nested uses inside the argument
 
@@ -583,6 +614,14 @@ def _expand(body: str, sources: List[str]) -> Optional[str]:
     except ConversionError:
         return None
     return eqs[0].tex if len(eqs) == 1 else None
+
+
+def _depth(tex: str, pos: int) -> int:
+    """How many brace groups are open at `pos`."""
+    depth = 0
+    for m in _TOKEN.finditer(tex, 0, pos):
+        depth += {"{": 1, "}": -1}.get(m.group(), 0)
+    return depth
 
 
 def _without(text: str, spans: List[Tuple[int, int]]) -> str:
@@ -609,19 +648,25 @@ def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml
     see :func:`_bold_upright`)."""
     notes: List[str] = []
     own, _ = parse_definitions(tex)
+    for d in own:
+        if _depth(tex, d.span[0]):
+            from .pandoc_engine import ConversionError
+            raise ConversionError("%s is defined inside a group: a definition that only holds there cannot be "
+                                  "expanded here - define it at the start of the equation or in Macros..." % d.name)
     used = macros.needed(tex) if macros else []
     definitions = used + own
     paired = {d.name: d.paired for d in definitions if d.paired}
-    plain = [d.source for d in definitions if not d.paired]
-    out = _without(tex, [d.span for d in own]) if own else tex
+    # paired delimiters first, in the equation and in the definitions that use them: then pandoc expands
+    # the macros their delimiters may be made of (\DeclarePairedDelimiter{\abs}{\ld}{\rangle})
+    plain = [_paired(d.source, paired) for d in definitions if not d.paired]
+    out = _paired(_without(tex, [d.span for d in own]) if own else tex, paired)
     if plain:
-        expanded = _expand(out, [d.source for d in used if not d.paired] + [d.source for d in own if not d.paired])
+        expanded = _expand(out, plain)
         if expanded is None:
             notes.append(_NOTES["unexpanded"])
             out = "\n".join(plain) + "\n" + out
         else:
-            out = expanded
-    out = _paired(out, paired)
+            out = _paired(expanded, paired)
 
     hits: List[str] = []
     resized: List[str] = []

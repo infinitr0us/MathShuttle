@@ -110,14 +110,15 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
         if dst == "latex":
             display = not latex_wrap.wrapper_is_inline(wrapper, eq.display)
             if tidy and src != "latex":
-                eq = tidied(eq, display)  # for the mode of the output: \limits stays in $...$
+                # for the mode of the output (\limits stays in $...$); bare: the equation's own mode
+                eq = tidied(eq, eq.display if wrapper == "bare" else display)
             outputs.append(latex_wrap.wrap(eq.tex, wrapper, display))
             numbering_conflict |= latex_wrap.numbering_conflict(eq.tex, wrapper, display)
             # the mode of the output, which the wrapper decides (Auto: a kept environment)
             eqs[i] = Equation(eq.tex, latex_wrap.output_is_display(eq.tex, wrapper, display))
         else:
-            if tidy and src != "latex":
-                eqs[i] = eq = tidied(eq)
+            # (tidy_tex makes LaTeX for a paper: \backslash -> \setminus...; MathML / OMML output keeps
+            # the symbols of the input - the identifiers were already read right, see read_mathml)
             prepared, new = for_texmath(eq, src, macros, dst)
             _add(notes, new)
             outputs.append(write_equation(prepared, dst, annotate=annotate, source=eq.tex))
@@ -129,6 +130,16 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
     if src == "latex" and dst != "latex":
         _add(notes, macro_notes(macros))
     return Result(eqs, outputs, notes)
+
+
+def convert_equation(eq: Equation, dst: str, wrapper: str = "auto", macros: Optional[compat.Macros] = None,
+                     annotate: bool = False) -> "tuple[str, List[str]]":
+    """One equation given as LaTeX (a document's, or tidied from Office) in format `dst`, and notes."""
+    if dst == "latex":
+        display = not latex_wrap.wrapper_is_inline(wrapper, eq.display)
+        return latex_wrap.wrap(eq.tex, wrapper, display), []
+    prepared, notes = for_texmath(eq, "latex", macros, dst)
+    return write_equation(prepared, dst, annotate=annotate, source=eq.tex), notes
 
 
 @dataclass
@@ -146,7 +157,7 @@ def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat
     notes: List[str] = []
     if len(eqs) > 1:
         notes.append("%d equations in the input - only the first one was copied." % len(eqs))
-    eq = tidied(eqs[0]) if tidy and src != "latex" else eqs[0]
+    eq = eqs[0]
     prepared, new = for_texmath(eq, src, macros)
     _add(notes, new)
     if src == "latex":
@@ -154,7 +165,8 @@ def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat
             _add(notes, [_TAG_NOTE])
         _add(notes, macro_notes(macros))
     mathml = write_equation(prepared, "mathml", for_office=True)
-    return OfficeCopy(mathml, latex_wrap.wrap(eq.tex, "auto", eq.display), notes)
+    latex = tidied(eq) if tidy and src != "latex" else eq
+    return OfficeCopy(mathml, latex_wrap.wrap(latex.tex, "auto", eq.display), notes)
 
 
 def mathml_for_office(text: str, src: str, mode: str = "auto",

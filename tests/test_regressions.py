@@ -214,3 +214,91 @@ def test_dangling_backslash_is_an_error():
     with pytest.raises(ConversionError):
         convert("x\\", "latex", "mathml")
     assert strip_tex("\\left\\{ x \\right.\\ ") == "\\left\\{ x \\right."
+
+
+# ---- the re-review of the fixes (R1...) and the two findings that were only partly fixed ----------
+
+def test_r14_placeholder_lookalike_does_not_disable_other_equations():
+    other = "<math>" + "".join("<mi>%s</mi>" % c for c in "QQXJAJXQQ") + "<mo>+</mo><mn>1</mn></math>"
+    out = convert("<math><mi>OOD</mi></math>" + other, "mathml", "latex", wrapper="bare").text
+    assert out.startswith("\\mathrm{OOD}") and "QQXJAJXQQ + 1" in out
+
+
+def test_r15_unfenced_zero_rule_is_a_stack():
+    out = to_latex('<mfrac linethickness="0"><mi>a</mi><mi>b</mi></mfrac>')
+    assert "frac" not in out and "binom" not in out
+    back = mathml(out)
+    assert "<mfrac" not in back and "<mtable" in back
+
+
+def test_r_grouped_definition_is_refused():
+    with pytest.raises(ConversionError, match="inside a group"):
+        convert(r"\def\foo{x}\foo+{\def\foo{y}\foo}+\foo", "latex", "mathml")
+
+
+def test_r_paired_delimiter_is_one_group():
+    m = macros(r"\DeclarePairedDelimiter{\abs}{\lvert}{\rvert}")
+    out = convert(r"\abs{x}^2", "latex", "mathml", macros=m).text
+    sup = out[out.index("<msup>"):out.index("</msup>")]
+    assert sup.count("|") == 2  # the whole |x| is the base
+    out = convert(r"\abs{\rm x}+y", "latex", "mathml", macros=m).text
+    assert "<mi>y</mi>" in out  # \rm stays inside the argument
+    with pytest.raises(ConversionError, match="needs an argument"):
+        convert(r"\abs", "latex", "mathml", macros=m)
+
+
+def test_r_paired_delimiter_made_of_macros():
+    m = macros(r"\def\ld{\langle}\DeclarePairedDelimiter{\abs}{\ld}{\rangle}")
+    out = convert(r"\abs{x}", "latex", "mathml", macros=m).text
+    assert "⟨" in out and "⟩" in out
+
+
+def test_r_fence_attribute_makes_a_norm():
+    out = to_latex('<mi>a</mi><mo fence="true">∥</mo><mi>x</mi><mo fence="true">∥</mo>')
+    assert "\\parallel" not in out and "\\|" in out
+
+
+def test_r_backslash_operator_kept_in_mathml_and_omml():
+    for dst in ("mathml", "omml"):
+        assert "\\" in convert(M % "<mi>A</mi><mo>\\</mo><mi>B</mi>", "mathml", dst).text.replace("\\\\", "")
+    assert "∖" in convert(M % "<mi>A</mi><mo>∖</mo><mi>B</mi>", "mathml", "omml").text
+
+
+def test_r_content_mathml_falls_back_to_its_annotation():
+    m = ('<math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><apply><plus/><ci>x</ci><ci>y</ci></apply>'
+         '<annotation encoding="application/x-tex">x+y</annotation></semantics></math>')
+    assert convert(m, "mathml", "latex", wrapper="bare").text == "x+y"
+
+
+def test_r_starred_cases_text_column_tokens():
+    out = mathml("\\begin{cases*}a&\\textbf{if $x$}\\end{cases*}")
+    assert "𝐢𝐟" in out and "<mi>x</mi>" in out  # bold text, maths inside it
+    out = mathml("\\begin{cases*}a&$\\alpha$ $b$\\end{cases*}")
+    assert "α" in out and "<mi>b</mi>" in out
+    out = mathml("\\begin{cases*}a&if % z\ntrue\\end{cases*}")
+    assert "z" not in out.replace("mathvariant", "") and "true" in out
+
+
+def test_r_starred_operator_keeps_its_limits():
+    out = convert(r"\foo_i", "latex", "mathml", macros=macros(r"\DeclareMathOperator*{\foo}{foo}")).text
+    assert "<munder>" in out
+
+
+def test_r_bare_inline_output_keeps_limits():
+    m = '<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><munderover><mo>∑</mo><mi>i</mi><mi>n</mi></munderover></math>'
+    assert "\\limits" in convert(m, "mathml", "latex", wrapper="bare").text
+
+
+def test_r_omml_bold_digits_stay_bold():
+    omml = ('<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:rPr>'
+            '<m:sty m:val="b"/></m:rPr><m:t>A1</m:t></m:r></m:oMath>')
+    assert convert(omml, "omml", "latex", wrapper="bare").text == r"\mathbf{A1}"
+
+
+def test_r_switch_ends_at_closing_paren_math():
+    out = mathml(r"\text{before \(\rm x\) after}")
+    assert "after" in out and 'mathvariant="normal">x<' in out.replace("\n", "").replace(" ", "")
+
+
+def test_r_comment_before_the_macro_name():
+    assert "<mi>x</mi>" in convert(r"\foo", "latex", "mathml", macros=macros("\\newcommand% note\n{\\foo}{x}")).text

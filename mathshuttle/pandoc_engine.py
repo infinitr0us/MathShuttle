@@ -176,10 +176,11 @@ def engine_report() -> str:
     return "\n".join(lines)
 
 
-def _run(args: List[str], stdin: bytes, timeout: float = 60) -> "tuple[bytes, str]":
+def _run(args: List[str], stdin: bytes, timeout: float = 60, cwd: Optional[str] = None) -> "tuple[bytes, str]":
+    """Run pandoc; `cwd`: where relative paths (\\input{...} in a .tex file) are found."""
     try:
         proc = subprocess.run([find_pandoc(), *args], input=stdin, capture_output=True,
-                              timeout=timeout, creationflags=_CREATE_NO_WINDOW)
+                              timeout=timeout, creationflags=_CREATE_NO_WINDOW, cwd=cwd)
     except subprocess.TimeoutExpired:
         raise ConversionError("pandoc did not finish within %d s" % timeout)
     except OSError as e:  # e.g. pandoc.exe removed or replaced (winget upgrade) while the app runs
@@ -540,55 +541,88 @@ def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True)
     maths = _outermost(root, lambda el: isinstance(el.tag, str) and _local(el.tag) == "math")
     if not maths:
         raise ConversionError("No <math> element found in the MathML input.")
+    annotations: List[Optional[str]] = []
     for math in maths:
         _strip_namespaces(math)  # pandoc only recognises a bare <math>, not <mml:math>
-        _drop_annotations(math)
+        annotations.append(_drop_annotations(math))
         if fix_office_alignment:
             _mark_equation_array_alignment(math)
     raw = [_serialize_math(m) for m in maths]
     mappings: List[dict] = [{} for _ in maths]
-    marked = raw
-    # the placeholders must not occur in the input - nor appear once texmath joins identifiers (<mi>Q</mi>...)
-    if tidy and _tidy.can_mark(text + "".join("".join(m.itertext()) for m in maths)):
-        count = 0
-        for math, mapping in zip(maths, mappings):
+    count = 0
+    for math, mapping in zip(maths, mappings):
+        # placeholders must not occur in the equation - nor appear once texmath joins its identifiers
+        # (<mi>Q</mi><mi>Q</mi>...); checked per equation, each with its own placeholders
+        if tidy and _tidy.can_mark(_serialize_math(math).decode("utf-8") + "".join(math.itertext())):
             _tidy.mark_identifiers(math, mapping, count)
             count += len(mapping)
-        marked = [_serialize_math(m) for m in maths]  # also when only a fraction or a bar changed
+    marked = [_serialize_math(m) for m in maths] if tidy else raw  # also when only a fraction or a bar changed
     eqs = _read_json("html", b"".join(marked))
     if len(eqs) < len(maths):  # pandoc turns a <math> that texmath rejects into plain text, silently
-        if len(maths) == 1:
-            raise ConversionError("texmath could not interpret this MathML (unsupported or malformed elements).")
-        bad = [str(i) for i, m in enumerate(raw, 1) if not _read_json("html", m)]
-        raise ConversionError("texmath could not interpret <math> element %s of the %d in the input "
-                              "(unsupported or malformed elements)." % (", ".join(bad) or "?", len(maths)))
-    if any(mappings):
-        plain: Optional[List[Equation]] = None
-        for i, (eq, mapping) in enumerate(zip(eqs, mappings)):
-            if not mapping:
-                continue
-            tex = _tidy.restore(eq.tex, mapping)
-            if tex is None or not _converts(tex, eq.display):
-                if plain is None:
-                    plain = _read_json("html", b"".join(raw))
-                tex = plain[i].tex
-            eqs[i] = Equation(tex, eq.display)
+        eqs, mappings = _read_one_by_one(marked, raw, annotations, mappings)
+    for i, (eq, mapping) in enumerate(zip(eqs, mappings)):
+        if not mapping:
+            continue
+        tex = _tidy.restore(eq.tex, mapping)
+        if tex is None or not _converts(tex, eq.display):
+            plain = _read_json("html", raw[i])  # this equation as texmath reads it
+            if plain:
+                tex = plain[0].tex
+            elif annotations[i]:
+                tex = strip_tex(annotations[i])
+            else:
+                raise ConversionError("texmath could not interpret <math> element %d of the input." % (i + 1))
+        eqs[i] = Equation(tex, eq.display)
     _check_not_empty(eqs, "MathML")
     return eqs
 
 
-def _drop_annotations(math: ET.Element) -> None:
+def _drop_annotations(math: ET.Element) -> Optional[str]:
     """Read what the MathML shows, not a TeX annotation that texmath would prefer: it may be stale, or
-    use macros texmath does not know (the user's, kept by "TeX annotation")."""
-    for parent in list(math.iter()):
+    use macros texmath does not know (the user's, kept by "TeX annotation").  Returns the TeX annotation
+    of the whole equation, if any: the fallback when the presentation cannot be read (Content MathML)."""
+    tex = None
+    for parent in [math] + list(math.iter()):
         for child in list(parent):
             if child.tag == "semantics":
                 shown = [c for c in child if c.tag not in ("annotation", "annotation-xml")]
+                if parent is math and tex is None:
+                    for ann in child.iter("annotation"):
+                        if (ann.get("encoding") or "").lower() in ("application/x-tex", "tex", "latex") and ann.text:
+                            tex = ann.text
+                            break
                 index = list(parent).index(child)
                 parent.remove(child)
                 if shown:
                     shown[0].tail = child.tail
                     parent.insert(index, shown[0])
+    return tex
+
+
+def _read_one_by_one(marked: List[bytes], raw: List[bytes], annotations: List[Optional[str]],
+                     mappings: List[dict]) -> "tuple[List[Equation], List[dict]]":
+    """The equations of several <math> elements when texmath rejected one: each read on its own; one that
+    texmath cannot read comes from its TeX annotation, else that is an error."""
+    eqs: List[Equation] = []
+    bad = []
+    for i, (m, r, ann) in enumerate(zip(marked, raw, annotations)):
+        found = _read_json("html", m) or _read_json("html", r)
+        if found:
+            if not _read_json("html", m):
+                mappings[i] = {}  # read without placeholders
+            eqs.append(found[0])
+        elif ann is not None:
+            display = b'display="block"' in r
+            eqs.append(Equation(strip_tex(ann), display))
+            mappings[i] = {}
+        else:
+            bad.append(str(i + 1))
+    if bad:
+        if len(raw) == 1:
+            raise ConversionError("texmath could not interpret this MathML (unsupported or malformed elements).")
+        raise ConversionError("texmath could not interpret <math> element %s of the %d in the input "
+                              "(unsupported or malformed elements)." % (", ".join(bad), len(raw)))
+    return eqs, mappings
 
 
 _DOCX_CONTENT_TYPES = (
