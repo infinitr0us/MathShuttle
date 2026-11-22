@@ -180,7 +180,7 @@ searched for `pandoc.exe`, and an `EQUATION_TOOL_PANDOC` that names no file is a
 ```powershell
 .\build_exe.ps1                     # creates .venv, installs PyInstaller, builds dist\EquationTool\
 .\build_exe.ps1 -Shortcut           # + Start-menu shortcut   (-DesktopShortcut for the desktop)
-.\build_exe.ps1 -BundlePandoc       # + copies pandoc.exe into dist\EquationTool\ (self-contained)
+.\build_exe.ps1 -BundlePandoc       # + copies pandoc.exe into dist\EquationTool\ (self-contained, see Licence)
 ```
 
 ## Tests
@@ -226,4 +226,12 @@ equation_tool/
 * In the OMML *text* output, `gather`, `multline`, `eqnarray`, `flalign` become an OMML matrix
   (`<m:m>`); only `align`-style arrays become an equation array (`<m:eqArr>`). (The clipboard
   route to Office also makes `eqnarray` an equation array, see above.)
-* Unsupported macros stop the conversion with texmath's parse error shown in the output pane.
+* Unsupported macros stop the conversion with texmath's parse error shown in the output pane
+  (define them in *Macros…*).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). pandoc (which contains texmath) is a separate program under the GPL
+(version 2 or later); this tool only runs it, and you install it yourself. A build made with
+`build_exe.ps1 -BundlePandoc` contains `pandoc.exe`: if you pass such a build on, the GPL applies
+to that copy of pandoc (include its licence and offer its source code).
