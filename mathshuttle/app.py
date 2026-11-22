@@ -217,6 +217,7 @@ class App(tk.Tk):
         self.preview_label.pack(fill="x")
         self._preview_image = None  # keeps the PhotoImage alive
         self._preview_seq = 0
+        self._last_result: Optional[tuple] = None  # (Result, conversion args) of the output on show
         ttk.Button(bottom, text="Paste from Word/PowerPoint", command=self.paste_from_office).pack(side="right", **pad)
         ttk.Button(bottom, text="Copy for Word/PowerPoint", command=self.copy_for_office).pack(side="right", **pad)
         ttk.Button(bottom, text="Copy output", command=self.copy_output).pack(side="right", **pad)
@@ -417,6 +418,7 @@ class App(tk.Tk):
         if not args[0].strip():
             self._set_output("")
             self._set_status("")
+            self._clear_preview()
             return
         self._start(args)
 
@@ -460,9 +462,7 @@ class App(tk.Tk):
             self._set_status("Swap cancelled: the input or the options changed", error=True)
             return
         if isinstance(result, Exception):
-            self._preview_seq += 1  # the picture of the previous result no longer applies
-            self._preview_image = None
-            self.preview_label.configure(image="", text="")
+            self._clear_preview()  # the picture of the previous result no longer applies
             self._set_output(str(result), error=True)
             self._set_status("Cannot swap: the input does not convert" if swap else "Conversion failed", error=True)
             return
@@ -472,6 +472,7 @@ class App(tk.Tk):
             return
         self._set_output(result.text)
         self._shown_args = args
+        self._last_result = (result, args)
         self._start_preview(result, args)
         n = len(result.equations)
         mode = "display" if result.equations[0].display else "inline"
@@ -554,6 +555,7 @@ class App(tk.Tk):
         self.input.edit_modified(False)
         self._set_output("")
         self._set_status("")
+        self._clear_preview()
         self.input.focus_set()
 
     # ---- the LaTeX preview ------------------------------------------------------------------------
@@ -573,11 +575,17 @@ class App(tk.Tk):
             if not self.preview_frame.winfo_ismapped():
                 # packed after the button bar (both at the bottom): it sits above the buttons
                 self.preview_frame.pack(fill="x", side="bottom", padx=6, pady=(0, 2), after=self._bottom_bar)
-            if self._shown_args is not None:
-                self.convert_now()  # draw the current result
+            if self._last_result is not None and self._shown_args == self._last_result[1]:
+                self._start_preview(*self._last_result)  # the result on show (not converted again: it may be edited)
         else:
-            self._preview_seq += 1
+            self._clear_preview()
             self.preview_frame.pack_forget()
+
+    def _clear_preview(self) -> None:
+        """No picture (Clear, an empty input, an error); renders still running are stale."""
+        self._preview_seq += 1
+        self._preview_image = None
+        self.preview_label.configure(image="", text="")
 
     def _start_preview(self, result, args) -> None:
         """Draw the LaTeX side of a result in the background: the input when converting from LaTeX,
@@ -660,18 +668,20 @@ class App(tk.Tk):
         mode, wrapper, tidy, macros = self.mode_var.get(), self.wrapper_var.get(), self.tidy_var.get(), self._macros()
 
         def work():
+            # what was copied: if something else is copied while this converts, it is not overwritten
+            sequence = clipboard.sequence_number()
             mathml = clipboard.read_equation_from_office()
             text = clipboard.get_text() or ""
             src = "mathml" if mathml else ("mathml" if re.search(r"<(\w+:)?math\b", text) else
                                             "omml" if re.search(r"<m:oMath", text) else "latex")
             if src != "latex":
                 latex = convert(mathml or text, src, "latex", mode, wrapper, tidy=tidy).text
-                clipboard.set_text(latex)
+                clipboard.set_text(latex, expect_sequence=sequence)
                 return "LaTeX copied: %s" % " ".join(latex.split())[:70], False
             if not text.strip():
                 return "Nothing to convert: copy LaTeX, or an equation in Word / PowerPoint, first", True
             copy = office_copy(text, "latex", mode, macros)
-            clipboard.copy_mathml_for_office(copy.mathml)
+            clipboard.copy_mathml_for_office(copy.mathml, expect_sequence=sequence)
             return "   ".join(["Equation ready: press Ctrl+V in Word / PowerPoint"] + copy.notes), False
 
         def finished(value, error):

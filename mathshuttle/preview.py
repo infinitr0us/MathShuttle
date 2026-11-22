@@ -81,20 +81,47 @@ def prune(path: Optional[str] = None, keep: int = 200) -> None:
     except OSError:
         return
     pngs = [n for n in names if n.endswith(".png")]
-    for name in pngs[keep:] + [n for n in names if not n.endswith(".png")]:
+    for name in pngs[keep:]:
         try:
             os.remove(name)
         except OSError:
             pass
+    # leftovers of jobs that were cut off (a closed app): only old ones, a running job may be young
+    import time
+    for name in names:
+        if os.path.isdir(name) and time.time() - os.path.getmtime(name) > 3600:
+            shutil.rmtree(name, ignore_errors=True)
+
+
+def _without_numbering(tex: str) -> str:
+    """`tex` without \\label{..}, \\tag{..}, \\tag*{..} (balanced arguments: \\tag{\\text{A}}), \\nonumber, \\notag."""
+    from .compat import _argument
+    pattern = re.compile(r"\\(?:label|tag\*?|nonumber|notag)(?![a-zA-Z@])")
+    while True:
+        m = pattern.search(tex)
+        if not m:
+            return tex
+        end = m.end()
+        if m.group().startswith(("\\label", "\\tag")):
+            _, end = _argument(tex, m.end())
+        tex = tex[:m.start()] + tex[end:]
 
 
 def math_line(tex: str, display: bool) -> str:
     """An equation's TeX as one line of maths: environments become their inner form (align -> aligned),
     numbering commands go (LaTeX rejects \\tag in $...$)."""
     from .latex_wrap import wrap
-    tex = re.sub(r"\\(?:label|tag\*?)\s*\{[^{}]*\}|\\(?:nonumber|notag)(?![a-zA-Z@])", "", tex)
-    inline = wrap(tex, "dollar", False)  # $...$, with \begin{aligned} for an align
+    inline = wrap(_without_numbering(tex), "dollar", False)  # $...$, with \begin{aligned} for an align
     return "$\\displaystyle %s$" % inline[1:-1] if display else inline
+
+
+def latex_command(t: dict, name: str) -> List[str]:
+    """The latex command line: no shell escape whatever the installation's default (MiKTeX's is
+    "restricted"), and no MiKTeX package-install dialog."""
+    args = [t["latex"], "-interaction=nonstopmode", "-halt-on-error", "-no-shell-escape"]
+    if t["miktex"]:
+        args.append("-disable-installer")
+    return args + [name]
 
 
 def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
@@ -112,14 +139,13 @@ def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
     png = os.path.join(work, key + ".png")
     if os.path.exists(png):
         return png
-    tex = os.path.join(work, key + ".tex")
-    with open(tex, "w", encoding="utf-8") as f:
+    # each job in a folder of its own (two renders of the same equation must not delete each other's
+    # files); the finished picture is moved into the cache in one step
+    job = tempfile.mkdtemp(prefix="job-", dir=work)
+    with open(os.path.join(job, "eq.tex"), "w", encoding="utf-8") as f:
         f.write(source)
-    args = [t["latex"], "-interaction=nonstopmode", "-halt-on-error"]
-    if t["miktex"]:
-        args.append("-disable-installer")  # never a package-install dialog
     try:
-        p = subprocess.run(args + [key + ".tex"], cwd=work, capture_output=True, timeout=40, creationflags=_FLAGS)
+        p = subprocess.run(latex_command(t, "eq.tex"), cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS)
         if p.returncode:
             log = p.stdout.decode("utf-8", "replace")
             errors = [ln for ln in log.splitlines() if ln.startswith("!")]
@@ -128,21 +154,18 @@ def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
             at = at.replace("\\MathShuttleEdge", "").replace("\\hspace{1pt}", "").replace("$\\displaystyle ", "$")
             raise PreviewError("LaTeX: " + (errors[0][2:] if errors else "failed") +
                                (" (at: %s)" % at.strip()[-60:] if at.strip() else ""))
-        p = subprocess.run([t["dvipng"], "-D", str(dpi), "-T", "tight", "-bg", "White", "-q", "-o", png,
-                            key + ".dvi"], cwd=work, capture_output=True, timeout=40, creationflags=_FLAGS)
-        if p.returncode or not os.path.exists(png):
+        p = subprocess.run([t["dvipng"], "-D", str(dpi), "-T", "tight", "-bg", "White", "-q", "-o", "eq.png",
+                            "eq.dvi"], cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS)
+        if p.returncode or not os.path.exists(os.path.join(job, "eq.png")):
             raise PreviewError("dvipng failed: " + p.stderr.decode("utf-8", "replace").strip()[-200:])
+        os.replace(os.path.join(job, "eq.png"), png)
         return png
     except subprocess.TimeoutExpired:
         raise PreviewError("LaTeX did not finish within 40 s")
     except OSError as e:
         raise PreviewError("Could not run LaTeX: %s" % e)
     finally:
-        for ext in (".aux", ".log", ".dvi", ".tex"):
-            try:
-                os.remove(os.path.join(work, key + ext))
-            except OSError:
-                pass
+        shutil.rmtree(job, ignore_errors=True)
 
 
 def definitions_for(tex: str, macros) -> List[str]:

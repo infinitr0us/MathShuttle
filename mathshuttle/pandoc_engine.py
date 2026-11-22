@@ -640,6 +640,22 @@ _DOCX_RELS = (
     'Target="word/document.xml"/></Relationships>')
 
 
+def split_math_paragraph(el: ET.Element) -> List[ET.Element]:
+    """An m:oMathPara holding several m:oMath (Word: a math paragraph with one equation per line) as one
+    m:oMathPara per equation - texmath would read them as one product (x y); anything else as it is."""
+    para, math, props = ("{%s}%s" % (OMML_NS, t) for t in ("oMathPara", "oMath", "oMathParaPr"))
+    maths = [c for c in el if c.tag == math] if el.tag == para else []
+    if len(maths) <= 1:
+        return [el]
+    out = []
+    for m in maths:
+        piece = ET.Element(para)
+        piece.extend(c for c in el if c.tag == props)
+        piece.append(m)
+        out.append(piece)
+    return out
+
+
 def _parse_omml_fragments(text: str) -> List[ET.Element]:
     """Return the top-level <m:oMathPara>/<m:oMath> elements found in arbitrary OMML-ish XML."""
     body = _strip_xml_prolog(text)
@@ -673,7 +689,7 @@ def _parse_omml_fragments(text: str) -> List[ET.Element]:
     walk(root)
     if not found:
         raise ConversionError("No <m:oMath> or <m:oMathPara> element found in the OMML input.")
-    return found
+    return [piece for f in found for piece in split_math_paragraph(f)]
 
 
 def _check_not_empty(eqs: List[Equation], what: str) -> None:

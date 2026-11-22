@@ -46,10 +46,20 @@ _kernel32.GlobalSize.argtypes = [wt.HGLOBAL]
 _kernel32.GlobalSize.restype = ctypes.c_size_t
 _kernel32.GlobalFree.argtypes = [wt.HGLOBAL]
 _kernel32.GlobalFree.restype = wt.HGLOBAL
+_user32.GetClipboardSequenceNumber.restype = wt.DWORD
 
 
 class ClipboardError(RuntimeError):
     pass
+
+
+class ClipboardChanged(ClipboardError):
+    """Something else was copied after the clipboard was read: it is not overwritten."""
+
+
+def sequence_number() -> int:
+    """Changes whenever the clipboard's contents change (GetClipboardSequenceNumber)."""
+    return _user32.GetClipboardSequenceNumber()
 
 
 def register_format(name: str) -> int:
@@ -78,9 +88,13 @@ class _Open:
         return False
 
 
-def set_data(entries: Dict[int, bytes]) -> None:
-    """Replace the clipboard contents with the given {format_id: raw bytes} entries."""
+def set_data(entries: Dict[int, bytes], expect_sequence: Optional[int] = None) -> None:
+    """Replace the clipboard contents with the given {format_id: raw bytes} entries.  With
+    `expect_sequence` (a :func:`sequence_number` taken when the clipboard was read), raise
+    ClipboardChanged instead if it changed since - checked while the clipboard is held open."""
     with _Open():
+        if expect_sequence is not None and sequence_number() != expect_sequence:
+            raise ClipboardChanged("The clipboard changed meanwhile (something else was copied): left as it is")
         if not _user32.EmptyClipboard():
             raise ClipboardError("EmptyClipboard failed")
         for fmt, data in entries.items():
@@ -154,15 +168,15 @@ def get_text() -> Optional[str]:
     return text.split("\0", 1)[0]
 
 
-def set_text(text: str) -> None:
-    set_data({CF_UNICODETEXT: text.encode("utf-16-le") + b"\0\0"})
+def set_text(text: str, expect_sequence: Optional[int] = None) -> None:
+    set_data({CF_UNICODETEXT: text.encode("utf-16-le") + b"\0\0"}, expect_sequence)
 
 
 # --- Office equation exchange -----------------------------------------------------
 _XML_DECL = '<?xml version="1.0" encoding="UTF-8"?>\n'
 
 
-def copy_mathml_for_office(mathml: str, plain_text: Optional[str] = None) -> None:
+def copy_mathml_for_office(mathml: str, plain_text: Optional[str] = None, expect_sequence: Optional[int] = None) -> None:
     """Put MathML on the clipboard so that Ctrl+V in Word/PowerPoint inserts a native equation.
 
     `plain_text` (default: the MathML itself) is what a plain-text paste receives.  Keep the default
@@ -179,7 +193,7 @@ def copy_mathml_for_office(mathml: str, plain_text: Optional[str] = None) -> Non
         CF_MATHML: payload,
         CF_MATHML_PRESENTATION: payload,
         CF_UNICODETEXT: text.encode("utf-16-le") + b"\0\0",
-    })
+    }, expect_sequence)
 
 
 def read_equation_from_office() -> Optional[str]:

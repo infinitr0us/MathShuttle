@@ -18,6 +18,16 @@ from .convert import MODES, convert, convert_equation, office_copy
 
 # how a line of comment (the equation's place in the document) is written in each output format
 _COMMENT = {"latex": "%% %s", "mathml": "<!-- %s -->", "omml": "<!-- %s -->", "typst": "// %s", "eqn": '.\\" %s'}
+
+
+def _comment(fmt: str, text: str) -> str:
+    """A one-line comment in `fmt`; an XML comment may not hold "--" nor end with "-" (a heading "A--B")."""
+    text = " ".join(text.split())
+    if fmt in ("mathml", "omml"):
+        while "--" in text:
+            text = text.replace("--", "- -")
+        text = text + " " if text.endswith("-") else text
+    return _COMMENT[fmt] % text
 from .latex_wrap import WRAPPER_KEYS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_report
 
@@ -124,7 +134,7 @@ def _cli(argv: list[str]) -> int:
             for i, found in enumerate(doc.found, 1):
                 text, new = convert_equation(found.equation, args.dst, args.wrapper, macros)
                 notes += [n for n in new if n not in notes]
-                sys.stdout.write(_COMMENT[args.dst] % ("[%d] %s" % (i, found.where)) + "\n" + text + "\n\n")
+                sys.stdout.write(_comment(args.dst, "[%d] %s" % (i, found.where)) + "\n" + text + "\n\n")
             sys.stderr.write("".join(n + "\n" for n in notes) + "%d equation(s) in %s\n" % (
                 len(doc.found), os.path.basename(args.file)))
         elif args.cmd == "version":

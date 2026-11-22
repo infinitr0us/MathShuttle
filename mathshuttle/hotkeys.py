@@ -66,6 +66,8 @@ class HotkeyListener(threading.Thread):
         self.mods, self.vk = parse(hotkey)
         self.presses: "queue.Queue[str]" = queue.Queue()
         self.started = threading.Event()
+        self.cancelled = threading.Event()  # given up on (start_and_wait timed out): must not keep the key
+        self._lock = threading.Lock()
         self.error: Optional[str] = None
         self.thread_id = 0
 
@@ -77,7 +79,11 @@ class HotkeyListener(threading.Thread):
             self.error = "%s is already used by another program" % self.hotkey
             self.started.set()
             return
-        self.started.set()
+        with self._lock:  # against start_and_wait giving up at this very moment
+            if self.cancelled.is_set():  # registered after the caller stopped waiting: release the key
+                _user32.UnregisterHotKey(None, 1)
+                return
+            self.started.set()
         try:
             while _user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == WM_HOTKEY:
@@ -89,6 +95,11 @@ class HotkeyListener(threading.Thread):
         """Start; None once the hotkey is registered, else the reason it is not."""
         self.start()
         if not self.started.wait(timeout):
+            with self._lock:
+                self.cancelled.set()
+                registered = self.started.is_set() and self.error is None  # just now, after all
+            if registered:
+                self.stop()
             return "the hotkey thread did not start"
         return self.error
 
