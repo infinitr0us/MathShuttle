@@ -34,7 +34,7 @@ def _decode_text(raw: Optional[bytes]) -> Optional[str]:
         return None
     if raw[:2] == b"\xff\xfe" or (raw[1:2] == b"\0" and raw[:1] not in (b"", b"\0")):
         text = raw[:len(raw) & ~1].decode("utf-16-le", "replace")
-        return text.lstrip("﻿").split("\0", 1)[0]
+        return text.lstrip("\ufeff").split("\0", 1)[0]
     return raw.split(b"\0", 1)[0].decode("utf-8-sig", "replace")
 
 

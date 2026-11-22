@@ -77,7 +77,7 @@ def test_copy_mathml_for_office_with_other_plain_text():
 
 @pytest.mark.parametrize("fmt", ["org.example.MathML-Test", "com.example.mathml"])
 def test_read_equation_takes_any_type_named_mathml(fmt):
-    clipboard.set_data({fmt: ("﻿" + MATHML).encode("utf-16-le")})  # another program's UTF-16, BOM
+    clipboard.set_data({fmt: ("\ufeff" + MATHML).encode("utf-16-le")})  # another program's UTF-16, BOM
     assert clipboard.read_equation_from_office() == MATHML
 
 
