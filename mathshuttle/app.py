@@ -16,7 +16,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from typing import Optional
 
-from . import __version__, clipboard, compat
+from . import __version__, clipboard, compat, latex_wrap
 from .convert import FORMAT_LABELS, MODES, Result, convert, macro_notes, office_copy
 from .latex_wrap import WRAPPERS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description, engine_report
@@ -148,8 +148,13 @@ class App(tk.Tk):
         ttk.Label(top, text="Mode:").grid(row=0, column=2, sticky="w", **pad)
         self.mode_box = self._combo(top, MODES, self.mode_var, 9)
         self.mode_box.grid(row=0, column=3, sticky="w", **pad)
-        self.macros_button = ttk.Button(top, text="Macros...", command=self.edit_macros)
-        self.macros_button.grid(row=0, column=4, sticky="w", padx=(12, 4))
+        inputs = ttk.Frame(top)  # what applies to the input: LaTeX macros, tidying of Office's LaTeX
+        inputs.grid(row=0, column=4, sticky="w")
+        self.macros_button = ttk.Button(inputs, text="Macros...", command=self.edit_macros)
+        self.macros_button.pack(side="left", padx=(12, 4))
+        self.tidy_chk = ttk.Checkbutton(inputs, text="Tidy LaTeX from Office", variable=self.tidy_var,
+                                        command=self._schedule)
+        self.tidy_chk.pack(side="left", padx=(12, 4))
         ttk.Button(top, text="\u21c4 Swap", command=self.swap, width=8).grid(row=0, column=5, rowspan=2, padx=8)
         ttk.Button(top, text="?", width=3, command=self.show_help).grid(row=0, column=6, rowspan=2, padx=(8, 0))
 
@@ -164,8 +169,6 @@ class App(tk.Tk):
         self.annotate_chk = ttk.Checkbutton(opts, text="TeX annotation", variable=self.annotate_var,
                                             command=self._schedule)
         self.annotate_chk.pack(side="left", padx=(12, 4))
-        self.tidy_chk = ttk.Checkbutton(opts, text="Tidy LaTeX", variable=self.tidy_var, command=self._schedule)
-        self.tidy_chk.pack(side="left", padx=(12, 4))
 
         # --- status bar and button bar are packed before the panes so they always stay visible ---
         # Two panes: conversion progress / messages on the left, the engine version (pandoc +
@@ -183,6 +186,7 @@ class App(tk.Tk):
         ttk.Button(bottom, text="Convert", command=self.convert_now).pack(side="left", **pad)
         ttk.Checkbutton(bottom, text="Auto-convert", variable=self.auto_var, command=self._schedule).pack(side="left", **pad)
         ttk.Button(bottom, text="Clear", command=self.clear).pack(side="left", padx=(14, 4))
+        ttk.Button(bottom, text="Open file...", command=self.open_document).pack(side="left", padx=(14, 4))
         ttk.Button(bottom, text="Paste from Word/PowerPoint", command=self.paste_from_office).pack(side="right", **pad)
         ttk.Button(bottom, text="Copy for Word/PowerPoint", command=self.copy_for_office).pack(side="right", **pad)
         ttk.Button(bottom, text="Copy output", command=self.copy_output).pack(side="right", **pad)
@@ -505,6 +509,50 @@ class App(tk.Tk):
         self._set_status("")
         self.input.focus_set()
 
+    # ---- documents ------------------------------------------------------------------------------
+    def _in_background(self, work, done) -> None:
+        """Run `work()` in a thread; call `done(value, error)` in the Tk thread when it ends."""
+        result: dict = {}
+
+        def run():
+            try:
+                result["value"] = work()
+            except Exception as e:  # reported by `done`
+                result["error"] = e
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+
+        def poll():
+            if thread.is_alive():
+                self.after(50, poll)
+            else:
+                done(result.get("value"), result.get("error"))
+
+        self.after(50, poll)
+
+    def open_document(self, path: Optional[str] = None) -> None:
+        """List the equations of a .docx / .pptx / .tex / .md file (Open file...)."""
+        from .documents import FILE_TYPES, read_document
+        path = path or filedialog.askopenfilename(parent=self, title="Open a document with equations",
+                                                  filetypes=FILE_TYPES + [("All files", "*.*")])
+        if not path:
+            return
+        self._set_status("Reading %s..." % os.path.basename(path))
+
+        def done(doc, error):
+            if error is not None:
+                message = str(error) if isinstance(error, (ConversionError, PandocNotFound)) else repr(error)
+                self._set_status("Could not read %s: %s" % (os.path.basename(path), message.splitlines()[0]), error=True)
+                return
+            self._set_status("%d equations in %s" % (len(doc.found), os.path.basename(path)))
+            self._show_equations(doc)
+
+        self._in_background(lambda: read_document(path), done)
+
+    def _show_equations(self, doc) -> "EquationList":
+        return EquationList(self, doc)
+
     def edit_macros(self) -> None:
         """Macro files and extra definitions applied to every LaTeX input."""
         win = tk.Toplevel(self)
@@ -592,6 +640,111 @@ class App(tk.Tk):
     def _set_status(self, text: str, error: bool = False) -> None:
         self.status_var.set(text)
         self.status_label.configure(foreground="#b00020" if error else "")
+
+
+class EquationList(tk.Toplevel):
+    """The equations of a document: use one as input, copy it for Office or as LaTeX, export all."""
+
+    def __init__(self, app: App, doc) -> None:
+        super().__init__(app)
+        self.app, self.doc = app, doc
+        self.title("MathShuttle - equations in %s" % os.path.basename(doc.path))
+        self.transient(app)
+        pad = {"padx": 6, "pady": 4}
+        summary = "%d equation%s" % (len(doc.found), "" if len(doc.found) == 1 else "s")
+        self.info = tk.StringVar(value="   ".join([summary] + doc.notes))
+        ttk.Label(self, textvariable=self.info, wraplength=900, justify="left").pack(anchor="w", **pad)
+
+        style = ttk.Style(self)
+        style.configure("Equations.Treeview", rowheight=int(app.mono.metrics("linespace") * 1.35), font=app.mono)
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True, **pad)
+        self.tree = ttk.Treeview(frame, columns=("where", "equation", "context"), show="headings",
+                                 selectmode="browse", style="Equations.Treeview", height=14)
+        for column, title, width in (("where", "Where", 220), ("equation", "Equation (LaTeX)", 520),
+                                     ("context", "Context", 300)):
+            self.tree.heading(column, text=title, anchor="w")
+            self.tree.column(column, width=width, anchor="w")
+        scroll = ttk.Scrollbar(frame, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
+        for i, found in enumerate(doc.found):
+            self.tree.insert("", "end", iid=str(i),
+                             values=(found.where, " ".join(found.equation.tex.split()), found.context))
+        if doc.found:
+            self.tree.selection_set("0")
+            self.tree.focus("0")
+        self.tree.bind("<Double-1>", lambda e: self.use())
+        self.tree.bind("<Return>", lambda e: self.use())
+
+        buttons = ttk.Frame(self)
+        buttons.pack(fill="x", **pad)
+        ttk.Button(buttons, text="Use as input", command=self.use).pack(side="left")
+        ttk.Button(buttons, text="Copy for Word/PowerPoint", command=self.copy_for_office).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Copy LaTeX", command=self.copy_latex).pack(side="left")
+        ttk.Button(buttons, text="Export all as .tex...", command=self.export).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Close", command=self.destroy).pack(side="right")
+
+    def _selected(self):
+        selection = self.tree.selection()
+        if not selection:
+            self.info.set("Select an equation first")
+            return None
+        return self.doc.found[int(selection[0])]
+
+    @staticmethod
+    def _latex(found) -> str:
+        return latex_wrap.wrap(found.equation.tex, "auto", found.equation.display)
+
+    def use(self) -> None:
+        found = self._selected()
+        if found is None:
+            return
+        app = self.app
+        app.src_var.set("latex")
+        app.input.delete("1.0", "end")
+        app.input.insert("1.0", self._latex(found))
+        app.input.edit_modified(False)
+        app.convert_now()
+        app.lift()
+
+    def copy_for_office(self) -> None:
+        found = self._selected()
+        if found is None:
+            return
+        try:
+            copy = office_copy(self._latex(found), "latex", self.app.mode_var.get(), self.app._macros())
+            clipboard.copy_mathml_for_office(copy.mathml)
+        except (ConversionError, PandocNotFound, clipboard.ClipboardError) as e:
+            self.info.set("Could not copy: %s" % str(e).splitlines()[-1])
+            return
+        self.info.set("   ".join(["Copied: press Ctrl+V in Word / PowerPoint"] + copy.notes))
+
+    def copy_latex(self) -> None:
+        found = self._selected()
+        if found is None:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(self._latex(found))
+        self.info.set("LaTeX copied")
+
+    def export(self, path: Optional[str] = None) -> None:
+        path = path or filedialog.asksaveasfilename(
+            parent=self, title="Export the equations", defaultextension=".tex",
+            initialfile=os.path.splitext(os.path.basename(self.doc.path))[0] + "-equations.tex",
+            filetypes=[("LaTeX", "*.tex"), ("All files", "*.*")])
+        if not path:
+            return
+        text = "".join("%% [%d] %s\n%s\n\n" % (i, found.where, self._latex(found))
+                       for i, found in enumerate(self.doc.found, 1))
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write("%% equations of %s (MathShuttle)\n\n%s" % (os.path.basename(self.doc.path), text))
+        except OSError as e:
+            self.info.set("Could not write %s: %s" % (path, e.strerror or e))
+            return
+        self.info.set("%d equations written to %s" % (len(self.doc.found), path))
 
 
 def main() -> int:

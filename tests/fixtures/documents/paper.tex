@@ -1,0 +1,19 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb}
+\input{macros}
+\begin{document}
+
+\section{Method}
+For every sample $x \in \R^d$ we minimise
+\begin{equation}
+  \loss(\theta) = \E_{x}\, \norm{f_\theta(x) - x}^2 \label{eq:loss}
+\end{equation}
+over $\theta$.
+
+\section{Bounds}
+\begin{align}
+  a &\leq b \label{eq:first} \\
+  b &\leq c \notag
+\end{align}
+
+\end{document}

@@ -80,6 +80,14 @@ back as `\boldsymbol{x}`; Word's *own* LaTeX paste keeps it upright), stores an 
 upright text, not as a function (`\operatorname{f}` comes back as `\mathrm{f}`), and drops `\tag`
 numbers (the tool says so when it copies one).
 
+**Whole documents.** **Open file…** lists every equation of a `.docx`, `.pptx`, `.tex` or `.md` file
+with where it is (the heading above it, the slide and its title, the `\label`) and the sentence
+around it. From the list, use one as input, copy it for Word / PowerPoint or as LaTeX, or export
+them all to a `.tex` file; on the command line, `python -m mathshuttle extract FILE [-t FORMAT]`.
+Office equations go through the same Tidy LaTeX as a pasted one; a `.tex` file's `\input` files
+and macros are read. Equations made with the old Equation Editor 3.0 or MathType (objects
+without Office Math inside) cannot be read; their number is reported.
+
 MathML input may also come from elsewhere: prefixed elements (`<mml:math>`, as written by
 Word's XSLT, MathType or JATS journal XML), named entities (`&InvisibleTimes;`, from
 Mathematica / Maple), several documents each with its own XML declaration.
@@ -155,6 +163,7 @@ python -m mathshuttle convert -f latex -t omml [--mode display|inline] [--wrappe
                                 [--macros FILE ...] [--no-tidy] [FILE]
 python -m mathshuttle copy  [-f latex] [--macros FILE ...] [FILE]   # → clipboard, ready to paste into Office
 python -m mathshuttle paste [-t latex] [--wrapper W] [--no-tidy]    # equation copied in Office → stdout
+python -m mathshuttle extract FILE [-t latex] [--wrapper W]          # every equation of a .docx/.pptx/.tex/.md
 python -m mathshuttle version                                       # pandoc + embedded texmath version
 ```
 `FILE` defaults to stdin. Input and output are UTF-8 (also through pipes and redirection); an input
@@ -216,6 +225,7 @@ mathshuttle/
   compat.py          LaTeX texmath does not take → LaTeX it does; macro files
   tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
+  documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are
   clipboard.py       Win32 clipboard via ctypes: "MathML" format in/out
   app.py             tkinter GUI
   __main__.py        GUI / CLI entry

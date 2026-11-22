@@ -4,6 +4,7 @@
     python -m mathshuttle convert -f latex -t omml [FILE]     convert FILE (or stdin) to stdout
     python -m mathshuttle copy [-f latex] [FILE]              put the equation on the clipboard for Word/PowerPoint
     python -m mathshuttle paste [-t latex] [--wrapper W]      convert the equation copied in Word/PowerPoint
+    python -m mathshuttle extract FILE [-t latex]             every equation of a .docx / .pptx / .tex / .md
     python -m mathshuttle version                             pandoc + embedded texmath version
 """
 from __future__ import annotations
@@ -13,7 +14,10 @@ import os
 import sys
 
 from .compat import load_macros
-from .convert import MODES, convert, office_copy
+from .convert import MODES, convert, convert_equation, office_copy
+
+# how a line of comment (the equation's place in the document) is written in each output format
+_COMMENT = {"latex": "%% %s", "mathml": "<!-- %s -->", "omml": "<!-- %s -->", "typst": "// %s", "eqn": '.\\" %s'}
 from .latex_wrap import WRAPPER_KEYS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_report
 
@@ -75,6 +79,12 @@ def _cli(argv: list[str]) -> int:
     p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto")
     p.add_argument("--no-tidy", dest="tidy", action="store_false")
 
+    p = sub.add_parser("extract", help="every equation of a .docx, .pptx, .tex or .md file, with where it is")
+    p.add_argument("file")
+    p.add_argument("-t", "--to", dest="dst", choices=WRITE_FORMATS, default="latex")
+    p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto")
+    p.add_argument("--macros", action="append", default=[], metavar="FILE")
+
     sub.add_parser("version", help="show the pandoc / texmath versions in use")
 
     args = parser.parse_args(argv)
@@ -106,6 +116,17 @@ def _cli(argv: list[str]) -> int:
                 sys.stderr.write("No equation on the clipboard (copy one in Word / PowerPoint first).\n")
                 return 2
             sys.stdout.write(convert(mathml, "mathml", args.dst, args.mode, args.wrapper, tidy=args.tidy).text + "\n")
+        elif args.cmd == "extract":
+            from .documents import read_document
+            doc = read_document(args.file)
+            macros = load_macros(args.macros)
+            notes = list(doc.notes)
+            for i, found in enumerate(doc.found, 1):
+                text, new = convert_equation(found.equation, args.dst, args.wrapper, macros)
+                notes += [n for n in new if n not in notes]
+                sys.stdout.write(_COMMENT[args.dst] % ("[%d] %s" % (i, found.where)) + "\n" + text + "\n\n")
+            sys.stderr.write("".join(n + "\n" for n in notes) + "%d equation(s) in %s\n" % (
+                len(doc.found), os.path.basename(args.file)))
         elif args.cmd == "version":
             sys.stdout.write(engine_report() + "\n")
         else:

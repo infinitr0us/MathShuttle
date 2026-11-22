@@ -244,3 +244,36 @@ def test_engine_version_survives_auto_convert(app):
     assert pump(app, until=lambda: "inline" in app.status_var.get())
     assert app.engine_var.get() == engine
     assert "texmath" not in app.status_var.get()
+
+
+def test_open_document_lists_and_uses_equations(app, tmp_path):
+    """Open file...: the equations of a presentation, one of them used as input, all exported."""
+    docs = os.path.join(os.path.dirname(__file__), "fixtures", "documents")
+    opened = []
+    app._show_equations = lambda doc, show=app._show_equations: opened.append(show(doc)) or opened[-1]
+    try:
+        app.open_document(os.path.join(docs, "sample.pptx"))
+        assert pump(app, seconds=20, until=lambda: opened)
+        win = opened[0]
+        assert win.tree.get_children() == ("0", "1")
+        assert win.tree.item("1")["values"][0] == "slide 2: Update rule"
+        app.dst_var.set("mathml")
+        win.tree.selection_set("1")
+        win.use()
+        assert app.src_var.get() == "latex"
+        assert app.input.get("1.0", "end-1c").startswith(r"\[ \theta_{t + 1}")
+        assert pump(app, until=lambda: "<math" in app.output.get("1.0", "end"))
+        target = tmp_path / "out.tex"
+        win.export(str(target))
+        text = target.read_text(encoding="utf-8")
+        assert "% [1] slide 1: Objective" in text and "% [2] slide 2: Update rule" in text
+        win.destroy()
+    finally:
+        del app._show_equations
+
+
+def test_open_document_reports_errors(app, tmp_path):
+    bad = tmp_path / "broken.pptx"
+    bad.write_bytes(b"not a zip")
+    app.open_document(str(bad))
+    assert pump(app, until=lambda: "Could not read" in app.status_var.get())
