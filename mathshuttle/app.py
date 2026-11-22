@@ -16,7 +16,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from typing import Optional
 
-from . import __version__, clipboard, compat, hotkeys, latex_wrap
+from . import __version__, clipboard, compat, hotkeys, latex_wrap, preview
 from .convert import FORMAT_LABELS, MODES, Result, convert, macro_notes, office_copy
 from .latex_wrap import WRAPPERS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description, engine_report
@@ -26,7 +26,7 @@ SAMPLE = "\\begin{align}\n  \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\vareps
 SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "MathShuttle", "settings.json")
 # where the tool kept them under its former name (Equation Tool): read once if there are no settings yet
 OLD_SETTINGS_PATH = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "EquationTool", "settings.json")
-DEFAULT_GEOMETRY = "1200x640"
+DEFAULT_GEOMETRY = "1200x720"
 DEBOUNCE_MS = 450
 MAX_SAVED_INPUT = 200_000  # characters of input kept for the next start
 
@@ -69,6 +69,8 @@ WORD / POWERPOINT
           LaTeX text on the clipboard becomes an equation - then Ctrl+V in Office.  The key
           is "hotkey" in the settings file (%%APPDATA%%\\MathShuttle\\settings.json).
   Open file...   every equation of a .docx / .pptx / .tex / .md file, with where it is.
+
+LaTeX preview: the LaTeX side of the conversion as LaTeX sets it (needs latex + dvipng on PATH).
 
 Ctrl+Enter converts; Auto-convert re-runs the conversion as you type.
 """ % __version__
@@ -140,6 +142,8 @@ class App(tk.Tk):
         self.tidy_var = tk.BooleanVar(value=True)
         self.auto_var = tk.BooleanVar(value=True)
         self.hotkey_var = tk.BooleanVar(value=True)
+        self.preview_var = tk.BooleanVar(value=True)
+        self._latex_found: Optional[bool] = None  # unknown until the startup check
         self.hotkey = hotkeys.DEFAULT
         self._listener: Optional[hotkeys.HotkeyListener] = None
         self.macro_files: list = []  # macro files and extra definitions for LaTeX input (Macros...)
@@ -178,6 +182,17 @@ class App(tk.Tk):
                                             command=self._schedule)
         self.annotate_chk.pack(side="left", padx=(12, 4))
 
+        # third row: how the app works (the button bar below keeps only actions, so that it fits)
+        ttk.Label(top, text="Options:").grid(row=2, column=0, sticky="w", **pad)
+        switches = ttk.Frame(top)
+        switches.grid(row=2, column=1, columnspan=5, sticky="w")
+        ttk.Checkbutton(switches, text="Auto-convert", variable=self.auto_var, command=self._schedule).pack(side="left", **pad)
+        self.preview_chk = ttk.Checkbutton(switches, text="LaTeX preview", variable=self.preview_var,
+                                           command=self._toggle_preview, state="disabled")
+        self.preview_chk.pack(side="left", padx=(14, 4))
+        self.hotkey_chk = ttk.Checkbutton(switches, variable=self.hotkey_var, command=self._toggle_hotkey)
+        self.hotkey_chk.pack(side="left", padx=(14, 4))
+
         # --- status bar and button bar are packed before the panes so they always stay visible ---
         # Two panes: conversion progress / messages on the left, the engine version (pandoc +
         # texmath) permanently on the right, so the messages never hide it.
@@ -191,12 +206,17 @@ class App(tk.Tk):
 
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", side="bottom", padx=6, pady=(0, 4))
+        self._bottom_bar = bottom
         ttk.Button(bottom, text="Convert", command=self.convert_now).pack(side="left", **pad)
-        ttk.Checkbutton(bottom, text="Auto-convert", variable=self.auto_var, command=self._schedule).pack(side="left", **pad)
-        ttk.Button(bottom, text="Clear", command=self.clear).pack(side="left", padx=(14, 4))
-        ttk.Button(bottom, text="Open file...", command=self.open_document).pack(side="left", padx=(14, 4))
-        self.hotkey_chk = ttk.Checkbutton(bottom, variable=self.hotkey_var, command=self._toggle_hotkey)
-        self.hotkey_chk.pack(side="left", padx=(14, 4))
+        ttk.Button(bottom, text="Clear", command=self.clear).pack(side="left", padx=(10, 4))
+        ttk.Button(bottom, text="Open file...", command=self.open_document).pack(side="left", padx=(10, 4))
+
+        # --- the LaTeX preview (above the buttons; shown when a LaTeX installation is found) ---
+        self.preview_frame = tk.Frame(self, bg="white", height=10, highlightthickness=1, highlightbackground="#c8c8c8")
+        self.preview_label = tk.Label(self.preview_frame, bg="white", anchor="w", justify="left", padx=8, pady=6)
+        self.preview_label.pack(fill="x")
+        self._preview_image = None  # keeps the PhotoImage alive
+        self._preview_seq = 0
         ttk.Button(bottom, text="Paste from Word/PowerPoint", command=self.paste_from_office).pack(side="right", **pad)
         ttk.Button(bottom, text="Copy for Word/PowerPoint", command=self.copy_for_office).pack(side="right", **pad)
         ttk.Button(bottom, text="Copy output", command=self.copy_output).pack(side="right", **pad)
@@ -285,6 +305,7 @@ class App(tk.Tk):
         self.annotate_var.set(bool(s.get("annotate", False)))
         self.tidy_var.set(bool(s.get("tidy", True)))
         self.hotkey_var.set(bool(s.get("hotkey_enabled", True)))
+        self.preview_var.set(bool(s.get("preview", True)))
         if isinstance(s.get("hotkey"), str):
             try:
                 hotkeys.parse(s["hotkey"])
@@ -307,7 +328,7 @@ class App(tk.Tk):
         data = {"src": self.src_var.get(), "dst": self.dst_var.get(), "mode": self.mode_var.get(),
                 "wrapper": self.wrapper_var.get(), "auto_convert": self.auto_var.get(),
                 "annotate": self.annotate_var.get(), "tidy": self.tidy_var.get(),
-                "hotkey": self.hotkey, "hotkey_enabled": self.hotkey_var.get(),
+                "hotkey": self.hotkey, "hotkey_enabled": self.hotkey_var.get(), "preview": self.preview_var.get(),
                 "macro_files": self.macro_files, "macro_text": self.macro_text, "geometry": self.geometry(),
                 # whole or not at all: a cut could land inside an equation, and a very large input
                 # (a whole document.xml) would be reloaded and converted again at every start
@@ -340,6 +361,7 @@ class App(tk.Tk):
             return
         self._set_status("Ready")
         self._toggle_hotkey()
+        self._in_background(preview.tools, self._latex_checked)  # latex --version takes a moment
         self._schedule()
 
     def _update_option_states(self) -> None:
@@ -438,6 +460,9 @@ class App(tk.Tk):
             self._set_status("Swap cancelled: the input or the options changed", error=True)
             return
         if isinstance(result, Exception):
+            self._preview_seq += 1  # the picture of the previous result no longer applies
+            self._preview_image = None
+            self.preview_label.configure(image="", text="")
             self._set_output(str(result), error=True)
             self._set_status("Cannot swap: the input does not convert" if swap else "Conversion failed", error=True)
             return
@@ -447,6 +472,7 @@ class App(tk.Tk):
             return
         self._set_output(result.text)
         self._shown_args = args
+        self._start_preview(result, args)
         n = len(result.equations)
         mode = "display" if result.equations[0].display else "inline"
         summary = "%s \u2192 %s  (%s%s)" % (FORMAT_LABELS[args[1]], FORMAT_LABELS[args[2]],
@@ -529,6 +555,70 @@ class App(tk.Tk):
         self._set_output("")
         self._set_status("")
         self.input.focus_set()
+
+    # ---- the LaTeX preview ------------------------------------------------------------------------
+    PREVIEW_MAX_HEIGHT = 240
+
+    def _latex_checked(self, found, error) -> None:
+        self._latex_found = bool(found) and error is None
+        if self._latex_found:
+            self.preview_chk.configure(state="normal")
+            preview.prune()
+        else:
+            self.preview_chk.configure(state="disabled", text="LaTeX preview (no LaTeX installation found)")
+        self._toggle_preview()
+
+    def _toggle_preview(self) -> None:
+        if self._latex_found and self.preview_var.get():
+            if not self.preview_frame.winfo_ismapped():
+                # packed after the button bar (both at the bottom): it sits above the buttons
+                self.preview_frame.pack(fill="x", side="bottom", padx=6, pady=(0, 2), after=self._bottom_bar)
+            if self._shown_args is not None:
+                self.convert_now()  # draw the current result
+        else:
+            self._preview_seq += 1
+            self.preview_frame.pack_forget()
+
+    def _start_preview(self, result, args) -> None:
+        """Draw the LaTeX side of a result in the background: the input when converting from LaTeX,
+        else the LaTeX the input reads as (tidied, as Paste from Office gives it)."""
+        if not (self._latex_found and self.preview_var.get()):
+            return
+        self._preview_seq += 1
+        seq = self._preview_seq
+        src, tidy, macros = args[1], args[6], self._macros(args[7])
+        equations = list(result.equations[:6])
+        dpi = max(96, int(self.winfo_fpixels("1i") * 1.15))
+
+        def work():
+            from .convert import tidied
+            eqs = [tidied(eq) if src != "latex" and tidy else eq for eq in equations]
+            definitions = preview.definitions_for(" ".join(e.tex for e in eqs), macros if src == "latex" else None)
+            return preview.render(eqs, definitions, dpi=dpi), len(result.equations)
+
+        self._in_background(work, lambda value, error: self._show_preview(seq, value, error))
+
+    def _show_preview(self, seq, value, error) -> None:
+        if seq != self._preview_seq:
+            return  # a newer result is being drawn
+        if error is not None:
+            self._preview_image = None
+            message = str(error) if isinstance(error, (preview.PreviewError, ConversionError)) else repr(error)
+            self.preview_label.configure(image="", text="Preview: " + message.splitlines()[0], fg="#8b1a1a")
+            return
+        path, total = value
+        try:
+            image = tk.PhotoImage(file=path)
+        except tk.TclError as e:
+            self.preview_label.configure(image="", text="Preview: %s" % e, fg="#8b1a1a")
+            return
+        width = max(200, self.winfo_width() - 40)
+        factor = max(1, -(-image.width() // width), -(-image.height() // self.PREVIEW_MAX_HEIGHT))
+        if factor > 1:
+            image = image.subsample(factor)
+        self._preview_image = image
+        more = "  (first 6 of %d equations)" % total if total > 6 else ""
+        self.preview_label.configure(image=image, text=more, compound="left", fg="#555555")
 
     # ---- the hotkey: shuttle the clipboard ------------------------------------------------------
     def _toggle_hotkey(self) -> None:

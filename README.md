@@ -80,6 +80,13 @@ back as `\boldsymbol{x}`; Word's *own* LaTeX paste keeps it upright), stores an 
 upright text, not as a function (`\operatorname{f}` comes back as `\mathrm{f}`), and drops `\tag`
 numbers (the tool says so when it copies one).
 
+**LaTeX preview.** With a LaTeX installation on `PATH` (MiKTeX or TeX Live: `latex` and `dvipng`),
+a strip above the buttons shows the equation as LaTeX sets it: what you typed when converting from
+LaTeX, the LaTeX that comes back when converting from Office. It is drawn in the background after
+each conversion (about half a second), with your macros, `amsmath`, `amssymb`, `mathtools`, `bm`
+(and `bbm`, `dsfont` when installed); a LaTeX error is shown instead of a picture. Untick
+*LaTeX preview* to hide it.
+
 **Without the window: the hotkey.** While MathShuttle runs (minimised is fine), **Ctrl+Alt+Shift+M**
 in any program shuttles the clipboard: an equation copied in Word / PowerPoint becomes LaTeX text,
 and LaTeX text becomes an equation to paste with Ctrl+V. So: copy LaTeX in your editor, press the
@@ -235,6 +242,7 @@ mathshuttle/
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
   documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are
   hotkeys.py         the system-wide hotkey (RegisterHotKey in a thread of its own)
+  preview.py         the LaTeX preview (latex + dvipng)
   clipboard.py       Win32 clipboard via ctypes: "MathML" format in/out
   app.py             tkinter GUI
   __main__.py        GUI / CLI entry

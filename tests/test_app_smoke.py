@@ -220,7 +220,8 @@ def test_bad_saved_geometry_is_ignored(app, tmp_path, monkeypatch):
         app._restore_geometry("1100x600+-32000+-32000")  # on a monitor that is gone: keep the size only
         app._restore_geometry("1100x600+100+100")
         app._restore_geometry("1100x600-32000-32000")  # from the right / bottom edge: cannot be checked
-        assert applied == ["1200x640", "1100x600", "1100x600+100+100", "1100x600"]
+        import mathshuttle.app as app_module
+        assert applied == [app_module.DEFAULT_GEOMETRY, "1100x600", "1100x600+100+100", "1100x600"]
     finally:
         real(before)
     import mathshuttle.app as app_module
@@ -304,3 +305,20 @@ def test_open_document_reports_errors(app, tmp_path):
     bad.write_bytes(b"not a zip")
     app.open_document(str(bad))
     assert pump(app, until=lambda: "Could not read" in app.status_var.get())
+
+
+def test_preview_shows_the_latex(app):
+    from mathshuttle import preview
+    if preview.tools() is None:
+        pytest.skip("no LaTeX installation on PATH")
+    assert pump(app, seconds=20, until=lambda: app._latex_found is not None)
+    app.preview_var.set(True)
+    app._toggle_preview()
+    app.src_var.set("latex")
+    app.dst_var.set("mathml")
+    set_input(app, "$x^2 + y^2$")
+    app.convert_now()
+    assert pump(app, seconds=30, until=lambda: app._preview_image is not None)
+    set_input(app, r"\frac{a}")  # an error clears the picture
+    app.convert_now()
+    assert pump(app, until=lambda: app._preview_image is None)
