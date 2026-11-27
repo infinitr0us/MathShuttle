@@ -533,7 +533,8 @@ def _letters(items: str) -> List[str]:
     parts = [p.strip() for p in items.split(",") if p.strip()]
     out: List[str] = []
     for i, p in enumerate(parts):
-        if p == "..." and out and i + 1 < len(parts) and len(parts[i + 1]) == 1:
+        if p == "..." and out and i + 1 < len(parts) and len(parts[i + 1]) == 1 and parts[i + 1].isalpha() \
+                and out[-1].isupper() == parts[i + 1].isupper():
             out += [chr(c) for c in range(ord(out[-1]) + 1, ord(parts[i + 1]))]
         elif len(p) == 1 and p.isalpha():
             out.append(p)
@@ -802,6 +803,40 @@ def _expand(body: str, sources: List[str]) -> Optional[str]:
     return eqs[0].tex if len(eqs) == 1 else None
 
 
+_SIMPLE_DEF = re.compile(r"\s*\\(?:(?:re)?newcommand\*?|providecommand\*?|[gex]?def)\s*\{?\s*(\\[a-zA-Z]+)\s*\}?"
+                         r"\s*\{([\s\S]*)\}\s*")
+
+
+def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
+    """`tex` with its macros expanded here, when every definition it needs is a macro without arguments
+    (``\\newcommand{\\calR}{\\mathcal{R}}``: the \\foreach alphabet, \\R for \\mathbb{R}): as TeX replaces
+    them, without a pandoc run per equation.  None when one is anything else (pandoc expands those)."""
+    bodies: Dict[str, str] = {}
+    for d in definitions:
+        m = _SIMPLE_DEF.fullmatch(d.source)
+        if not m or m.group(1) != d.name or "#" in m.group(2) or "@" in d.source:
+            return None
+        if d.source.lstrip().startswith("\\providecommand") and d.name in bodies:
+            continue  # \providecommand defines only what is not defined yet
+        bodies[d.name] = m.group(2)
+    if not bodies:
+        return tex
+    for _ in range(20):
+        out, last = [], 0
+        for t in _TOKEN.finditer(tex):  # (whole control words; a comment is one token)
+            if t.group() not in bodies:
+                continue
+            body = bodies[t.group()]
+            if re.search(r"\\[a-zA-Z@]+$", body) and re.match(r"[a-zA-Z@]", tex[t.end():t.end() + 1]):
+                body += " "  # \calR x -> \mathcal{R} x; \bb R -> \mathbb R, not \mathbbR
+            out += [tex[last:t.start()], body]
+            last = t.end()
+        if not out:
+            return tex
+        tex = "".join(out) + tex[last:]
+    return None  # a macro that keeps expanding into itself: pandoc decides
+
+
 def _depth(tex: str, pos: int) -> int:
     """How many brace groups are open at `pos`."""
     depth = 0
@@ -917,8 +952,8 @@ def _nested_text(tex: str) -> str:
                 depth += 1
             elif tok == "}":
                 depth -= 1
-            elif tok == "$" and not depth:
-                maths = not maths  # maths in the text ($\textbf{x}$ there is maths): not split
+            elif tok in ("$", "\\(", "\\)") and not depth:
+                maths = tok == "\\(" or (tok == "$" and not maths)  # maths in the text: not split there
             elif not depth and not maths and inner.fullmatch(tok):
                 changed = True
                 if tok in _SIZES:  # dropped (with the space after it)
@@ -933,7 +968,9 @@ def _nested_text(tex: str) -> str:
             pos = m.end()
             continue
         pieces.append("%s{%s}" % (m.group(1), body[last:]))
-        new = "".join(p for p in pieces if not p.endswith("{}"))
+        pieces = [p for p in pieces if not p.endswith("{}")]
+        # one group, as the \text was one argument (x_\text{a \textbf{b}}: all of it in the subscript)
+        new = pieces[0] if len(pieces) == 1 else "{%s}" % "".join(pieces)
         tex = tex[:m.start()] + new + tex[a1:]
         pos = m.start()  # the pieces may hold more nesting
 
@@ -941,7 +978,7 @@ def _nested_text(tex: str) -> str:
 def _spacing(tex: str) -> str:
     """\\hspace{10mm}, \\kern3pt, \\hskip 1em plus 1fil, \\mkern3mu: in units texmath reads (it takes pt,
     em, cm and in, and \\mspace); \\hspace{\\fill} and its kind are left out."""
-    tex = _FILL.sub("{}", tex)
+    tex = _at_tokens(tex, _FILL, lambda _m: "{}")
 
     def length(value: str, unit: str) -> str:
         factor, base = _LENGTHS[unit]
@@ -953,10 +990,10 @@ def _spacing(tex: str) -> str:
             return "\\hspace{%s}" % length(m.group(1), m.group(2))
         if m.group(3):  # \kern / \hskip
             return "\\hspace{%s}" % length(m.group(3), m.group(4))
-        if m.group(6) == "mu":  # \mkern 3mu
-            return "\\mspace{%smu}" % re.sub(r"\s+", "", m.group(5))
+        if m.group(6) == "mu" and re.fullmatch(r"\d+", re.sub(r"\s+", "", m.group(5))):
+            return "\\mspace{%smu}" % re.sub(r"\s+", "", m.group(5))  # \mkern 3mu (texmath: whole mu only)
         return "\\hspace{%s}" % length(m.group(5), m.group(6))
-    return _SPACING.sub(sub, tex)
+    return _at_tokens(tex, _SPACING, sub)
 
 
 def _drop_arguments(tex: str, names: Dict[str, int]) -> str:
@@ -1016,19 +1053,58 @@ def _accent_fonts(tex: str) -> str:
         pos = m.start() + len(m.group(1))
 
 
+def merge_notes(notes: List[str]) -> List[str]:
+    """`notes` of several equations with the built-in-pack notes merged into one (the commands of each
+    package listed once), where the first of them was."""
+    prefix = _NOTES["packs"].split("%s")[0]
+    by_package: Dict[str, List[str]] = {}
+    out: List[str] = []
+    for note in notes:
+        if not note.startswith(prefix):
+            if note not in out:
+                out.append(note)
+            continue
+        if not by_package:
+            out.append(prefix)  # where the merged note goes
+        for part in note[len(prefix):].split("; "):
+            m = re.fullmatch(r"(.*) \((\S+)\)", part)
+            if m:
+                names = by_package.setdefault(m.group(2), [])
+                names += [n for n in m.group(1).split(", ") if n not in names]
+    if by_package:
+        merged = _NOTES["packs"] % "; ".join("%s (%s)" % (", ".join(names), package)
+                                             for package, names in by_package.items())
+        out[out.index(prefix)] = merged
+    return out
+
+
+def _at_tokens(tex: str, pattern: "re.Pattern", repl) -> str:
+    """pattern.sub, but only where a token starts and outside comments: in ``a \\\\global`` the word
+    after a row break \\\\ is no \\global."""
+    out, last = [], 0
+    for t in _TOKEN.finditer(tex):
+        if t.start() < last or t.group().startswith("%"):
+            continue
+        m = pattern.match(tex, t.start())
+        if m:
+            out += [tex[last:m.start()], repl(m) if callable(repl) else m.expand(repl)]
+            last = m.end()
+    return "".join(out) + tex[last:]
+
+
 def _standard(tex: str, layout: List[str]) -> str:
     """Standard LaTeX that texmath 0.13 rejects, written with what it has."""
-    tex = _ENV_POSITION.sub(r"\1", tex)  # \begin{aligned}[t]: texmath would show the [t]
-    tex = re.sub(r"\\cfrac\s*\[\s*[lcr]\s*\]", r"\\cfrac", tex)
-    tex = re.sub(r"\\textnormal" + _CS, lambda _m: "\\textrm", tex)  # also inside text
+    tex = _at_tokens(tex, _ENV_POSITION, r"\1")  # \begin{aligned}[t]: texmath would show the [t]
+    tex = _at_tokens(tex, re.compile(r"\\cfrac\s*\[\s*[lcr]\s*\]"), lambda _m: "\\cfrac")
+    tex = _at_tokens(tex, re.compile(r"\\textnormal" + _CS), lambda _m: "\\textrm")  # also inside text
     tex = _rename(tex, _STANDARD, [])
     tex = _intertext(tex, layout)
     tex = _nested_text(tex)
     tex = _commands(tex, {"\\mathnormal": 0}, "unwrap", [])
-    tex = re.sub(r"\\displaybreak(?:\s*\[\s*\d\s*\])?", "{}", tex)
-    tex = _RULES.sub(lambda _m: "\\hline", tex)  # booktabs rules in an array
+    tex = _at_tokens(tex, re.compile(r"\\displaybreak(?:\s*\[\s*\d\s*\])?"), lambda _m: "{}")
+    tex = _at_tokens(tex, _RULES, lambda _m: "\\hline")  # booktabs rules in an array
     tex = _rename(tex, _GROUPING, [])
-    tex = re.sub(r"\\global" + _CS + r"\s*", "", tex)
+    tex = _at_tokens(tex, re.compile(r"\\global" + _CS + r"\s*"), lambda _m: "")
     tex = _commands(tex, _NO_OPS, "drop", [])
     tex = _drop_arguments(tex, _COUNTERS)
     tex = _spacing(tex)
@@ -1065,10 +1141,30 @@ def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml
     # \newcommand{\abs} after a \DeclarePairedDelimiter{\abs} (or before it) is not both
     last = {d.name: d for d in definitions}
     paired = {name: d.paired + (d.paired_x,) for name, d in last.items() if d.paired}
+    # \let\myabs\abs of a paired delimiter: the same pair
+    for d in definitions:
+        aliased = next(iter(d.uses), None) if d.source.lstrip().startswith("\\let") else None
+        if last[d.name] is d and aliased in paired:
+            paired[d.name] = paired[aliased]
     # paired delimiters first, in the equation and in the definitions that use them: then pandoc expands
     # the macros their delimiters may be made of (\DeclarePairedDelimiter{\abs}{\ld}{\rangle})
-    plain = [_paired(d.source, paired) for d in definitions if not d.paired and not last[d.name].paired]
+    plain: List[str] = []
+    seen: set = set()
+    for d in definitions:
+        if d.paired or last[d.name].paired or d.name in paired:
+            continue
+        source = d.source
+        if d.name in seen:  # pandoc keeps a name's first \newcommand: a later one must win, as \renewcommand
+            source = re.sub(r"^(\s*)\\(?:newcommand|DeclareRobustCommand)(?![a-zA-Z@])", r"\1\\renewcommand", source)
+        seen.add(d.name)
+        try:
+            plain.append(_paired(source, paired))
+        except Exception:  # noqa: BLE001 - \newcommand{\foo}{\abs}: the pair is used where \foo is
+            plain.append(source)
     out = _paired(_without(tex, [d.span for d in own]) if own else tex, paired)
+    simple = _simple_expansion(out, [d for d in definitions if not d.paired and d.name not in paired])
+    if simple is not None:  # 0-argument \newcommand only (the \foreach alphabet): no pandoc run per equation
+        out, plain = _paired(simple, paired).strip(), []
     if plain:
         expanded = _expand(out, plain)
         if expanded is None:

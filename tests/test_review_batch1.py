@@ -137,3 +137,70 @@ def test_a_comment_does_not_displace_the_diagnosis():
     with pytest.raises(ConversionError) as e:
         convert("x+\\notknown % \\left(", "latex", "mathml")
     assert str(e.value).startswith("texmath does not know \\notknown")
+
+
+# ---- the Gemini review of batch 1 ----------------------------------------------------------------------
+@pytest.mark.parametrize("text, expected", [
+    (r"\newcommand{\foo}{1}" "\n" r"\newcommand{\foo}{2}", "2"),
+    (r"\newcommand{\foo}{1}" "\n" r"\DeclareMathOperator{\foo}{bar}", "bar"),
+])
+def test_a_later_definition_of_one_name_wins(text, expected):
+    assert shown(r"\foo", compat.load_macros(text=text)) == expected
+
+
+def test_a_let_alias_of_a_paired_delimiter():
+    macros = compat.load_macros(text=r"\DeclarePairedDelimiter{\abs}{\lvert}{\rvert}" "\n" r"\let\myabs\abs")
+    assert shown(r"\myabs{x}", macros) == "|x|"
+
+
+def test_simple_macros_expand_without_a_pandoc_run(monkeypatch):
+    macros = compat.load_macros(text=r"\newcommand{\calR}{\mathcal{R}}" "\n" r"\newcommand{\bb}{\mathbb}")
+    monkeypatch.setattr(compat, "_expand", lambda *a: pytest.fail("a pandoc run for simple macros"))
+    assert compat.for_texmath(r"\calR + \bb R", macros)[0] == r"\mathcal{R} + \mathbb R"
+
+
+@pytest.mark.parametrize("tex", [r"\text{for \(\textbf{x} = 1\)}", r"x_\text{a \textbf{b}}",
+                                 r"a \mkern-3mu b", r"a \mkern 1.5mu b", r"\begin{aligned} a &= b \\global = 1 \end{aligned}"])
+def test_text_and_spacing_cases(tex):
+    assert "<math" in convert(tex, "latex", "mathml").text
+
+
+def test_a_subscripted_text_stays_in_the_subscript():
+    assert compat.for_texmath(r"x_\text{a \textbf{b}}")[0] == r"x_{\text{a }\textbf{b}}"
+
+
+def test_a_root_index_in_brackets_keeps_them():
+    mathml = '<math><mroot><mi>x</mi><mrow><mo>[</mo><mi>n</mi><mo>]</mo></mrow></mroot></math>'
+    out = convert(mathml, "mathml", "latex", wrapper="bare").text
+    assert "[[" not in out and "]]" not in out
+
+
+def test_subequations_numbering_and_display():
+    from mathshuttle import latex_wrap
+    sub = "\\label{eq:g}\n\\begin{align}\na &= b \\label{eq:1} \\\\\nc &= d \\label{eq:2}\n\\end{align}"
+    assert latex_wrap.numbering_conflict(sub, "equation", True)
+    assert latex_wrap.output_is_display(sub, "auto", False)
+
+
+def test_no_self_suggestion_and_an_end_without_begin():
+    from mathshuttle import diagnose
+    short = diagnose.explain(r"\tensor[^a_b]{T}{^c_d}", r"\tensor[^a_b]{T}{^c_d}",
+                             r"unexpected control sequence \tensor", short=True)
+    assert short == [r"texmath does not know \tensor"]
+    assert "do not pair up" in diagnose._unclosed(r"x \end{align}")
+
+
+def test_no_equation_hint_for_a_mistyped_windows_path(capsys):
+    from mathshuttle.__main__ import main
+    assert main(["convert", r"C:\nonexistent\paper.tex"]) == 1
+    assert "-e" not in capsys.readouterr().err
+
+
+def test_pack_notes_are_merged_across_equations():
+    prefix = "written as their packages define them (built in): "
+    notes = [prefix + r"\ket (physics)", "other", prefix + r"\bra, \ket (physics); \Set (braket)"]
+    assert compat.merge_notes(notes) == [prefix + r"\ket, \bra (physics); \Set (braket)", "other"]
+
+
+def test_a_letter_range_across_cases_is_no_alphabet():
+    assert compat._letters("A,...,z") == []

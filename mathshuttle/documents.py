@@ -653,4 +653,4 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
                         "macro file (Macros..., --macros)." if own else ""))
     if tags:
         notes.append("\\tag numbers are not carried over: number the equations in Word if they need numbers.")
-    return notes
+    return compat.merge_notes(notes)

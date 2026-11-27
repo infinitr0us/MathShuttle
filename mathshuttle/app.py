@@ -1064,9 +1064,8 @@ class EquationList(tk.Toplevel):
         own = self.doc.macros(None) if self.doc.source == "latex" else None
         if own is None:
             return latex
-        user = self.app._macros()
-        needed = [d.source for d in own.needed(found.equation.tex)
-                  if not (user and d.name in user.definitions)]
+        # (all of them: in the window they then win over the user's macros, as for the document)
+        needed = [d.source for d in own.needed(found.equation.tex)]
         return "\n".join(needed + [latex])
 
     def use(self) -> None:

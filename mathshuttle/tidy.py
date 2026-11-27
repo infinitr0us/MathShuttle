@@ -717,7 +717,15 @@ def _plain_brackets(tex: str) -> str:
             guarded.add(i)
     options = {r"\sqrt", r"\cfrac", r"\xleftarrow", r"\xrightarrow", r"\smash", r"\cr"}
     prev = ""
+    option = False  # inside an [option] (\sqrt[\lbrack n\rbrack]{x}): a plain ] there would end it
     for i, token in enumerate(tokens):
+        if option:
+            option = token != "]"
+            prev = token if token.strip() else prev
+            continue
+        if token == "[" and prev in options:
+            option, prev = True, token
+            continue
         if token == r"\rbrack" or (token == r"\lbrack" and i not in guarded and prev not in options):
             tokens[i] = "[" if token == r"\lbrack" else "]"
             if i + 1 < len(tokens):

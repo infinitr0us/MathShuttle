@@ -285,6 +285,15 @@ def numbering_conflict(tex: str, wrapper: str, display: bool = True) -> bool:
     """True if `wrap(tex, wrapper, display)` puts ``\\tag`` / ``\\label`` commands somewhere LaTeX
     rejects them: a ``\\tag`` in inline maths, or an environment's per-line tags / several labels
     inside aligned / gathered, in a single-equation wrapper, or several tags in multline."""
+    labels = _LEADING_LABELS.match(tex)
+    rest = tex[labels.end():] if labels else tex
+    envs = _env_sequence(rest)
+    if envs and (labels or len(envs) > 1):  # subequations (see wrap)
+        if wrapper == "auto":
+            return False  # kept verbatim, in subequations
+        if len(envs) > 1:
+            return any(numbering_conflict(env, wrapper, display) for env in envs)
+        tex = rest
     if wrapper == "auto":
         if has_outer_env(tex):
             return False  # kept verbatim
@@ -310,6 +319,10 @@ def output_is_display(tex: str, wrapper: str, display: bool) -> bool:
     """Whether `wrap(tex, wrapper, display)` is display maths: Auto keeps an environment of the
     input (display, except ``math``) whatever `display` asks for."""
     if wrapper == "auto":
+        labels = _LEADING_LABELS.match(tex)
+        envs = _env_sequence(tex[labels.end():] if labels else tex)
+        if envs and (labels or len(envs) > 1):
+            return True  # subequations (see wrap)
         env = split_env(tex, _OUTER)[0]
         if env is not None:
             return env != "math"

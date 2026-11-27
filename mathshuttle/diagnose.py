@@ -67,13 +67,13 @@ def _probe(names: List[str]) -> List[str]:
 
 
 def _probe_now(names: List[str]) -> List[str]:
-    from .pandoc_engine import _api, _run
+    from .pandoc_engine import _api, _mathml_flags, _run
     if not names:
         return []
     blocks = [{"t": "Para", "c": [{"t": "Math", "c": [{"t": "InlineMath"}, "%s{a}{b}{c}" % n]}]} for n in names]
     source = json.dumps({"pandoc-api-version": _api(), "meta": {}, "blocks": blocks}).encode("utf-8")
     try:
-        _, err = _run(["-f", "json", "-t", "html", "--math-method=mathml"], source)
+        _, err = _run(["-f", "json", "-t", "html", *_mathml_flags()], source)
     except Exception:  # noqa: BLE001 - the diagnosis is a courtesy; never fail because of it
         return []
     unknown = set(re.findall(r"unexpected control sequence (\\[A-Za-z@]+)", err))
@@ -102,7 +102,7 @@ def _unclosed(tex: str) -> Optional[str]:
         return "%d \\left but %d \\right: each \\left needs its \\right (\\right. for none)" % (lefts, rights)
     begins = [m.group("env") for m in tokens if m.group("be") == "begin"]
     ends = [m.group("env") for m in tokens if m.group("be") == "end"]
-    for env in begins:
+    for env in begins + ends:  # (also an \end{align} without its \begin)
         if begins.count(env) != ends.count(env):
             return "\\begin{%s} and \\end{%s} do not pair up" % (env, env)
     return None
@@ -151,7 +151,8 @@ def explain(original: str, prepared: str, message: str, short: bool = False) -> 
             lines.append("%s: %s%s" % (name, _PACKAGES[name].split(", which")[0] if short else _PACKAGES[name],
                                        "" if short else "."))
             continue
-        guess = difflib.get_close_matches(name, known, n=2, cutoff=0.8) if len(name) > 3 else []
+        guess = [g for g in difflib.get_close_matches(name, known, n=3, cutoff=0.8) if g != name][:2] \
+            if len(name) > 3 else []
         if short:
             lines.append("texmath does not know %s%s" % (name, " (%s?)" % " or ".join(guess) if guess else ""))
             continue

@@ -83,7 +83,7 @@ def test_physics_braket_with_one_argument_follows_the_loaded_package():
     (r"\hspace{10mm} x", r"\hspace{1cm} x"),
     (r"\hspace*{1ex} x", r"\hspace{0.43em} x"),
     (r"a \kern3pt b \mkern3mu c", r"a \hspace{3pt} b \mspace{3mu} c"),
-    (r"\text{a \textbf{b} c}", r"\text{a }\textbf{b}\text{ c}"),
+    (r"\text{a \textbf{b} c}", r"{\text{a }\textbf{b}\text{ c}}"),  # one group, as \text was one argument
     (r"\text{\small a}", r"\text{a}"),
     (r"\textnormal{x}", r"\textrm{x}"),
     (r"\varlimsup_{n} a_n", r"\overline{\lim}_{n} a_n"),
@@ -138,5 +138,5 @@ def test_paired_delimiter_x_and_xparse_and_the_alphabet_loop():
     assert prepared(r"\inp*{a}{b}", macros)[0] == r"{\left\langle {{a}, {b}}\right\rangle}"
     assert prepared(r"\KL[r]{q}", macros)[0] == r"D_{\mathrm{KL}}(r \Vert q)"
     assert prepared(r"\KL{q}", macros)[0] == r"D_{\mathrm{KL}}(p \Vert q)"
-    assert prepared(r"\calR + \calZ", macros)[0] == r"\mathcal{R}+ \mathcal{Z}"
+    assert prepared(r"\calR + \calZ", macros)[0] == r"\mathcal{R} + \mathcal{Z}"
     assert not macros.skipped

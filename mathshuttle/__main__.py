@@ -8,7 +8,7 @@ import shlex
 import sys
 
 from . import __version__
-from .compat import load_macros
+from .compat import load_macros, merge_notes
 from .convert import MODES, convert, convert_equation, macro_notes, office_copy
 from .documents import READABLE, read_document
 from .latex_wrap import WRAPPER_KEYS
@@ -65,7 +65,11 @@ def _read_source(path: str | None, expr: str | None, command: str) -> str:
             data = f.read()
     except OSError as e:
         message = f"cannot read {path}: {e.strerror or e}"
-        if not os.path.exists(path) and (re.search(r"[\s\\^_{}=+*()$]", path) or _mathy(path)):
+        # (a mistyped path - C:\papers\x.tex, notes/eq.md - gets no hint)
+        looks_like_path = bool(re.match(r"[A-Za-z]:[\\/]|\.{1,2}[\\/]|~[\\/]|/", path) or
+                               re.search(r"\.[A-Za-z][A-Za-z0-9]{0,4}$", path))
+        if not os.path.exists(path) and not looks_like_path and (
+                re.search(r"[\s\\^_{}=+*()$]", path) or _mathy(path)):
             expr_arg = "-e=" if path.startswith("-") else "-e "
             message += ("\nThe argument was taken as a file name. For an equation, "
                         f"try mathshuttle {command} {expr_arg}{_quote_arg(path)}")
@@ -213,7 +217,7 @@ def _cli(argv: list[str]) -> int:
                     notes += [n for n in new if n not in notes]
                 sys.stdout.write(_comment(args.dst, location) + "\n" + text + "\n\n")
             count = f"{len(doc.found)} equation(s) in {os.path.basename(args.file)}"
-            for line in notes + [count] + failures:
+            for line in merge_notes(notes) + [count] + failures:
                 print(line, file=sys.stderr)
             if failures:
                 print(f"{len(failures)} of {count} could not be converted", file=sys.stderr)
