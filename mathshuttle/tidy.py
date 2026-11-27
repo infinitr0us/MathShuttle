@@ -557,6 +557,7 @@ def tidy_tex(tex: str, display: bool) -> str:
     if display:
         out = _drop_display_limits(out)
     out = re.sub(r"(?<!\\)[_^]\{\s*\}", "", out)  # x_{i}^{} -> x_{i}
+    out = _edge_spaces(out)  # before \lbrack -> [ below: a row may start with the bracket once its space is gone
     # \lbrack -> [, except where [ would start an option: after a row break (\\[2pt]), \begin{..} or a
     # command (\sqrt[3])
     out = re.sub(r"\\lbrack(?![a-zA-Z@]) ?", lambda m: m.group(0) if re.search(
@@ -568,17 +569,94 @@ def tidy_tex(tex: str, display: bool) -> str:
     out = _norm_bars(out)
     out = _bold_numbers(out)
     out = _raw_greek(out)
-    return _edge_spaces(out)
+    return out
 
 
-# a (no-break) space typed at the start or end of an equation in Word: texmath writes "~"
-_EDGE_TILDES_START = re.compile(r"((?:^|\\\\|\\begin\s*\{[a-zA-Z*]+\})[ \t\r\n]*)~(?:[ \t\r\n]*~)*[ \t]*")
-_EDGE_TILDES_END = re.compile(r"(?<!\\)~(?:[ \t\r\n]*~)*[ \t]*(?=[ \t\r\n]*(?:$|\\\\|\\end\s*\{))")
+# TeX tokens for _edge_spaces: a control word, a control symbol (\\, "\ ", \~ ...), ~, white space, a
+# brace, a run of other characters
+_EDGE_TOKEN = re.compile(r"\\[a-zA-Z@]+|\\.|~|\s+|[{}]|[^\\~\s{}]+", re.S)
+_TYPED_SPACES = frozenset(["~", "\\ "])                  # how texmath writes a space typed in Word
+_SMALL_SPACES = frozenset(["\\,", "\\:", "\\;", "\\>"])  # removed with a typed space next to them
+_ARGUMENT_ENVS = frozenset("array subarray alignat alignat* alignedat".split())  # \begin{array}{rl}
+
+
+def _line_starts_and_ends(tokens: List[str]) -> "tuple[set, set]":
+    """Token indices where a line starts (the equation's start, after a row break \\\\, after
+    \\begin{env} and its arguments) and where one ends (the end, a row break, \\end)."""
+    starts, ends = {0}, {len(tokens)}
+
+    def skip_space(i: int) -> int:
+        while i < len(tokens) and tokens[i].isspace():
+            i += 1
+        return i
+
+    def group_end(i: int, open_: str, close: str) -> int:
+        """Index after the group that starts at tokens[i] == open_ (balanced), or -1."""
+        depth = 0
+        for j in range(i, len(tokens)):
+            if tokens[j] == open_:
+                depth += 1
+            elif tokens[j] == close:
+                depth -= 1
+                if not depth:
+                    return j + 1
+        return -1
+
+    for i, token in enumerate(tokens):
+        if token == "\\\\":
+            ends.add(i)
+            starts.add(i + 1)
+        elif token == "\\end":
+            ends.add(i)
+        elif token == "\\begin":
+            j = skip_space(i + 1)
+            if j >= len(tokens) or tokens[j] != "{":
+                continue
+            k = group_end(j, "{", "}")
+            if k < 0:
+                continue
+            env = "".join(tokens[j + 1:k - 1]).strip()
+            if env in _ARGUMENT_ENVS:
+                k = skip_space(k)
+                if k < len(tokens) and tokens[k].startswith("["):  # \begin{array}[t]{rl}
+                    close = next((m for m in range(k, len(tokens)) if "]" in tokens[m]), -1)
+                    k = skip_space(close + 1) if close >= 0 else k
+                if k < len(tokens) and tokens[k] == "{":
+                    k = group_end(k, "{", "}")
+                if k < 0:
+                    continue
+            starts.add(k)
+    return starts, ends
 
 
 def _edge_spaces(tex: str) -> str:
-    """Drop the "~" of a space at the very start or end of the equation, or of a line in an aligned
-    block: Word keeps the space typed after the last symbol, LaTeX authors do not write it."""
-    out = _EDGE_TILDES_END.sub("", tex)
-    out = _EDGE_TILDES_START.sub(lambda m: m.group(1), out)
+    """Drop a space typed at the very start or end of the equation, or of a line of an aligned block or
+    a matrix (texmath writes it "~" or "\\ "; with a thin space \\, next to it, that goes too): Word keeps
+    the space typed after the last symbol, a LaTeX author does not write it.  Spaces inside a line,
+    and a line start where the bracket that follows would read as \\\\[...], are left alone."""
+    tokens = _EDGE_TOKEN.findall(tex)
+    starts, ends = _line_starts_and_ends(tokens)
+    drop = set()
+
+    def edge_run(indices) -> None:
+        run = []
+        for i in indices:
+            if i in drop or not (tokens[i].isspace() or tokens[i] in _TYPED_SPACES or tokens[i] in _SMALL_SPACES):
+                break
+            run.append(i)
+        if any(tokens[i] in _TYPED_SPACES for i in run):
+            drop.update(i for i in run if not tokens[i].isspace())
+
+    for start in starts:
+        stop = min([e for e in ends if e >= start] or [len(tokens)])
+        before = len(drop)
+        edge_run(range(start, stop))
+        nxt = next((i for i in range(start, stop) if i not in drop and not tokens[i].isspace()), None)
+        if (len(drop) > before and start > 0 and tokens[start - 1] == "\\\\" and nxt is not None
+                and tokens[nxt].startswith("[")):
+            drop.difference_update(range(start, stop))  # \\ [x]: the bracket would become an option
+    for end in ends:
+        begin = max([s for s in starts if s <= end] or [0])
+        edge_run(range(end - 1, begin - 1, -1))
+    out = "".join(t for i, t in enumerate(tokens) if i not in drop)
     return out if out.strip() else tex

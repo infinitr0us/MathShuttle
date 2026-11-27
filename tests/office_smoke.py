@@ -77,7 +77,6 @@ def show_clipboard():
 
 def test_word(copy, eq_array: bool, expected_back=None):
     print("== Word")
-    was_running = is_running("WINWORD.EXE")
     word = win32com.client.DispatchEx("Word.Application")
     word.Visible = False
     doc = word.Documents.Add()
@@ -118,15 +117,13 @@ def test_word(copy, eq_array: bool, expected_back=None):
             assert tidy_back == expected_back
     finally:
         doc.Close(0)
-        if not was_running:
-            word.Quit()
+        word.Quit()  # DispatchEx: a Word process of its own, never the user's
 
 
 def test_word_sentence():
     """A sentence with an equation in it: Word copies no MathML then, only the HTML with the OMML in it,
     which Paste from Word/PowerPoint reads (clipboard.read_office_equation)."""
     print("== Word, a sentence with an inline equation")
-    was_running = is_running("WINWORD.EXE")
     word = win32com.client.DispatchEx("Word.Application")
     word.Visible = False
     doc = word.Documents.Add()
@@ -147,13 +144,11 @@ def test_word_sentence():
         assert tex == "x^{2}"
     finally:
         doc.Close(0)
-        if not was_running:
-            word.Quit()
+        word.Quit()  # DispatchEx: a Word process of its own, never the user's
 
 
 def test_powerpoint(copy, eq_array: bool, expected_back=None):
     print("== PowerPoint")
-    was_running = is_running("POWERPNT.EXE")
     ppt = win32com.client.DispatchEx("PowerPoint.Application")
     pres = ppt.Presentations.Add(0)  # WithWindow = msoFalse
     try:
@@ -187,11 +182,16 @@ def test_powerpoint(copy, eq_array: bool, expected_back=None):
             assert tidy_back == expected_back
     finally:
         pres.Close()
-        if not was_running:
+        if not POWERPOINT_WAS_RUNNING:
             ppt.Quit()
 
 
 if __name__ == "__main__":
+    # PowerPoint runs once per user: DispatchEx attaches to the user's own instance when there is one,
+    # so it is only quit if it was not running before.  (Word's DispatchEx is always a process of its
+    # own: quit every time, otherwise one instance that is slow to exit makes every later test think
+    # the user's Word is running and leave its own hidden Word behind.)
+    POWERPOINT_WAS_RUNNING = is_running("POWERPNT.EXE")
     for stream in (sys.stdout, sys.stderr):  # MathML holds ∂, 𝐱...; a cp936 / cp1252 console cannot print them
         stream.reconfigure(encoding="utf-8", errors="replace")
     for tex in (TEX, ALIGN, CONT, ALIGN4, EQNARRAY, CASES, RAGGED, NO_AMP, SYSTEM, VALUES, *ROUND_TRIP):

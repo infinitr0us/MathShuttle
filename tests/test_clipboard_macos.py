@@ -103,8 +103,9 @@ def test_read_office_equation_falls_back_to_the_html():
     assert clipboard.read_equation_from_office() is None
     src, omml = clipboard.read_office_equation()
     assert src == "omml" and '<m:t xml:space="preserve">x</m:t>' in omml
-    clipboard.copy_mathml_for_office(MATHML)  # MathML, when there is some, comes first
-    assert clipboard.read_office_equation() == ("mathml", clipboard.read_equation_from_office())
+    # MathML, when there is some, comes first: both on the pasteboard at once, with different equations
+    clipboard.set_data({"public.mathml": MATHML.encode("utf-8"), mac.HTML_TYPE: html.encode("utf-8")})
+    assert clipboard.read_office_equation() == ("mathml", MATHML)
     clipboard.set_data({mac.HTML_TYPE: b"<html><body><p>no equation</p></body></html>"})
     assert clipboard.read_office_equation() is None
 

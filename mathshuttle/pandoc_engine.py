@@ -651,49 +651,54 @@ _DOCX_RELS = (
     'Target="word/document.xml"/></Relationships>')
 
 
-def _alignment_run(math: ET.Element) -> Optional[ET.Element]:
-    """The first run directly in `math` that carries an alignment mark (m:rPr/m:aln), or None."""
-    run, rpr, aln = ("{%s}%s" % (OMML_NS, t) for t in ("r", "rPr", "aln"))
+def _alignment_mark(math: ET.Element) -> "Optional[tuple[ET.Element, ET.Element]]":
+    """(element, its m:aln) of the first alignment mark that is on, directly in `math`: on a run
+    (m:rPr/m:aln) or on an operator box (m:boxPr/m:aln, Word's "operator emulator"); None if none.
+    A line has one alignment point in Word; a mark with m:val 0 / off / false is off."""
+    q = lambda n: "{%s}%s" % (OMML_NS, n)  # noqa: E731
     for child in math:
-        if child.tag == run and child.find("%s/%s" % (rpr, aln)) is not None:
-            return child
+        props = {q("r"): q("rPr"), q("box"): q("boxPr")}.get(child.tag)
+        mark = child.find("%s/%s" % (props, q("aln"))) if props else None
+        if mark is not None and mark.get(q("val"), "on").strip().lower() not in ("0", "off", "false"):
+            return child, mark
     return None
 
 
 def _aligned_lines(el: ET.Element, maths: List[ET.Element]) -> ET.Element:
     """A math paragraph of lines aligned at m:aln marks (Word: "Align at =") as one m:oMathPara with an
-    m:eqArr, whose rows carry "&" at the mark: texmath reads that as an aligned block."""
-    para, math, props, eq_arr, e, rpr, aln, t = ("{%s}%s" % (OMML_NS, n) for n in (
-        "oMathPara", "oMath", "oMathParaPr", "eqArr", "e", "rPr", "aln", "t"))
-    out = ET.Element(para)
-    out.extend(copy.deepcopy(c) for c in el if c.tag == props)
-    arr = ET.SubElement(ET.SubElement(out, math), eq_arr)
+    m:eqArr whose rows have a run "&" before the marked element: texmath reads that as an aligned block."""
+    q = lambda n: "{%s}%s" % (OMML_NS, n)  # noqa: E731
+    out = ET.Element(q("oMathPara"))
+    out.extend(copy.deepcopy(c) for c in el if c.tag == q("oMathParaPr"))
+    arr = ET.SubElement(ET.SubElement(out, q("oMath")), q("eqArr"))
     for m in maths:
-        row = ET.SubElement(arr, e)
         line = copy.deepcopy(m)
-        mark = _alignment_run(line)
-        if mark is not None:
-            run_props = mark.find(rpr)
-            run_props.remove(run_props.find(aln))
-            if not len(run_props):
-                mark.remove(run_props)
-            text = mark.find(t)
-            if text is None:
-                text = ET.SubElement(mark, t)
-            text.text = "&" + (text.text or "")
-        row.extend(list(line))
+        found = _alignment_mark(line)
+        if found is not None:
+            marked, mark = found
+            props = next(p for p in marked if mark in list(p))
+            props.remove(mark)
+            if not len(props) and not props.attrib:
+                marked.remove(props)
+            separator = ET.Element(q("r"))
+            ET.SubElement(separator, q("t")).text = "&"  # a run of its own: outside \text, whatever the style
+            line.insert(list(line).index(marked), separator)
+        ET.SubElement(arr, q("e")).extend(list(line))
     return out
 
 
 def split_math_paragraph(el: ET.Element) -> List[ET.Element]:
     """An m:oMathPara holding several m:oMath (Word: a math paragraph with one equation per line) as one
     m:oMathPara per equation - texmath would read them as one product (x y) - or, when the lines are
-    aligned at marks (m:aln), as one aligned block; anything else as it is."""
+    aligned at marks (m:aln), as one aligned block; anything else as it is.  Lines with an "&" of their
+    own stay separate: in an equation array texmath would take it for an alignment point."""
     para, math, props = ("{%s}%s" % (OMML_NS, t) for t in ("oMathPara", "oMath", "oMathParaPr"))
     maths = [c for c in el if c.tag == math] if el.tag == para else []
     if len(maths) <= 1:
         return [el]
-    if any(_alignment_run(m) is not None for m in maths):
+    text = "{%s}t" % OMML_NS
+    if any(_alignment_mark(m) is not None for m in maths) and \
+            not any("&" in (t.text or "") for m in maths for t in m.iter(text)):
         return [_aligned_lines(el, maths)]
     out = []
     for m in maths:

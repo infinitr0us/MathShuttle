@@ -208,20 +208,22 @@ def capture_one(outdir: str, report: dict, raw: dict, label: str) -> None:
             print("  %-*s %9s B" % (room, _short(name + marks, room), info["size"] if info["size"] is not None else "-"))
         record["items"].append(types)
     raw[tag] = items
+    found = None
     try:
-        mathml = clipboard.read_equation_from_office()
+        record["app_found_mathml"] = bool(clipboard.read_equation_from_office())
+        found = clipboard.read_office_equation()  # what Paste from Word/PowerPoint uses (MathML, else HTML)
     except clipboard.ClipboardError as e:
-        mathml, record["app_read_error"] = None, str(e)
-    record["app_found_mathml"] = bool(mathml)
-    if mathml:
+        record["app_read_error"] = str(e)
+    if found:
+        record["app_source"] = found[0]
         try:
-            record["app_latex"] = convert(mathml, "mathml", "latex").text
+            record["app_latex"] = convert(found[1], found[0], "latex").text
         except Exception as e:  # noqa: BLE001 - recorded for the report
             record["app_latex_error"] = "%s: %s" % (type(e).__name__, e)
     print("Saved %d clipboard type(s)%s." % (count, "" if len(items) < 2 else " in %d items" % len(items)))
     print("MathShuttle's Paste from Word reads it as: %s" % (
         record.get("app_latex") or record.get("app_latex_error") or record.get("app_read_error")
-        or "nothing (no MathML type found)"))
+        or "nothing (no MathML, no equation in the HTML)"))
     report["captures"].append(record)
     save(outdir, report)
 
@@ -365,7 +367,7 @@ def save(outdir: str, report: dict) -> None:
         lines.append("")
         lines.append("App's Paste from Word/PowerPoint: %s" % (
             record.get("app_latex") or record.get("app_latex_error") or record.get("app_read_error")
-            or "no MathML type found"))
+            or "nothing (no MathML, no equation in the HTML)"))
     if report["pastes"]:
         lines += ["", "## Pastes into Office", "", "| candidate | Word | PowerPoint |", "|---|---|---|"]
         for p in report["pastes"]:

@@ -192,5 +192,8 @@ def read_equation_from_office() -> Optional[str]:
 
 
 def read_office_html() -> Optional[str]:
-    """The clipboard's "HTML Format" text (Word writes its equations into it as OMML), or None."""
-    return _decode_text(get_data(CF_HTML))
+    """The copied fragment of the clipboard's "HTML Format" (Word writes its equations into it as OMML;
+    the rest of the document is context, which may hold other equations), or None."""
+    from .office_html import cf_html_fragment
+    raw = get_data(CF_HTML)
+    return _decode_text(cf_html_fragment(raw)) if raw is not None else None
