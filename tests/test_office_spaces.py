@@ -38,6 +38,14 @@ def test_two_em_spaces_as_word_writes_them_are_a_qquad():
     assert convert(word, "mathml", "latex", wrapper="bare").text == r"d\qquad e"
 
 
+def test_commas_between_brackets_are_no_separators_for_office():
+    # Word made max(cos(a,b),0) max(cos,(a,b)0) and q(x;mu,sigma) q(x;mu;sigma) from separators
+    mathml = office_copy(r"\max(\cos(a, b), 0) + q(x;\mu,\sigma)", "latex").mathml
+    assert mathml.count('separator="false"') == 4 and "<mo>,</mo>" not in mathml
+    back = convert(mathml, "mathml", "latex", wrapper="bare").text
+    assert back == convert(r"\max(\cos(a, b), 0) + q(x;\mu,\sigma)", "latex", "latex", wrapper="bare").text or "," in back
+
+
 def test_other_mathml_keeps_its_spaces():
     mathml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi><mspace width="0.167em"/><mi>b</mi></math>'
     assert convert(mathml, "mathml", "latex", wrapper="bare").text == r"a\, b"

@@ -1456,7 +1456,17 @@ def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False,
     if for_office:
         _office_equation_arrays(root, _array_tables(eq, root))
         _office_spaces(root)
+        _office_commas(root)
     return _pretty(root)
+
+
+# Word's MathML import makes a comma or semicolon between brackets a separator of one delimiter with one
+# separator character, and gets nested ones wrong: max(cos(a,b),0) came out max(cos,(a,b)0) and
+# q(x;mu,sigma) as q(x;mu;sigma) (Word 16.0.20527).  It follows separator="false", and the content stays.
+def _office_commas(root: ET.Element) -> None:
+    for el in root.iter("{%s}mo" % MATHML_NS):
+        if (el.text or "").strip() in (",", ";") and el.get("separator") is None:
+            el.set("separator", "false")
 
 
 # Word's MathML import turns every <mspace> into one no-break space (\quad as narrow as \,), but keeps the

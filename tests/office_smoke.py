@@ -63,6 +63,9 @@ ROUND_TRIP = {
     r"\ket{\psi} = \frac{1}{\sqrt{2}} (\ket{0} + \ket{1})":
         r"\left| \psi \right\rangle = \frac{1}{\sqrt{2}}\left( \left| 0 \right\rangle + \left| 1 \right\rangle \right)",
     r"\dv{f}{x} + \pdv{f}{y}": r"\frac{\mathrm{d}f}{\mathrm{d}x} + \frac{\partial f}{\partial y}",
+    # commas and semicolons between brackets stay as they are (Word made max(cos(a,b),0) max(cos,(a,b)0)
+    # and q(x;mu,sigma) q(x;mu;sigma) before they carried separator="false")
+    r"\max(\cos(a, b), 0) + q(x;\mu,\sigma)": r"\max\left( \cos(a,b),0 \right) + q(x;\mu,\sigma)",
 }
 
 
