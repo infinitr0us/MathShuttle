@@ -4,7 +4,7 @@
     python -m mathshuttle convert -f latex -t omml [FILE]     convert FILE (or stdin) to stdout
     python -m mathshuttle copy [-f latex] [FILE]              put the equation on the clipboard for Word/PowerPoint
     python -m mathshuttle paste [-t latex] [--wrapper W]      convert the equation copied in Word/PowerPoint
-    python -m mathshuttle extract FILE [-t latex]             every equation of a .docx / .pptx / .tex / .md
+    python -m mathshuttle extract FILE [-t latex] [--docx OUT]  every equation of a .docx / .pptx / .tex / .md
     python -m mathshuttle version                             pandoc + embedded texmath version
 """
 from __future__ import annotations

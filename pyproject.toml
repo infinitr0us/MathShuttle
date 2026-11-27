@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mathshuttle"
+dynamic = ["version"]
+description = "Local LaTeX / MathML / OMML equation converter with Word and PowerPoint clipboard exchange (texmath via pandoc)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+dependencies = []  # the standard library (with tkinter for the window); pandoc is installed separately
+keywords = ["latex", "mathml", "omml", "word", "powerpoint", "equations", "pandoc", "texmath"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: MacOS X",
+    "Intended Audience :: Science/Research",
+    "Topic :: Text Processing :: Markup :: LaTeX",
+]
+
+[project.urls]
+Homepage = "https://github.com/infinitr0us/MathShuttle"
+
+[project.scripts]
+# without arguments the window, with them the command line (python -m mathshuttle)
+mathshuttle = "mathshuttle.__main__:main"
+
+[project.gui-scripts]
+# the window without a console window on Windows
+mathshuttle-gui = "mathshuttle.app:main"
+
+[tool.setuptools]
+packages = ["mathshuttle"]
+
+[tool.setuptools.dynamic]
+version = { attr = "mathshuttle.__version__" }

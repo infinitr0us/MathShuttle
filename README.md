@@ -36,6 +36,9 @@ the tool converts all 784, and 764 of them come back from Word as the same symbo
   Build it with `.\build_exe.ps1` (see below); add `-Shortcut` for a Start-menu entry.
 * `MathShuttle.pyw`: double-click to run from source with any Python ≥ 3.9 (tkinter only).
 * `python -m mathshuttle`: the same GUI; with arguments it becomes a CLI (see below).
+* `pip install git+https://github.com/infinitr0us/MathShuttle` (or `pipx install ...`): the commands
+  `mathshuttle` (the window without arguments, the CLI with them) and `mathshuttle-gui` (the window
+  without a console window on Windows). No other Python packages are needed.
 
 Requirement: **pandoc** (`winget install JohnMacFarlane.Pandoc`). The app looks for
 `pandoc.exe` next to itself, on `PATH`, then in `%LOCALAPPDATA%\Pandoc`; set
@@ -146,7 +149,9 @@ is Option, Cmd is Command.
 **Whole documents.** **Open file…** lists every equation of a `.docx`, `.pptx`, `.tex` or `.md` file
 with where it is (the heading above it, the slide and its title, the `\label`) and the sentence
 around it. From the list, use one as input, copy it for Word / PowerPoint or as LaTeX, or export
-them all to a `.tex` file; on the command line, `python -m mathshuttle extract FILE [-t FORMAT]`.
+them all to a `.tex` file, or to a Word document (`.docx`) holding each as a native equation under
+the line that says where it was, for a collaborator who edits them in Word; on the command line,
+`python -m mathshuttle extract FILE [-t FORMAT] [--docx OUT]`.
 Office equations go through the same Tidy LaTeX as a pasted one; a `.tex` file's `\input` files
 and macros are read. Equations made with the old Equation Editor 3.0 or MathType (objects
 without Office Math inside) cannot be read; their number is reported.
@@ -191,7 +196,8 @@ scoped like TeX does), `\notag`, `\def` / `\let`, `\mathbbm`, `\Bbb`, `\frak`, `
 `cases*` / `dcases*` (text column), `matrix*` (and `pmatrix*`…), `\tbinom` / `\dbinom` /
 `\nicefrac` (plain size), `\textcolor`, `\smash`, `\vphantom`, `\mathclap`. Rewrites that lose something (a colour, a strut,
 the size of a fraction) are noted in the status bar. Also corrected: texmath 0.13 writes `\mathbf{x}`
-as bold *italic*, `\|` as "parallel to" (U+2225, not the norm bar U+2016), `\setminus` as a
+as bold *italic*, `\|` and a sized `\lVert` / `\rVert` (`\left\lVert`, so also a `\norm{x}` from
+`\DeclarePairedDelimiter`) as "parallel to" (U+2225, not the norm bar U+2016), `\setminus` as a
 backslash and `\varnothing` as a diameter sign.
 
 ### Macros
@@ -236,7 +242,7 @@ python -m mathshuttle convert -f latex -t omml [--mode display|inline] [--wrappe
                                 [--macros FILE ...] [--no-tidy] [FILE]
 python -m mathshuttle copy  [-f latex] [--macros FILE ...] [--index N] [FILE]   # → clipboard, ready to paste into Office
 python -m mathshuttle paste [-t latex] [--wrapper W] [--no-tidy]    # equation copied in Office → stdout
-python -m mathshuttle extract FILE [-t latex] [--wrapper W]          # every equation of a .docx/.pptx/.tex/.md
+python -m mathshuttle extract FILE [-t latex] [--wrapper W] [--docx OUT]  # every equation of a .docx/.pptx/.tex/.md
 python -m mathshuttle version                                       # pandoc + embedded texmath version
 ```
 `FILE` defaults to stdin. Input and output are UTF-8 (also through pipes and redirection); an input
@@ -320,7 +326,7 @@ mathshuttle/
   compat.py          LaTeX texmath does not take → LaTeX it does; macro files
   tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
-  documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are
+  documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are; a .docx of them
   hotkeys.py         the system-wide hotkey (Windows: RegisterHotKey in a thread of its own)
   _hotkeys_macos.py  the hotkey on macOS (Carbon RegisterEventHotKey via ctypes)
   preview.py         the LaTeX preview (latex + dvipng)
