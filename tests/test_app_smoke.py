@@ -190,6 +190,31 @@ def test_paste_from_office_takes_omml_from_the_html(app, monkeypatch):
     assert "No equation on the clipboard" in app.status_var.get()
 
 
+def test_paste_from_office_gives_back_the_latex_it_was_copied_from(app, monkeypatch):
+    copied = []
+    monkeypatch.setattr(clipboard, "copy_mathml_for_office", lambda mathml, *a, **k: copied.append(mathml))
+    app.src_var.set("latex")
+    app.dst_var.set("mathml")
+    tex = "\\[ \\operatorname{softmax}(z)_i = \\frac{e^{z_i}}{\\sum_j e^{z_j}} \\label{eq:sm} \\]"
+    set_input(app, tex)
+    app.copy_for_office()
+    assert copied
+    monkeypatch.setattr(clipboard, "read_office_equation", lambda: ("mathml", copied[-1]))
+    app.paste_from_office()
+    assert app.dst_var.get() == "latex"
+    assert pump(app, until=lambda: "\\label{eq:sm}" in app.output.get("1.0", "end"))
+    assert "unchanged" in app.status_var.get()
+    app.wrapper_var.set("ddollar")  # another wrapper: the same LaTeX in it
+    app.convert_now()
+    assert pump(app, until=lambda: app.output.get("1.0", "end").startswith("$$"))
+    assert "\\label{eq:sm}" in app.output.get("1.0", "end")
+    app.wrapper_var.set("auto")
+    set_input(app, copied[-1].replace("<mi>z</mi>", "<mi>y</mi>"))  # edited: converted as usual
+    app.convert_now()
+    assert pump(app, until=lambda: "y" in app.output.get("1.0", "end") and "softmax" in app.output.get("1.0", "end"))
+    assert "\\label" not in app.output.get("1.0", "end") and "unchanged" not in app.status_var.get()
+
+
 def test_swap_moves_output_to_input(app):
     app.src_var.set("latex")
     app.dst_var.set("mathml")
