@@ -195,6 +195,34 @@ def test_review_round_three(text, eqs):
     assert [" ".join(e.tex.split()) for e in read_latex_text(text)[0]] == eqs
 
 
+@pytest.mark.parametrize("text, eqs", [
+    # LaTeX as v0.4.0 read it: TeX's quotes are no code, a comment is no sign, nor its maths an equation
+    ("The `inner' loop updates $x_i$ and the `outer' loop updates $y_j$.", ["x_i", "y_j"]),
+    ("Consider `A' ($a=1$), `B' ($b=2$), and `C' ($c=3$).", ["a=1", "b=2", "c=3"]),
+    ("In ``fast'' $f(x)$ and ``slow'' $g(x)$ we use $2 x$ steps.", ["f(x)", "g(x)", "2 x"]),
+    ("x = 1 % initial value", ["x = 1 % initial value"]),
+    ("f(x) = (x + 1)% old term\n+ 2", ["f(x) = (x + 1)% old term + 2"]),
+    ("We set $x = 1$% old: $x_0 = 0$ with 50% drop\nand compute $y = x^2$.", ["x = 1", "y = x^2"]),
+    ("We have $x = 1$ \\\\ % 50% old: $x_0$\nand $y = 2$.", ["x = 1", "y = 2"]),
+    # chat: numbers, tables with prices, callouts, prices per month and ranges
+    ("**Values:** $0, 1$ and $10 - 3$ and $1 - 0.5$.", ["0, 1", "10 - 3", "1 - 0.5"]),
+    ("| Plan | Price | Formula |\n| --- | --- | --- |\n| Basic | $10 | $y = 10x$ |\n| Pro | $20 | $y = 20x$ |\n",
+     ["y = 10x", "y = 20x"]),
+    ("# Notes\n\n> [!note] Key Identity\n> $$\n> E = mc^2\n> $$\n", ["E = mc^2"]),
+    ("**Cost:** $5/mo ($p$/yr).", ["p"]),
+    ("**Range:** $5-$10 ($p$ after tax).", ["p"]),
+])
+def test_final_check_cases(text, eqs):
+    assert [" ".join(e.tex.split()) for e in read_latex_text(text)[0]] == eqs
+
+
+def test_markdown_file_money_before_maths(tmp_path):
+    from mathshuttle.documents import read_document
+    md = tmp_path / "price.md"
+    md.write_text("# Pricing\n\nThe plan costs $5.00 ($p$ after tax) and $x$ is the quantity.\n", encoding="utf-8")
+    assert [f.equation.tex for f in read_document(str(md)).found] == ["p", "x"]
+
+
 def test_code_only_answer_and_picker_note(tmp_path):
     from mathshuttle.convert import office_copy
     from mathshuttle.documents import read_document

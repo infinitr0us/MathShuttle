@@ -22,7 +22,7 @@ from typing import Callable, List, Optional, Tuple
 
 from . import compat
 from .pandoc_engine import (MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _api, _collect_math, _run,
-                            markdown_maths, read_omml, split_math_paragraph)
+                            markdown_blocks, markdown_maths, read_omml, split_math_paragraph)
 
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -359,11 +359,14 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
     # a .md file: pandoc's Markdown, where \[1\] is an escaped bracket (pandoc writes [1] so), not maths
     # as in pasted chat text (MARKDOWN); raw TeX environments in it are read all the same
     markdown = fmt == "markdown"
-    out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
+    if markdown:  # (with money before maths read right: "$5.00 ($p$ after tax)")
+        blocks, err = markdown_blocks(text, "markdown", folder)
+    else:
+        out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
+        blocks = json.loads(out)["blocks"]
     result = DocumentEquations(path, "latex")
     result.notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
                      if line.startswith("[WARNING]")]
-    blocks = json.loads(out)["blocks"]
     definitions: List[str] = []  # the raw TeX definitions so far (a .md file)
     heading = ""
     for block in blocks:

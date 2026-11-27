@@ -436,17 +436,20 @@ def _mathy(tex: str) -> bool:
     """Whether what the LaTeX reader took for an equation looks like maths, not like prose that "$5 and
     $10" put between dollars: a command or an operator, or a lone variable (x, x1), and no word of three
     letters or more outside \\text and the like."""
+    tex = re.sub(r"(?<!\\)((?:\\\\)*)%[^\n]*", r"\1", tex)  # without TeX comments (x = 1 % initial value)
     bare = _TEXT_ARGUMENT.sub("", tex)
     if re.search(r"(?<![\\A-Za-z])[A-Za-z]{3,}", bare):
         return False
     return bool(_MATH_SIGN.search(tex) or re.fullmatch(r"\s*\d*[A-Za-z]\d*\s*", tex)  # x, x1, 2x
-                or re.fullmatch(r"\s*-?\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?\s*", tex)    # 42, 0.5, 1/2
+                or re.fullmatch(r"\s*-?\d[\d.,;:\s+\-*/]*\d\s*|\s*\d\s*", tex)      # 42, 1/2, 0, 1, 10 - 3
                 or re.search(r"(?<![\\A-Za-z0-9])[A-Za-z](?![A-Za-z])", bare))    # 2 x (not 5M)
 
 
 def _price(tex: str, text: str) -> bool:
     """Whether the LaTeX reader's "equation" `tex` is what lies between two prices in `text`: its
     closing $ is the start of an amount ("$5 + $10")."""
+    if re.fullmatch(r"\s*\d[\d.,]*\s*\|.*", tex, re.S):  # "$10 | $y$ |": a price in a Markdown table
+        return True
     pattern = r"\$\s*" + r"\s*".join(re.escape(t) for t in tex.split()) + r"\s*\$\d"
     return bool(tex.split()) and bool(re.search(pattern, text))
 
@@ -456,7 +459,8 @@ def _lost(latex: List[Equation], markdown: List[Equation], text: str) -> bool:
     maths; each occurrence counts ($x$ twice is two)."""
     left = collections.Counter(" ".join(e.tex.split()) for e in markdown)
     for e in latex:
-        key = " ".join(e.tex.split())
+        # (the LaTeX reader keeps the > of a Markdown quote or Obsidian callout in display maths)
+        key = " ".join(re.sub(r"(?m)^[ \t]*>[ \t]?", "", e.tex).split())
         if left[key]:
             left[key] -= 1
         elif _mathy(e.tex) and not _price(e.tex, text):
@@ -475,7 +479,9 @@ _MARKDOWN_SIGNS = re.compile(
     r"|(?<![\\$\w])\$\d+(?:[.,]\d+)*(?:[kKmMbB]n?\b|/[A-Za-z]|[.,;:!?)]?[ \t]+[A-Za-z]+\b|[.,;:!?][ \t]*(?:\$|$)"
     r"|[ \t]+\()"
     r"|\b[A-Z]{1,3}\$\d"
-    r"|(?<![`\\])`[^`\n]+(?<!\\)`(?!`)|(?<!`)``[^`'\n]+``(?!`)"         # `code`, ``code`` (not ``TeX''s)
+    # `code`, ``code``; not TeX's quotes (`inner' and `outer', ``fast'' and ``slow'')
+    r"|(?<![`\\])`(?![^`\n]*\w'['\s,.;:)!?])[^`\n]+(?<!\\)`(?!`)|(?<!`)``[^`'\n]+``(?!`)"
+    r"|^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*\|[ \t]*:?-{3,}"                  # a table's | --- | --- |"
     r"|^[ \t]*(?:```[^`\n]*|~~~[\w+.-]*[ \t]*(?:\{[^}\n]*\})?[ \t]*)\r?$"  # a fenced code block
     r"|^#{1,6}[ \t]+\S"                                                 # # a heading
     r"|(?<![\w\\^_{*])\*\*[^\s*$\\][^*\n]*?\*\*",                       # **bold**
@@ -490,7 +496,7 @@ _VERBATIM = re.compile(r"\\verb\*?([^\sa-zA-Z*])[^\n]*?\1|\\(?:url|href)\s*\{[^{
 
 # Markdown's code: a fenced block (``` or ~~~ to the same fence) and `inline code`
 _FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(?:(?<=`)[^`\n]*|(?<=~)[^\n]*)\n.*?^[ \t]*\1[`~]*[ \t]*\r?$", re.M | re.S)
-_INLINE_CODE = re.compile(r"(?<![`\\])(`+)(?!`)[^\n]+?(?<!`)\1(?!`)")
+_INLINE_CODE = re.compile(r"(?<![`\\])(`+)(?!`)(?![^`\n]*\w'['\s,.;:)!?])[^\n]+?(?<!`)\1(?!`)")
 
 
 def _without_code(text: str) -> str:
@@ -506,11 +512,31 @@ def looks_like_markdown(text: str) -> bool:
     prose = _without_code(text)
     if _COMMENT_LINE.search(prose) or _LATEX_DOCUMENT.search(prose):
         return False
-    return bool(_MARKDOWN_SIGNS.search(_TRAILING_COMMENT.sub("", _VERBATIM.sub(" ", text))))
+    return bool(_MARKDOWN_SIGNS.search(_without_tex_comments(_VERBATIM.sub(" ", text))))
 
 
-# a TeX comment after something on its line ("$x=1$ % old: $x=0$"), not "50 % of" nor "(in %)"
-_TRAILING_COMMENT = re.compile(r"(?<=[^\d\s\\])[ \t]+%(?!\))[^\n]*")
+def _without_tex_comments(text: str) -> str:
+    """The text without what can only be a TeX comment: an unescaped % after something that a percent
+    sign does not follow ("$x=1$% old", "a word % note", "\\\\ % row"); a % after a number ("50%",
+    "50 %"), after a lone letter or a ")" ("p%", "(100-p)%") or before ")" ("(in %)") stays."""
+    lines = []
+    for line in text.split("\n"):
+        at = 0
+        while True:
+            j = line.find("%", at)
+            if j < 0:
+                break
+            slashes = len(line[:j]) - len(line[:j].rstrip("\\"))
+            before = line[:j].rstrip()
+            spaced = len(before) < j
+            percent = (slashes % 2 == 1 or line[j + 1:j + 2] == ")" or before[-1:].isdigit()
+                       or (not spaced and (before.endswith(")") or re.search(r"(?<![A-Za-z\\])[A-Za-z]$", before))))
+            if not percent:
+                line = line[:j]  # a comment: the rest of the line
+                break
+            at = j + 1
+        lines.append(line)
+    return "\n".join(lines)
 
 
 # environments that only occur inside maths (an LLM writes them into Markdown without $$ at times)
@@ -575,7 +601,8 @@ def _latex_maths(source: str, cwd: Optional[str]) -> List[Equation]:
 
 # what pandoc's Markdown reader took for maths but is money: "$5.00 ($p$ after tax)" gives "5.00 (", a
 # number and then prose or an opening bracket ($42$, $1/2$, $2 x$ are maths)
-_MONEY_MATH = re.compile(r"\d[\d.,]*(?:[kKmMbB]n?)?(?:\s+\S|\s*[(;:!?])")
+_MONEY_MATH = re.compile(r"\d[\d.,]*(?:[kKmMbB]n?)?(?:/[A-Za-z]+)?(?:[ \t]*[-–][ \t]*\\?\$\d[\d.,]*)?"
+                         r"(?:\s+\S|\s*[(;:!?])")
 
 
 def _money_dollar(text: str, tex: str) -> Optional[int]:
@@ -586,24 +613,32 @@ def _money_dollar(text: str, tex: str) -> Optional[int]:
     return found.start() if found else None
 
 
-def read_markdown(text: str) -> List[Equation]:
-    """The equations of Markdown text (:data:`MARKDOWN`), in order.  An inline "equation" that is money
-    (a number, then prose) is read again with its $ escaped, so that the dollar it took as its end
-    starts the equation it belongs to."""
+def markdown_blocks(text: str, fmt: str = MARKDOWN, cwd: Optional[str] = None) -> "tuple[list, str]":
+    """pandoc's JSON blocks of Markdown text and its warnings.  An inline "equation" that is money (a
+    number, then prose: "$5.00 ($p$ after tax)" gives "5.00 (") is read again with its $ escaped, so
+    that the dollar it took as its end starts the equation it belongs to."""
     rounds = 8
     while True:
-        out, _ = _run(["-f", MARKDOWN, "-t", "json"], text.encode("utf-8"))
-        eqs: List[Equation] = []
-        markdown_maths(json.loads(out)["blocks"], eqs)
+        out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=cwd)
+        blocks = json.loads(out)["blocks"]
+        maths: List[Equation] = []
+        _collect_math(blocks, maths)
         escaped = text
-        for e in eqs:
+        for e in maths:
             if not e.display and _MONEY_MATH.match(e.tex) and not _mathy(e.tex):
                 at = _money_dollar(escaped, e.tex)
                 if at is not None:
                     escaped = escaped[:at] + "\\" + escaped[at:]
         if escaped == text or not rounds:
-            return eqs  # (the reading of the text as it is now)
+            return blocks, err  # (the reading of the text as it is now)
         text, rounds = escaped, rounds - 1
+
+
+def read_markdown(text: str) -> List[Equation]:
+    """The equations of Markdown text (:data:`MARKDOWN`), in order (:func:`markdown_blocks`)."""
+    eqs: List[Equation] = []
+    markdown_maths(markdown_blocks(text)[0], eqs)
+    return eqs
 
 
 _XML_ENTITIES = ("lt", "gt", "amp", "quot", "apos")
