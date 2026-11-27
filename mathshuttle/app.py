@@ -821,8 +821,9 @@ class App(tk.Tk):
         self._in_background(work, finished)
 
     # ---- documents ------------------------------------------------------------------------------
-    def _in_background(self, work, done) -> None:
-        """Run `work()` in a thread; call `done(value, error)` in the Tk thread when it ends."""
+    def _in_background(self, work, done, daemon: bool = True) -> None:
+        """Run `work()` in a thread; call `done(value, error)` in the Tk thread when it ends.  Not a daemon:
+        work (a file being written) that the program finishes even when its window closes first."""
         result: dict = {}
 
         def run():
@@ -831,14 +832,17 @@ class App(tk.Tk):
             except Exception as e:  # reported by `done`
                 result["error"] = e
 
-        thread = threading.Thread(target=run, daemon=True)
+        thread = threading.Thread(target=run, daemon=daemon)
         thread.start()
 
         def poll():
-            if thread.is_alive():
-                self.after(50, poll)
-            else:
-                done(result.get("value"), result.get("error"))
+            try:
+                if thread.is_alive():
+                    self.after(50, poll)
+                else:
+                    done(result.get("value"), result.get("error"))
+            except tk.TclError:
+                pass  # the window closed meanwhile (the thread still finishes its work)
 
         self.after(50, poll)
 
@@ -1112,7 +1116,7 @@ class EquationList(tk.Toplevel):
                 self.info.set(str(error).splitlines()[-1] if str(error).strip() else "Could not export")
                 return
             self.info.set("   ".join([_written(len(self.doc.found), path)] + notes))
-        self.app._in_background(lambda: write_docx(self.doc, path, macros), done)
+        self.app._in_background(lambda: write_docx(self.doc, path, macros), done, daemon=False)
 
 
 def main() -> int:

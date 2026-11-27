@@ -144,10 +144,11 @@ def _cli(argv: list[str]) -> int:
             doc = read_document(args.file)
             macros = load_macros(args.macros)
             notes = list(doc.notes) + macro_notes(macros)
-            if args.docx:  # first: an equation that -t cannot write below does not stop the Word file
+            if args.docx:  # first, and said at once: an equation that -t cannot write below does not stop it
                 from .documents import write_docx
-                notes += [n for n in write_docx(doc, args.docx, macros) if n not in notes]
-                notes.append("written to %s" % args.docx)
+                written = write_docx(doc, args.docx, macros)
+                sys.stderr.write("".join(n + "\n" for n in written) + "written to %s\n" % args.docx)
+                sys.stderr.flush()
             own = macros if doc.source == "latex" else None  # macros apply to a document's own LaTeX
             for i, found in enumerate(doc.found, 1):
                 text, new = convert_equation(found.equation, args.dst, args.wrapper, own)

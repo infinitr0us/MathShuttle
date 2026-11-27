@@ -12,6 +12,7 @@ Supported formats:  read  latex | mathml | omml
 """
 from __future__ import annotations
 
+import collections
 import copy
 import html.entities
 import io
@@ -396,12 +397,25 @@ def read_latex_text(text: str, default_display: bool = True) -> "tuple[List[Equa
         except ConversionError as e:
             failed = e
     signs = looks_like_markdown(text)
-    if (failed is not None or signs) and not _LATEX_DOCUMENT.search(_without_code(text)):
+    prose = _without_code(text)
+    if (failed is not None or signs) and not _LATEX_DOCUMENT.search(prose):
         markdown = read_markdown(text)
-        fenced = bool(_FENCE.search(text))  # code fences: Markdown for sure, whatever the LaTeX reader saw in them
-        if markdown and (failed is not None or fenced or not latex or not _lost(latex, markdown)):
+        # what the LaTeX reader finds outside Markdown's code (a chat answer's `$x$` example is none),
+        # a bare equation counting as one
+        compared = latex
+        if prose != text:
+            try:
+                compared = _read_json("latex", prose.encode("utf-8")) if _has_math_delimiters(prose) else None
+            except ConversionError:
+                compared = []
+        if compared is None:
+            # a bare equation, unless a % hid the $ of the maths ("20% of $x$"): a bare equation has $
+            # only inside \text and the like
+            hidden = re.search(r"(?<!\\)\$", _TEXT_ARGUMENT.sub("", prose))
+            compared = [] if hidden else [Equation(strip_tex(prose), default_display)]
+        if markdown and (failed is not None or not _lost(compared, markdown, text)):
             return (latex, False) if markdown == latex else (markdown, True)
-        if not markdown and signs and latex and not any(_mathy(e.tex) for e in latex):
+        if not markdown and signs and not any(_mathy(e.tex) and not _price(e.tex, text) for e in compared):
             # Markdown without maths ("$5 and $10 per month"): no equation, not a made-up one
             raise ConversionError("No equation found: this reads as Markdown text (a chat answer, notes) "
                                   "without $...$, $$...$$, \\(...\\) or \\[...\\].")
@@ -426,13 +440,28 @@ def _mathy(tex: str) -> bool:
     if re.search(r"(?<![\\A-Za-z])[A-Za-z]{3,}", bare):
         return False
     return bool(_MATH_SIGN.search(tex) or re.fullmatch(r"\s*\d*[A-Za-z]\d*\s*", tex)  # x, x1, 2x
+                or re.fullmatch(r"\s*-?\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?\s*", tex)    # 42, 0.5, 1/2
                 or re.search(r"(?<![\\A-Za-z0-9])[A-Za-z](?![A-Za-z])", bare))    # 2 x (not 5M)
 
 
-def _lost(latex: List[Equation], markdown: List[Equation]) -> bool:
-    """Whether the Markdown reading lost an equation of the LaTeX reading that looks like maths."""
-    seen = {" ".join(e.tex.split()) for e in markdown}
-    return any(" ".join(e.tex.split()) not in seen and _mathy(e.tex) for e in latex)
+def _price(tex: str, text: str) -> bool:
+    """Whether the LaTeX reader's "equation" `tex` is what lies between two prices in `text`: its
+    closing $ is the start of an amount ("$5 + $10")."""
+    pattern = r"\$\s*" + r"\s*".join(re.escape(t) for t in tex.split()) + r"\s*\$\d"
+    return bool(tex.split()) and bool(re.search(pattern, text))
+
+
+def _lost(latex: List[Equation], markdown: List[Equation], text: str) -> bool:
+    """Whether the Markdown reading lost an equation of the LaTeX reading (`text`'s) that looks like
+    maths; each occurrence counts ($x$ twice is two)."""
+    left = collections.Counter(" ".join(e.tex.split()) for e in markdown)
+    for e in latex:
+        key = " ".join(e.tex.split())
+        if left[key]:
+            left[key] -= 1
+        elif _mathy(e.tex) and not _price(e.tex, text):
+            return True
+    return False
 
 
 # Markdown, as chat answers and notes write it: $...$ and $$...$$, and \(...\) / \[...\] (MathJax's)
@@ -440,14 +469,14 @@ MARKDOWN = "markdown+tex_math_single_backslash"
 _LATEX_DOCUMENT = re.compile(r"\\documentclass\b|\\begin\s*\{document\}")
 _MARKDOWN_SIGNS = re.compile(
     # 50% of, 50 % of, (in %): a percent sign, not a comment (nor %20 in a URL)
-    r"(?<![\\\w.={])\d+(?:[.,]\d+)?[ \t]?%(?![0-9A-Fa-f]{2})[ \t]*[^\s%]|\(in[ \t]+%\)"
+    r"(?<![\\\w.={])\d+(?:[.,]\d+)?[ \t]?%(?![0-9A-Fa-f]{2})[ \t]*[^\s%]|\((?:in[ \t]+)?%\)"
     r"|(?:(?<![\\\w])[A-Za-z]|\))%[ \t]+[A-Za-z]{2,}"                   # p% confidence, (100-p)% of
     # $5 and, $5M, $5/mo, $5, $10, US$5: money
     r"|(?<![\\$\w])\$\d+(?:[.,]\d+)*(?:[kKmMbB]n?\b|/[A-Za-z]|[.,;:!?)]?[ \t]+[A-Za-z]+\b|[.,;:!?][ \t]*(?:\$|$)"
     r"|[ \t]+\()"
     r"|\b[A-Z]{1,3}\$\d"
     r"|(?<![`\\])`[^`\n]+(?<!\\)`(?!`)|(?<!`)``[^`'\n]+``(?!`)"         # `code`, ``code`` (not ``TeX''s)
-    r"|^[ \t]*(?:```|~~~)[\w+.-]*[ \t]*$"                               # a fenced code block
+    r"|^[ \t]*(?:```[^`\n]*|~~~[\w+.-]*[ \t]*(?:\{[^}\n]*\})?[ \t]*)\r?$"  # a fenced code block
     r"|^#{1,6}[ \t]+\S"                                                 # # a heading
     r"|(?<![\w\\^_{*])\*\*[^\s*$\\][^*\n]*?\*\*",                       # **bold**
     re.M)
@@ -460,7 +489,7 @@ _VERBATIM = re.compile(r"\\verb\*?([^\sa-zA-Z*])[^\n]*?\1|\\(?:url|href)\s*\{[^{
 
 
 # Markdown's code: a fenced block (``` or ~~~ to the same fence) and `inline code`
-_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})[\w+.-]*[ \t]*\n.*?^[ \t]*\1[ \t]*$", re.M | re.S)
+_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(?:(?<=`)[^`\n]*|(?<=~)[^\n]*)\n.*?^[ \t]*\1[`~]*[ \t]*\r?$", re.M | re.S)
 _INLINE_CODE = re.compile(r"(?<![`\\])(`+)(?!`)[^\n]+?(?<!`)\1(?!`)")
 
 
@@ -477,7 +506,11 @@ def looks_like_markdown(text: str) -> bool:
     prose = _without_code(text)
     if _COMMENT_LINE.search(prose) or _LATEX_DOCUMENT.search(prose):
         return False
-    return bool(_MARKDOWN_SIGNS.search(_VERBATIM.sub(" ", text)))
+    return bool(_MARKDOWN_SIGNS.search(_TRAILING_COMMENT.sub("", _VERBATIM.sub(" ", text))))
+
+
+# a TeX comment after something on its line ("$x=1$ % old: $x=0$"), not "50 % of" nor "(in %)"
+_TRAILING_COMMENT = re.compile(r"(?<=[^\d\s\\])[ \t]+%(?!\))[^\n]*")
 
 
 # environments that only occur inside maths (an LLM writes them into Markdown without $$ at times)
@@ -504,19 +537,18 @@ def markdown_maths(node, out: List[Equation], definitions: Optional[List[str]] =
             return
         if node.get("t") in ("RawBlock", "RawInline") and node["c"][0] in ("tex", "latex"):
             raw = node["c"][1]
-            if not _RAW_MATH.search(raw) and _INNER_MATH_ENV.match(raw):
+            if _INNER_MATH_ENV.match(raw):
                 raw = "\\[" + raw + "\\]"  # \begin{aligned} ... written without $$: display maths
-            if _RAW_MATH.search(raw) or "\\input" in raw or "\\include" in raw:
-                source = "\n".join(definitions + [raw]).encode("utf-8")
+            includes = re.search(r"\\(?:input|include)(?![a-zA-Z@])", raw)
+            if _RAW_MATH.search(raw) or includes:
                 try:
-                    found: List[Equation] = []
-                    _collect_math(json.loads(_run(["-f", "latex", "-t", "json"], source, cwd=cwd)[0])["blocks"],
-                                  found)
-                    out.extend(found)
+                    # after the definitions so far; their own maths (an \input file's) was found already
+                    before = len(_latex_maths("\n".join(definitions), cwd)) if definitions else 0
+                    out.extend(_latex_maths("\n".join(definitions + [raw]), cwd)[before:])
                 except ConversionError:
                     pass  # raw TeX that is not maths after all
-            elif _MACRO_DEF.search(raw) or re.search(r"\\(?:DeclareMathOperator|let)(?![a-zA-Z@])", raw):
-                definitions.append(raw)  # definitions only: for the raw TeX after it
+            if includes or _MACRO_DEF.search(raw) or re.search(r"\\(?:DeclareMathOperator|let)(?![a-zA-Z@])", raw):
+                definitions.append(raw)  # for the raw TeX after it
             return
         for v in node.values():
             markdown_maths(v, out, definitions, cwd)
@@ -525,28 +557,53 @@ def markdown_maths(node, out: List[Equation], definitions: Optional[List[str]] =
             markdown_maths(v, out, definitions, cwd)
 
 
-# what pandoc's Markdown reader took for maths but is money: "$5.00 ($p$ after tax)" gives "5.00 ("
-_MONEY_MATH = re.compile(r"\d[\d.,]*(?:[kKmMbB]n?)?(?:\s|[,;:!?(/]|\.\s|$)")
+_LATEX_MATHS_CACHE: dict = {}
+
+
+def _latex_maths(source: str, cwd: Optional[str]) -> List[Equation]:
+    """The equations pandoc's LaTeX reader finds in `source` (run in `cwd`); remembered for the walk."""
+    key = (source, cwd)
+    if key not in _LATEX_MATHS_CACHE:
+        if len(_LATEX_MATHS_CACHE) > 64:
+            _LATEX_MATHS_CACHE.clear()
+        found: List[Equation] = []
+        _collect_math(json.loads(_run(["-f", "latex", "-t", "json"], source.encode("utf-8"), cwd=cwd)[0])["blocks"],
+                      found)
+        _LATEX_MATHS_CACHE[key] = found
+    return list(_LATEX_MATHS_CACHE[key])
+
+
+# what pandoc's Markdown reader took for maths but is money: "$5.00 ($p$ after tax)" gives "5.00 (", a
+# number and then prose or an opening bracket ($42$, $1/2$, $2 x$ are maths)
+_MONEY_MATH = re.compile(r"\d[\d.,]*(?:[kKmMbB]n?)?(?:\s+\S|\s*[(;:!?])")
+
+
+def _money_dollar(text: str, tex: str) -> Optional[int]:
+    """Where in `text` the inline "equation" `tex` that is money starts: a $ that is no \\$ nor part of
+    $$, followed by `tex` and a $."""
+    pattern = r"(?<![\\$])\$\s*" + r"\s*".join(re.escape(t) for t in tex.split()) + r"\s*\$(?!\$)"
+    found = re.search(pattern, text)
+    return found.start() if found else None
 
 
 def read_markdown(text: str) -> List[Equation]:
     """The equations of Markdown text (:data:`MARKDOWN`), in order.  An inline "equation" that is money
     (a number, then prose) is read again with its $ escaped, so that the dollar it took as its end
     starts the equation it belongs to."""
-    for _ in range(4):
+    rounds = 8
+    while True:
         out, _ = _run(["-f", MARKDOWN, "-t", "json"], text.encode("utf-8"))
         eqs: List[Equation] = []
         markdown_maths(json.loads(out)["blocks"], eqs)
-        money = [e.tex for e in eqs if not e.display and _MONEY_MATH.match(e.tex) and not _mathy(e.tex)]
         escaped = text
-        for tex in money:
-            at = escaped.find("$" + tex)
-            if at >= 0 and escaped[at - 1:at] != "\\":
-                escaped = escaped[:at] + "\\" + escaped[at:]
-        if escaped == text:
-            return eqs
-        text = escaped
-    return eqs
+        for e in eqs:
+            if not e.display and _MONEY_MATH.match(e.tex) and not _mathy(e.tex):
+                at = _money_dollar(escaped, e.tex)
+                if at is not None:
+                    escaped = escaped[:at] + "\\" + escaped[at:]
+        if escaped == text or not rounds:
+            return eqs  # (the reading of the text as it is now)
+        text, rounds = escaped, rounds - 1
 
 
 _XML_ENTITIES = ("lt", "gt", "amp", "quot", "apos")

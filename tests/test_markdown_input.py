@@ -171,6 +171,47 @@ def test_markdown_file_input_is_found_next_to_it(tmp_path):
     assert [f.equation.tex for f in read_document(str(md)).found] == ["A", "P"]
 
 
+@pytest.mark.parametrize("text, eqs", [
+    # numbers are maths, not money; each occurrence counts; a price pair is no equation
+    ("**Answer:** $42$.", ["42"]),
+    ("**Ratio:** $1/2$; compare $y$.", ["1/2", "y"]),
+    ("Let $2 x$ be twice $x$. Thus $ x $ is positive.", ["2 x", "x", "x"]),
+    ("Set $ 42 $ here. 1% comment", ["42"]),
+    ("**Total:** $5 + $10 in fees. Let $t$ be the total.", ["t"]),
+    # the money $ that is escaped is the right one, and as often as needed
+    ("Compare \\$5.00 (old) to $5.00 ($p$).", ["p"]),
+    ("$$5.00 (a+b)$$ and **cost** $5.00 ($p$ after tax).", ["5.00 (a+b)", "p"]),
+    ("**Plans:** $5, $10, $15, $20, or $25 ($p$ after tax).", ["p"]),
+    # a bare equation with maths in its \mbox stays one; code is no input; a TeX comment is no sign
+    ("E = \\mbox{valid for $2 x$}", ["E = \\mbox{valid for $2 x$}"]),
+    ("Use `$x$` as the source and $y$ as the result.", ["y"]),
+    ("Example:\r\n\r\n```latex {.tex}\r\n$x$\r\n````\r\n\r\nThen $y$.\r\n", ["y"]),
+    ("Set $x=1$ % `old` choice: $x=0$\nthen $y=x$.", ["x=1", "y=x"]),
+    ("A percent (%) is the unit. $x$.", ["x"]),
+    ("**Result:** \\begin{aligned}a&=b\\\\[4pt]c&=d\\end{aligned} and $y$.",
+     ["\\begin{aligned}a&=b\\\\[4pt]c&=d\\end{aligned}", "y"]),
+])
+def test_review_round_three(text, eqs):
+    assert [" ".join(e.tex.split()) for e in read_latex_text(text)[0]] == eqs
+
+
+def test_code_only_answer_and_picker_note(tmp_path):
+    from mathshuttle.convert import office_copy
+    from mathshuttle.documents import read_document
+    from mathshuttle.pandoc_engine import ConversionError
+    with pytest.raises(ConversionError, match="No equation found"):
+        read_latex_text("Here is how:\n\n```\n$x$\n```\n")
+    eqs = input_equations("20% of $x$.", "latex")  # what the menu took: the note comes along
+    assert any("Markdown" in n for n in office_copy("20% of $x$.", "latex", eqs=eqs).notes)
+    # definitions from an \input and from a block with \$ in it carry over to the raw TeX after them
+    (tmp_path / "defs.tex").write_text("\\newcommand{\\answer}{99}\n", encoding="utf-8")
+    md = tmp_path / "n.md"
+    md.write_text("# T\n\n\\input{defs.tex}\n\n\\begin{align}\\answer&=1\\end{align}\n\n"
+                  "\\newcommand{\\myunit}{\\text{\\$}}\n\n\\begin{equation}\\myunit 5\\end{equation}\n", encoding="utf-8")
+    found = [f.equation.tex for f in read_document(str(md)).found]
+    assert len(found) == 2 and "99" in found[0] and "\\text{\\$}" in found[1]
+
+
 def test_same_reading_both_ways_gives_no_note():
     # $2 x$ looks like money to the detector, but both readers find the same: no Markdown note
     result = convert("Let $2 x$ and $y$ hold.", "latex", "mathml")

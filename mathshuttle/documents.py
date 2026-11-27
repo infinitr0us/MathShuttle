@@ -14,6 +14,7 @@ import os
 import posixpath
 import re
 import tempfile
+import time
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -431,7 +432,9 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
             tex, new = found.equation.tex, []
         if own:  # what was approximated (a colour, a resized fraction...); LaTeX from Office has none
             notes += [n for n in new if n not in notes]
-            tags |= bool(re.search(r"\\tag(?![a-zA-Z@])", re.sub(r"(?<!\\)%[^\n]*", "", tex)))
+            # (a % after an even number of backslashes starts a comment: \\% \tag{old} is one)
+            active = re.sub(r"(?<!\\)((?:\\\\)*)%[^\n]*", r"\1", tex)
+            tags |= bool(re.search(r"\\tag(?![a-zA-Z@])", active))
         kind = "DisplayMath" if found.equation.display else "InlineMath"
         blocks.append({"t": "Para", "c": [{"t": "Emph", "c": _inlines("[%d] %s" % (i, found.where))}]})
         blocks.append({"t": "Para", "c": [{"t": "Math", "c": [{"t": kind}, tex]}]})
@@ -445,7 +448,14 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
         raise ConversionError("Could not write %s: %s" % (path, e.strerror or e))
     try:
         _, err = _run(["-f", "json", "-t", "docx", "-o", part], source)
-        os.replace(part, target)
+        for attempt in range(5):
+            try:
+                os.replace(part, target)
+                break
+            except PermissionError:  # another export replacing it this moment, or open in Word
+                if attempt == 4:
+                    raise
+                time.sleep(0.1)
     except OSError as e:  # e.g. the file is open in Word
         raise ConversionError("Could not write %s: %s" % (path, e.strerror or e))
     finally:

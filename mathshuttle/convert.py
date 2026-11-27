@@ -333,9 +333,17 @@ class OfficeCopy:
     notes: List[str] = field(default_factory=list)
 
 
+class Equations(list):
+    """Equations of an input, and whether it was read as Markdown (a chat answer), for the note."""
+    as_markdown = False
+
+
 def input_equations(text: str, src: str, mode: str = "auto", tidy: bool = True) -> List[Equation]:
     """The equations of the input, in order: what "Copy for Word/PowerPoint" can copy (by index)."""
-    return _read(text, src, mode, tidy)
+    eqs, as_markdown = _read_text(text, src, mode, tidy)
+    found = Equations(eqs)
+    found.as_markdown = as_markdown
+    return found
 
 
 def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat.Macros] = None,
@@ -343,7 +351,7 @@ def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat
     """What "Copy for Word/PowerPoint" puts on the clipboard: equation `index` (0: the first) of the
     input; Word and PowerPoint paste one equation at a time.  `eqs`: the input's equations, when the
     caller read them already (:func:`input_equations` with the same arguments)."""
-    as_markdown = False
+    as_markdown = getattr(eqs, "as_markdown", False)  # (eqs from input_equations)
     if eqs is None:
         eqs, as_markdown = _read_text(text, src, mode, tidy)
     if not 0 <= index < len(eqs):
