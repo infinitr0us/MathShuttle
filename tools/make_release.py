@@ -45,14 +45,22 @@ def _python_licence() -> str:
                         os.path.join(base, "share", "doc", ver, "LICENSE.txt")])
 
 
-def _tcl_licence() -> "tuple[str, str]":
+def _tcl_tk_licences() -> "tuple[str, str, str]":
+    """(Tcl's licence file, Tk's, the Tcl version) for the Tcl/Tk that tkinter uses: the installation's
+    license.terms where it has them (Anaconda keeps Tk's), else the copies in tools/licenses, taken from
+    the Tcl and Tk 9.0 sources (uv's and other standalone Pythons ship none)."""
     import tkinter
-    library = tkinter.Tcl().eval("info library")  # e.g. .../tcl/tcl8.6 or .../lib/tcl9.0
+    tcl = tkinter.Tcl()
+    library = tcl.eval("info library")  # e.g. .../tcl/tcl8.6 or .../lib/tcl9.0
     parent = os.path.dirname(library)
     tk = os.path.join(parent, os.path.basename(library).replace("tcl", "tk"))
-    path = _first_file([os.path.join(library, "license.terms"), os.path.join(parent, "license.terms"),
-                        os.path.join(tk, "license.terms")])
-    return path, tkinter.Tcl().eval("info patchlevel")
+    ours = os.path.join(ROOT, "tools", "licenses")
+    found = []
+    for candidates, fallback in (
+            ([os.path.join(library, "license.terms"), os.path.join(parent, "license.terms")], "tcl-license.terms"),
+            ([os.path.join(tk, "license.terms"), os.path.join(tk, "demos", "license.terms")], "tk-license.terms")):
+        found.append(next((p for p in candidates if os.path.isfile(p)), os.path.join(ours, fallback)))
+    return found[0], found[1], tcl.eval("info patchlevel")
 
 
 def _pyinstaller_licence() -> "tuple[str, str]":
@@ -63,7 +71,7 @@ def _pyinstaller_licence() -> "tuple[str, str]":
 
 def notices(target: str) -> str:
     python = _python_licence()
-    tcl, tcl_version = _tcl_licence()
+    tcl, tk, tcl_version = _tcl_tk_licences()
     pyinstaller, pyinstaller_version = _pyinstaller_licence()
     if target == "windows":
         install = "winget install JohnMacFarlane.Pandoc"
@@ -79,7 +87,8 @@ def notices(target: str) -> str:
              "pandoc is NOT included: install it separately (%s); it is GPL-2.0-or-later.\n" % install]
     for title, path in (
             ("Python %s (%s)" % (platform.python_version(), where_python), python),
-            ("Tcl and Tk %s (%s); Tcl and Tk are distributed under the same terms" % (tcl_version, where_tcl), tcl),
+            ("Tcl %s (%s)" % (tcl_version, where_tcl), tcl),
+            ("Tk %s (%s)" % (tcl_version, where_tcl), tk),
             ("PyInstaller %s bootloader (%s): GPL 2.0 with the PyInstaller exception, which allows "
              "distributing it with programs under any licence" % (pyinstaller_version, launcher), pyinstaller)):
         with open(path, encoding="utf-8", errors="replace") as f:
