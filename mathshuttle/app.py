@@ -564,19 +564,20 @@ class App(tk.Tk):
 
     def paste_from_office(self) -> None:
         try:
-            mathml = clipboard.read_equation_from_office()
+            found = clipboard.read_office_equation()
         except clipboard.ClipboardError as e:
             self._set_status(str(e), error=True)
             return
-        if not mathml:
+        if not found:
             self._set_status("No equation on the clipboard  -  select an equation in Word / PowerPoint and press %s+C first"
                              % KEY, error=True)
             return
-        self.src_var.set("mathml")
-        if self.dst_var.get() == "mathml":
+        src, text = found  # MathML, or OMML from the HTML that Word copies with a selection of text
+        self.src_var.set(src)
+        if self.dst_var.get() == src:
             self.dst_var.set("latex")
         self.input.delete("1.0", "end")
-        self.input.insert("1.0", mathml)
+        self.input.insert("1.0", text)
         self.input.edit_modified(False)
         self.convert_now()
 
@@ -728,12 +729,15 @@ class App(tk.Tk):
         def work():
             # what was copied: if something else is copied while this converts, it is not overwritten
             sequence = clipboard.sequence_number()
-            mathml = clipboard.read_equation_from_office()
+            found = clipboard.read_office_equation()
             text = clipboard.get_text() or ""
-            src = "mathml" if mathml else ("mathml" if re.search(r"<(\w+:)?math\b", text) else
-                                            "omml" if re.search(r"<m:oMath", text) else "latex")
+            if found:
+                src, text = found
+            else:
+                src = ("mathml" if re.search(r"<(\w+:)?math\b", text) else
+                       "omml" if re.search(r"<m:oMath", text) else "latex")
             if src != "latex":
-                latex = convert(mathml or text, src, "latex", mode, wrapper, tidy=tidy).text
+                latex = convert(text, src, "latex", mode, wrapper, tidy=tidy).text
                 clipboard.set_text(latex, expect_sequence=sequence)
                 return "LaTeX copied: %s" % " ".join(latex.split())[:70], False
             if not text.strip():

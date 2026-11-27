@@ -101,3 +101,15 @@ def copy_mathml_for_office(mathml: str, plain_text: Optional[str] = None, expect
 def read_equation_from_office() -> Optional[str]:
     """MathML of an equation copied from Word / PowerPoint / OneNote, or None if there is none."""
     return _backend().read_equation_from_office()
+
+
+def read_office_equation() -> Optional[Tuple[str, str]]:
+    """What "Paste from Word/PowerPoint" converts: ("mathml", MathML) of an equation copied in Office;
+    failing that ("omml", OMML) of the equations in the HTML that Word copies along (a selection of text
+    with equations in it, or lines that Mac Word copies without MathML); None if neither is there."""
+    mathml = read_equation_from_office()
+    if mathml:
+        return "mathml", mathml
+    from .office_html import omml_from_html
+    omml = omml_from_html(_backend().read_office_html())
+    return ("omml", omml) if omml else None

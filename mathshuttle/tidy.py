@@ -568,4 +568,17 @@ def tidy_tex(tex: str, display: bool) -> str:
     out = _norm_bars(out)
     out = _bold_numbers(out)
     out = _raw_greek(out)
-    return out
+    return _edge_spaces(out)
+
+
+# a (no-break) space typed at the start or end of an equation in Word: texmath writes "~"
+_EDGE_TILDES_START = re.compile(r"((?:^|\\\\|\\begin\s*\{[a-zA-Z*]+\})[ \t\r\n]*)~(?:[ \t\r\n]*~)*[ \t]*")
+_EDGE_TILDES_END = re.compile(r"(?<!\\)~(?:[ \t\r\n]*~)*[ \t]*(?=[ \t\r\n]*(?:$|\\\\|\\end\s*\{))")
+
+
+def _edge_spaces(tex: str) -> str:
+    """Drop the "~" of a space at the very start or end of the equation, or of a line in an aligned
+    block: Word keeps the space typed after the last symbol, LaTeX authors do not write it."""
+    out = _EDGE_TILDES_END.sub("", tex)
+    out = _EDGE_TILDES_START.sub(lambda m: m.group(1), out)
+    return out if out.strip() else tex

@@ -121,11 +121,12 @@ def _cli(argv: list[str]) -> int:
             clipboard.copy_mathml_for_office(copy.mathml)  # the plain text must be the MathML too (see there)
             sys.stderr.write("".join(n + "\n" for n in copy.notes) or "Equation copied - paste it into Word / PowerPoint.\n")
         elif args.cmd == "paste":
-            mathml = clipboard.read_equation_from_office()
-            if not mathml:
+            found = clipboard.read_office_equation()
+            if not found:
                 sys.stderr.write("No equation on the clipboard (copy one in Word / PowerPoint first).\n")
                 return 2
-            sys.stdout.write(convert(mathml, "mathml", args.dst, args.mode, args.wrapper, tidy=args.tidy).text + "\n")
+            src, text = found
+            sys.stdout.write(convert(text, src, args.dst, args.mode, args.wrapper, tidy=args.tidy).text + "\n")
         elif args.cmd == "extract":
             from .documents import read_document
             doc = read_document(args.file)

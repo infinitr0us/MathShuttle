@@ -66,6 +66,7 @@ def register_format(name: str) -> int:
 
 CF_MATHML = register_format("MathML")
 CF_MATHML_PRESENTATION = register_format("MathML Presentation")
+CF_HTML = register_format("HTML Format")  # UTF-8, after a header of byte offsets
 
 
 class _Open:
@@ -188,3 +189,8 @@ def read_equation_from_office() -> Optional[str]:
         if mathml and re.search(r"<(\w+:)?math\b", mathml):  # other programs may write <mml:math>
             return mathml
     return None
+
+
+def read_office_html() -> Optional[str]:
+    """The clipboard's "HTML Format" text (Word writes its equations into it as OMML), or None."""
+    return _decode_text(get_data(CF_HTML))

@@ -53,14 +53,17 @@ Finder does not get the shell's `PATH`, so pandoc is also looked for in `/opt/ho
 Control (Cmd+Shift+C, Cmd+Shift+V, Cmd+Return); the settings are kept in
 `~/Library/Application Support/MathShuttle/settings.json`.
 
+**Word / PowerPoint for Mac** (16.115, checked with `tools/mac_office_probe.py`): the clipboard code
+uses the general pasteboard (NSPasteboard, through the Objective-C runtime with ctypes). Word copies an
+equation as MathML under `public.mathml` and `public.mathml.presentation`; Word pastes from either,
+PowerPoint only from `public.mathml`. *Copy for Word/PowerPoint* writes both, and the MathML as plain
+text too: without the plain text, PowerPoint puts the equation into a new text box of its own instead
+of the one you clicked into. For a selection of text with equations in it, and for lines aligned at
+`=`, Mac Word copies no MathML; *Paste from Word/PowerPoint* then reads the equations from the HTML it
+copies along. macOS may ask once before the app reads what another app copied (paste privacy).
+
 Not there yet:
 
-* **Word / PowerPoint for Mac.** The clipboard code uses the general pasteboard (NSPasteboard, through
-  the Objective-C runtime with ctypes), but which pasteboard types Mac Office uses for an equation is
-  still to be found out with Office at hand. Until then *Copy for Word/PowerPoint* puts the MathML under
-  a few candidate types (`MATHML_TYPES` in `mathshuttle/_clipboard_macos.py`) and as plain text, and
-  *Paste from Word/PowerPoint* reads any type whose name contains `mathml`. macOS may ask once before
-  the app reads what another app copied (paste privacy).
 * **The hotkey**: Windows only for now; its checkbox says so.
 * A standalone app: `build_exe.ps1` builds the Windows `.exe` only.
 
@@ -80,7 +83,10 @@ columns read like an alignment (`\begin{array}{rl} x &= 1`, or `{rcl}` with rela
 **Paste from Word/PowerPoint** (Ctrl+Shift+V): the tool reads the MathML that Office put on the
 clipboard and converts it (to LaTeX by default; any other target works too). Equation arrays
 that Office exports as a bare `<mtable>` are recognised and come back as `aligned`, not `matrix`
-(continuation lines such as `&+ c` included).
+(continuation lines such as `&+ c` included). When Word copies no MathML (a sentence with
+equations in it selected, or on the Mac lines aligned at `=`), the equations are read from the
+HTML that Word copies along, where they are stored as OMML; lines aligned at `=` come back as one
+`aligned` block.
 
 With **Tidy LaTeX** (on by default; `--no-tidy` on the command line), the LaTeX is what an author
 would write rather than texmath's literal rendering of Office's structure:
@@ -95,7 +101,8 @@ would write rather than texmath's literal rendering of Office's structure:
 | cases | `\left\{ \begin{matrix} … \right.` | `\begin{cases} … \end{cases}` |
 | ℓ, set minus, ∅, bold numbers | `\mathcal{l}`, `\backslash`, `\varnothing`, `\mathbf{2}\mathbf{5}.\mathbf{2}` | `\ell`, `\setminus`, `\emptyset`, `\mathbf{25.2}` |
 
-Also: no `\limits` on sums in display maths, no empty scripts (`x_{i}^{}`). Each result is checked to
+Also: no `\limits` on sums in display maths, no empty scripts (`x_{i}^{}`), no `~` for the space typed
+after the last symbol of an equation (Word keeps it). Each result is checked to
 convert again; if a clean-up would break an equation, texmath's own LaTeX is kept.
 
 What Word itself loses (checked with Word / PowerPoint 16.0.20527, so no tool can bring it back from
@@ -240,14 +247,19 @@ searched for `pandoc.exe`, and an `MATHSHUTTLE_PANDOC` that names no file is an 
 python -m pytest tests                  # unit + pandoc round trips + headless GUI (needs pandoc, a desktop)
 python tests\office_smoke.py            # optional: real Word + PowerPoint via COM (needs pywin32, Office)
 python tools\capture_word_fixtures.py   # optional: re-capture tests\fixtures\word from your Word
+python tools/mac_office_probe.py        # macOS, interactive: what Mac Word / PowerPoint copy and paste
 ```
+The Mac probe asks you to copy equations in Word and PowerPoint and saves every pasteboard type it
+finds, then puts candidates on the pasteboard one at a time for you to paste and rate; the results go
+to `probe-out/` (not tracked).
 The Office smoke test pastes into hidden Word/PowerPoint instances, copies the equation back,
 converts it to LaTeX and closes everything without saving. These overwrite the clipboard, and so do
 the clipboard tests in pytest (deselect them with `-k "not copy_for_office and not clipboard"`).
 On macOS the Windows-only tests (the hotkey) are skipped, and the pasteboard tests
 (`tests/test_clipboard_macos.py`) read back only what they wrote themselves.
 `tests\fixtures\word` holds what Word 16.0.20527 really writes (MathML and OMML) for typical
-equations typed into it; the tidy tests run on those.
+equations typed into it; the tidy tests run on those. `tests/fixtures/mac_word` holds what Mac Word
+16.115 copies (MathML, and the HTML fragment with the OMML).
 
 ### What Word does with the clipboard (16.0.20527)
 
@@ -270,8 +282,9 @@ mathshuttle/
   hotkeys.py         the system-wide hotkey (RegisterHotKey in a thread of its own; Windows only for now)
   preview.py         the LaTeX preview (latex + dvipng)
   clipboard.py       the clipboard the app uses; loads the platform's backend on first use
-  _clipboard_win32.py  Win32 clipboard via ctypes: "MathML" format in/out
-  _clipboard_macos.py  macOS pasteboard via the Objective-C runtime (ctypes); MathML types to be confirmed
+  office_html.py     the OMML of the equations in the HTML that Word copies (when it copies no MathML)
+  _clipboard_win32.py  Win32 clipboard via ctypes: "MathML" format in/out, "HTML Format" in
+  _clipboard_macos.py  macOS pasteboard via the Objective-C runtime (ctypes): public.mathml in/out, public.html in
   app.py             tkinter GUI
   __main__.py        GUI / CLI entry
 ```

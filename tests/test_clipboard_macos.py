@@ -91,8 +91,22 @@ def test_read_equation_wants_mathml():
 
 
 def test_mathml_types_on_puts_candidates_first():
-    on = ["public.utf8-plain-text", "org.example.mathml", "MathML", "com.microsoft.MathML"]
-    assert mac._mathml_types_on(on) == ["com.microsoft.MathML", "MathML", "org.example.mathml"]
+    on = ["public.utf8-plain-text", "org.example.mathml", "public.mathml.presentation", "public.mathml"]
+    assert mac._mathml_types_on(on) == ["public.mathml", "public.mathml.presentation", "org.example.mathml"]
+
+
+def test_read_office_equation_falls_back_to_the_html():
+    # what Mac Word copies for lines aligned at "=": the MathML types without data, the OMML in the HTML
+    html = ("<html><body><p class=MsoNormal><!--[if gte msEquation 12]><m:oMath><i><span lang=EN-CA>"
+            "<m:r>x</m:r></span></i></m:oMath><![endif]--><![if !msEquation]><img src=x><![endif]></p></body></html>")
+    clipboard.set_data({"public.mathml": b"", mac.HTML_TYPE: html.encode("utf-8"), mac.TEXT_TYPE: "x"})
+    assert clipboard.read_equation_from_office() is None
+    src, omml = clipboard.read_office_equation()
+    assert src == "omml" and '<m:t xml:space="preserve">x</m:t>' in omml
+    clipboard.copy_mathml_for_office(MATHML)  # MathML, when there is some, comes first
+    assert clipboard.read_office_equation() == ("mathml", clipboard.read_equation_from_office())
+    clipboard.set_data({mac.HTML_TYPE: b"<html><body><p>no equation</p></body></html>"})
+    assert clipboard.read_office_equation() is None
 
 
 def test_works_from_another_thread():

@@ -23,19 +23,23 @@ from typing import Dict, List, Optional, Tuple, Union
 # shared by the platform backends: the exceptions the app catches, the decoding of registered formats
 from .clipboard import _XML_DECL, ClipboardChanged, ClipboardError, _decode_text
 
-# The pasteboard types an equation may travel under, in the order they are read.  Stage 2 (at the Mac,
-# with Word / PowerPoint) confirms which of them Mac Office really writes and reads; until then these are
-# candidates: a generic UTI, the "com.microsoft." + Windows format name pattern that Office for Mac uses
-# for its other clipboard formats, and the Windows names themselves.  Reading also takes any other type
-# whose name contains "mathml" (any case); writing puts the MathML under all of these and as plain text.
+# The pasteboard types an equation travels under, in the order they are read.  Found with Word and
+# PowerPoint 16.115 on macOS 27.2 (tools/mac_office_probe.py, 2026-11-26):
+# * Word copies an equation as MathML (UTF-8, no XML declaration) under both of these, next to RTF,
+#   HTML (with the OMML), PDF and OLE types.  For a selection with text, or a math paragraph of several
+#   aligned lines, it writes no MathML (the types may be listed with no data): read_office_html().
+# * Word pastes an equation from either type; PowerPoint only from public.mathml.  With MathML and no
+#   plain text, PowerPoint puts the equation into a new text box of its own instead of the one with the
+#   cursor.  With the MathML as plain text as well (as on Windows), both paste in place; Word and
+#   PowerPoint also turn plain-text MathML, or $...$ LaTeX, into an equation by themselves.
+# Reading also takes any other type whose name contains "mathml" (any case); writing puts the MathML
+# under these and as plain text.
 MATHML_TYPES = (
     "public.mathml",
-    "com.microsoft.MathML",
-    "com.microsoft.MathML-Presentation",
-    "MathML",
-    "MathML Presentation",
+    "public.mathml.presentation",
 )
 TEXT_TYPE = "public.utf8-plain-text"  # NSPasteboardTypeString
+HTML_TYPE = "public.html"
 
 _objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
 ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")  # defines NSPasteboard (Tk loads it too)
@@ -223,3 +227,8 @@ def read_equation_from_office() -> Optional[str]:
         if mathml and re.search(r"<(\w+:)?math\b", mathml):  # other programs may write <mml:math>
             return mathml
     return None
+
+
+def read_office_html() -> Optional[str]:
+    """The HTML on the pasteboard (Word writes its equations into it as OMML), or None."""
+    return _decode_text(get_data(HTML_TYPE))
