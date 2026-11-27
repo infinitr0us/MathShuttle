@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from typing import List, Optional, Sequence
 
 _FLAGS = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
@@ -184,7 +185,18 @@ def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
                             "eq.dvi"], cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS, env=t.get("env"))
         if p.returncode or not os.path.exists(os.path.join(job, "eq.png")):
             raise PreviewError("dvipng failed: " + p.stderr.decode("utf-8", "replace").strip()[-200:])
-        os.replace(os.path.join(job, "eq.png"), png)
+        for attempt in range(5):
+            try:
+                os.replace(os.path.join(job, "eq.png"), png)
+                break
+            except PermissionError:
+                # Windows: another render of the same equation put it there and the window is reading
+                # it (or a virus scanner holds it) - that picture is the same one
+                if os.path.exists(png):
+                    break
+                if attempt == 4:
+                    raise
+                time.sleep(0.1)
         return png
     except subprocess.TimeoutExpired:
         raise PreviewError("LaTeX did not finish within 40 s")
