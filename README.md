@@ -148,7 +148,10 @@ without Office Math inside) cannot be read; their number is reported.
 
 MathML input may also come from elsewhere: prefixed elements (`<mml:math>`, as written by
 Word's XSLT, MathType or JATS journal XML), named entities (`&InvisibleTimes;`, from
-Mathematica / Maple), several documents each with its own XML declaration.
+Mathematica / Maple), several documents each with its own XML declaration. MathML that carries its
+TeX source as an annotation (MathType, pages rendered with KaTeX or MathJax, the *TeX annotation*
+option) is converted from what it shows; if the annotation shows other symbols, the equation was
+edited after the TeX was written, and a note says so.
 
 Tip: LaTeX **→** OMML text output is still there for people who work with the XML directly
 (`document.xml`, python-docx, …); for pasting into Office use the clipboard route above, since

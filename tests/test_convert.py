@@ -478,3 +478,43 @@ def test_cli_copy_index(monkeypatch, capsys, tmp_path):
     assert main(["copy", "--index", "3", str(source)]) == 1
     assert "no equation 3: the input has 2" in capsys.readouterr().err
     assert main(["copy", "--index", "0", str(source)]) == 1
+
+
+# ---- a TeX annotation that does not match its MathML ------------------------------------------
+ANNOTATED = ('<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics>%s'
+             '<annotation encoding="application/x-tex">%s</annotation></semantics></math>')
+
+
+@pytest.mark.parametrize("shown, tex, stale", [
+    ("<msup><mi>y</mi><mn>2</mn></msup>", "x^2", True),                       # edited after the TeX
+    ("<mi>a</mi><mo>=</mo><mi>b</mi>", "a \\neq b", True),
+    ("<munderover><mo>&#x2211;</mo><mrow><mi>i</mi><mo>=</mo><mn>0</mn></mrow><mi>n</mi></munderover>",
+     "\\sum_{i=1}^{n}", True),
+    ("<msup><mi>x</mi><mn>2</mn></msup>", "x^2", False),
+    # other renderers, same equation: math italic, \cdot, an accent character, spacing, \sin, \mathbb
+    ("<mi>&#x1D465;</mi><mo>&#x22C5;</mo><mi>y</mi>", "x \\cdot y", False),
+    ("<mover><mi>x</mi><mo>&#x02C6;</mo></mover>", "\\hat{x}", False),
+    ("<mfrac><mi>a</mi><mi>b</mi></mfrac><mspace width='0.167em'/><mi>d</mi><mi>x</mi>",
+     "\\frac{a}{b}\\,\\mathrm{d}x", False),
+    ("<mi>sin</mi><mo>&#x2061;</mo><mi>x</mi>", "\\sin x", False),
+    ("<mi mathvariant='double-struck'>R</mi>", "\\mathbb{R}", False),
+    ("<mi>x</mi>", "\\notdefinedhere{x}", False),                             # unreadable: not compared
+])
+def test_stale_tex_annotation(shown, tex, stale):
+    from mathshuttle.convert import annotation_notes
+    math = ANNOTATED % ("<mrow>%s</mrow>" % shown, tex)
+    assert bool(annotation_notes(math)) == stale
+    result = convert(math, "mathml", "latex")
+    assert any("may be out of date" in n for n in result.notes) == stale
+
+
+def test_stale_annotation_conversion_follows_the_mathml():
+    result = convert(ANNOTATED % ("<mrow><msup><mi>y</mi><mn>2</mn></msup></mrow>", "x^2"), "mathml", "latex")
+    assert result.text == "\\[ y^{2} \\]"
+
+
+def test_annotation_written_by_mathshuttle_matches():
+    from mathshuttle.convert import annotation_notes
+    for tex in ("\\frac{\\partial f}{\\partial x} + \\sum_{i=1}^{n} \\mathbf{x}_i^2",
+                "\\hat{\\theta} = \\arg\\min_x f(x)", "\\vec{v} \\cdot \\bar{w} \\neq 0"):
+        assert annotation_notes(convert(tex, "latex", "mathml", annotate=True).text) == []

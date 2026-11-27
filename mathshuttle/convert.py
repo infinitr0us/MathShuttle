@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from . import compat, latex_wrap, tidy as _tidy
 from .pandoc_engine import (READ_FORMATS, WRITE_FORMATS, ConversionError, Equation,  # noqa: F401
-                            read_equations, write_equation, write_mathml)
+                            drop_annotations, parse_mathml, read_equations, strip_tex, write_equation,
+                            write_mathml)
 
 FORMAT_LABELS = {
     "latex": "LaTeX",
@@ -129,7 +131,60 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
                      "\\label in this wrapper - edit them, or choose the align wrapper.")
     if src == "latex" and dst != "latex":
         _add(notes, macro_notes(macros))
+    if src == "mathml" and "annotation" in text:
+        _add(notes, annotation_notes(text, macros))
     return Result(eqs, outputs, notes)
+
+
+# characters that differ between renderers but not in meaning (NFKC takes care of 𝑥 / x, ϕ / φ, … / ...)
+_SAME_SYMBOL = str.maketrans({"⋅": "·", "∙": "·", "−": "-", "∗": "*", "∣": "|", "⁡": None, "⁢": None,
+                              "⁣": None, "⁤": None, "​": None})
+
+
+def _symbols(math) -> str:
+    """The symbols a <math> shows, in order, for comparing two renderings of an equation: no spacing,
+    no invisible operators, font variants folded (NFKC), and no accent marks (an <mo> over or under
+    something: renderers write \\hat, \\bar, \\vec with different characters)."""
+    out: List[str] = []
+
+    def walk(el) -> None:
+        tag = el.tag.rsplit("}", 1)[-1]
+        out.append(el.text or "")
+        for k, child in enumerate(el):
+            if not (tag in ("mover", "munder", "munderover") and k > 0 and child.tag.rsplit("}", 1)[-1] == "mo"):
+                walk(child)
+            out.append(child.tail or "")
+    walk(math)
+    text = unicodedata.normalize("NFKC", "".join(out)).translate(_SAME_SYMBOL)
+    return "".join(ch for ch in text if not ch.isspace())
+
+
+def annotation_notes(text: str, macros: Optional[compat.Macros] = None) -> List[str]:
+    """MathML that carries its TeX source as an annotation (MathType, KaTeX / MathJax pages, the "TeX
+    annotation" option): a note for each <math> whose annotation shows other symbols than the MathML
+    itself, which the conversion follows - it was edited after the TeX was written.  An annotation
+    that cannot be read (macros not given) is not compared."""
+    try:
+        maths = parse_mathml(text)
+    except ConversionError:
+        return []
+    notes: List[str] = []
+    for i, math in enumerate(maths, 1):
+        tex = drop_annotations(math)
+        if not tex or not tex.strip():
+            continue
+        try:
+            prepared, _ = for_texmath(Equation(strip_tex(tex), True), "latex", macros)
+            annotated = parse_mathml(write_equation(prepared, "mathml"))[0]
+        except ConversionError:
+            continue
+        if _symbols(math) != _symbols(annotated):
+            short = " ".join(tex.split())
+            short = short if len(short) <= 60 else short[:57] + "..."
+            which = "" if len(maths) == 1 else " of equation %d" % i
+            notes.append("The TeX annotation%s (%s) does not show what the MathML shows: it may be out of date. "
+                         "The LaTeX here is what the MathML shows." % (which, short))
+    return notes
 
 
 def convert_equation(eq: Equation, dst: str, wrapper: str = "auto", macros: Optional[compat.Macros] = None,

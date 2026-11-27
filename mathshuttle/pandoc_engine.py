@@ -534,12 +534,9 @@ def _converts(tex: str, display: bool) -> bool:
         return False
 
 
-def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True) -> List[Equation]:
-    """Equations in MathML.  With `tidy`, identifiers that texmath would misread (upright names,
-    function names, bold italic symbols, binomials) come back as the LaTeX an author writes
-    (:mod:`tidy`); an equation for which that does not give valid TeX is read as texmath reads it."""
-    if not text.strip():
-        raise ConversionError("The input is empty.")
+def parse_mathml(text: str) -> List[ET.Element]:
+    """The outermost <math> elements of MathML input (prefixes and namespaces stripped, as pandoc
+    wants them; named entities as numeric ones)."""
     body = _named_entities_to_numeric(_strip_xml_prolog(text))
     try:
         # the mml prefix is declared so that a pasted <mml:math> fragment parses without its declaration
@@ -549,9 +546,25 @@ def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True)
     maths = _outermost(root, lambda el: isinstance(el.tag, str) and _local(el.tag) == "math")
     if not maths:
         raise ConversionError("No <math> element found in the MathML input.")
-    annotations: List[Optional[str]] = []
     for math in maths:
         _strip_namespaces(math)  # pandoc only recognises a bare <math>, not <mml:math>
+    return maths
+
+
+def drop_annotations(math: ET.Element) -> Optional[str]:
+    """Remove the annotations of a parsed <math> (:func:`parse_mathml`); its TeX annotation, if any."""
+    return _drop_annotations(math)
+
+
+def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True) -> List[Equation]:
+    """Equations in MathML.  With `tidy`, identifiers that texmath would misread (upright names,
+    function names, bold italic symbols, binomials) come back as the LaTeX an author writes
+    (:mod:`tidy`); an equation for which that does not give valid TeX is read as texmath reads it."""
+    if not text.strip():
+        raise ConversionError("The input is empty.")
+    maths = parse_mathml(text)
+    annotations: List[Optional[str]] = []
+    for math in maths:
         annotations.append(_drop_annotations(math))
         if fix_office_alignment:
             _mark_equation_array_alignment(math)
