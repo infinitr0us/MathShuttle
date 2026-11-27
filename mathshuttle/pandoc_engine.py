@@ -479,12 +479,13 @@ def _cell_start(cell: ET.Element, ns: str) -> Optional[str]:
 
 
 def _mark_equation_array_alignment(math: ET.Element) -> bool:
-    """Word/PowerPoint export an equation array as an <mtable> without any alignment
-    attributes, which texmath turns into ``\\begin{matrix}``.  When the table has the
-    shape of an aligned block (every row = 2 cells, the second one empty or starting with an
-    operator or a space - a continuation line such as ``&+ c`` - and at least one of them
-    starting with a relation), add ``columnalign`` so that texmath emits ``\\begin{aligned}``.
-    Returns True if changed."""
+    """Older Word / PowerPoint (and other programs) export an equation array as an <mtable> without
+    any alignment attributes, which texmath turns into ``\\begin{matrix}``.  (Word 16.0.20527 writes
+    columnalign right / left on each cell itself.)  When the table has the shape of an aligned block,
+    add ``columnalign`` so that texmath emits ``\\begin{aligned}``: every row has the same even number
+    of cells, read as right / left pairs (``a &= b & c &= d``), and in each pair the left-aligned cell
+    of every row is empty or starts with an operator or a space (a continuation line such as ``&+ c``)
+    and in at least one row with a relation.  Returns True if changed."""
     ns = math.tag[:math.tag.index("}") + 1] if math.tag.startswith("{") else ""
     node = math
     while len(node) == 1 and node[0].tag in (ns + "mrow", ns + "semantics", ns + "mstyle"):
@@ -495,24 +496,20 @@ def _mark_equation_array_alignment(math: ET.Element) -> bool:
     table = tables[0]
     if table.get("columnalign"):
         return False
-    rows = [r for r in table if r.tag == ns + "mtr"]
+    rows = [[c for c in r if c.tag == ns + "mtd"] for r in table if r.tag == ns + "mtr"]
     if not rows:
         return False
-    relations = 0
-    for row in rows:
-        cells = [c for c in row if c.tag == ns + "mtd"]
-        if len(cells) != 2 or any(c.get("columnalign") for c in cells):
-            return False
-        start = _cell_start(cells[1], ns)
-        if start is None:
-            return False
-        relations += start == "relation"
-    if not relations:
+    width = len(rows[0])
+    if width < 2 or width % 2 or any(len(cells) != width or any(c.get("columnalign") for c in cells)
+                                     for cells in rows):
         return False
-    for row in rows:
-        cells = [c for c in row if c.tag == ns + "mtd"]
-        cells[0].set("columnalign", "right")
-        cells[1].set("columnalign", "left")
+    for left in range(1, width, 2):  # each right / left pair: its left-aligned cells
+        starts = [_cell_start(cells[left], ns) for cells in rows]
+        if None in starts or "relation" not in starts:
+            return False
+    for cells in rows:
+        for i, cell in enumerate(cells):
+            cell.set("columnalign", "left" if i % 2 else "right")
     return True
 
 

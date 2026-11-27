@@ -406,6 +406,29 @@ def test_relations_of_office_equation_arrays():
         assert convert(word % (row % mo, row % mo), "mathml", "latex", wrapper="bare").text.startswith("\\begin{matrix}"), op
 
 
+def test_office_equation_arrays_with_several_alignment_pairs():
+    # Word 16.0.20527's export of a \begin{aligned} a &= b & c &= d ... typed into it, without the
+    # columnalign attributes (older Word, other programs): right / left pairs
+    cell = "<mtd>%s</mtd>"
+    math = '<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mtable columnspacing="0em">%s</mtable></math>'
+
+    def table(*rows):
+        return math % "".join("<mtr>%s</mtr>" % "".join(cell % c for c in r) for r in rows)
+
+    pairs = table(["<mi>a</mi>", "<mo>=</mo><mi>b</mi>", "<mi>c</mi>", "<mo>=</mo><mi>d</mi>"],
+                  ["<mi>e</mi>", "<mo>=</mo><mi>f</mi>", "<mo>&#x2003;</mo><mi>g</mi>", "<mo>=</mo><mi>h</mi>"])
+    assert convert(pairs, "mathml", "latex", wrapper="bare").text == \
+        "\\begin{aligned}\na & = b & c & = d \\\\\ne & = f & \\quad g & = h\n\\end{aligned}"
+    # a second pair without a relation in its left-aligned cells, an odd width, ragged rows: matrices
+    values = table(["<mi>a</mi>", "<mo>=</mo><mi>b</mi>", "<mn>1</mn>", "<mn>2</mn>"],
+                   ["<mi>e</mi>", "<mo>=</mo><mi>f</mi>", "<mn>3</mn>", "<mn>4</mn>"])
+    odd = table(["<mi>a</mi>", "<mo>=</mo><mi>b</mi>", "<mi>c</mi>"], ["<mi>e</mi>", "<mo>=</mo><mi>f</mi>", "<mi>g</mi>"])
+    ragged = table(["<mi>a</mi>", "<mo>=</mo><mi>b</mi>", "<mi>c</mi>", "<mo>=</mo><mi>d</mi>"],
+                   ["<mi>e</mi>", "<mo>=</mo><mi>f</mi>"])
+    for m in (values, odd, ragged):
+        assert convert(m, "mathml", "latex", wrapper="bare").text.startswith("\\begin{matrix}")
+
+
 # ---- errors ------------------------------------------------------------------------------------
 def test_errors_are_reported():
     with pytest.raises(ConversionError) as e:
