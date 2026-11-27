@@ -49,6 +49,20 @@ ROUND_TRIP = {
     "\\operatorname{softmax}(z) + \\binom{n}{k}": "\\mathrm{softmax}(z) + \\binom{n}{k}",
     # a norm is written with U+2016 now (texmath writes \| as U+2225); texmath reads a pair of them as \left\| \right\|
     "\\|v\\|_2 + P_{\\rm{OOD}}": "\\left\\| v \\right\\|_{2} + P_{\\mathrm{OOD}}",
+    # 0.6.0: the glyphs Office gets for these, and what comes back (\iff is written as its ⟺)
+    r"a \leqslant b \geqslant c, \quad A \amalg B": r"a \leqslant b \geqslant c,\quad A \amalg B",
+    # spaces go to Office as Unicode spaces, which it keeps (an <mspace> becomes one no-break space)
+    r"a \, b \; c \quad d \qquad e": r"a\, b\; c\quad d\qquad e",
+    r"x \longrightarrow y \iff z \Longrightarrow w": r"x \longrightarrow y \Longleftrightarrow z \Longrightarrow w",
+    r"\lVert v \rVert_2": r"\left\| v \right\|_{2}",  # Word makes the pair a delimiter (as for \|v\|)
+    # an arrow between operands comes back without \left. \right.
+    r"f: A \to B, \quad x \mapsto x^2": r"f:A \rightarrow B,\quad x \mapsto x^{2}",
+    r"x \coloneqq \hbar \omega, \quad a \preceq b": r"x \coloneqq \hbar\omega,\quad a \preceq b",
+    # built-in packs (physics)
+    # (Word makes the parentheses around the kets a delimiter pair too)
+    r"\ket{\psi} = \frac{1}{\sqrt{2}} (\ket{0} + \ket{1})":
+        r"\left| \psi \right\rangle = \frac{1}{\sqrt{2}}\left( \left| 0 \right\rangle + \left| 1 \right\rangle \right)",
+    r"\dv{f}{x} + \pdv{f}{y}": r"\frac{\mathrm{d}f}{\mathrm{d}x} + \frac{\partial f}{\partial y}",
 }
 
 

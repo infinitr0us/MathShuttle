@@ -141,7 +141,10 @@ What Word itself loses (checked with Word / PowerPoint 16.0.20527, so no tool ca
 the clipboard): its MathML import turns every **bold Latin letter bold italic** (`\mathbf{x}` comes
 back as `\boldsymbol{x}`; Word's *own* LaTeX paste keeps it upright), stores an operator name as
 upright text, not as a function (`\operatorname{f}` comes back as `\mathrm{f}`), and drops `\tag`
-numbers (the tool says so when it copies one).
+numbers (the tool says so when it copies one). It also makes every MathML space (`<mspace>`) one
+ordinary space, so *Copy for Word/PowerPoint* gives `\,`, `\;`, `\quad`, `\qquad` as the Unicode
+spaces Office keeps (thin, thick, em space), and they come back as the same commands; `\!` is left
+out (Office has no negative space).
 
 **LaTeX preview.** With a LaTeX installation on `PATH` (MiKTeX or TeX Live: `latex` and `dvipng`),
 a strip above the buttons shows the equation as LaTeX sets it: what you typed when converting from

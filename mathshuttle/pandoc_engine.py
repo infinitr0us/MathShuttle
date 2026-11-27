@@ -878,6 +878,7 @@ def read_mathml(text: str, fix_office_alignment: bool = True, tidy: bool = True)
     annotations: List[Optional[str]] = []
     for math in maths:
         annotations.append(_drop_annotations(math))
+        _unicode_spaces(math)
         if fix_office_alignment:
             _mark_equation_array_alignment(math)
     raw = [_serialize_math(m) for m in maths]
@@ -1454,7 +1455,61 @@ def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False,
             ann.text = source
     if for_office:
         _office_equation_arrays(root, _array_tables(eq, root))
+        _office_spaces(root)
     return _pretty(root)
+
+
+# Word's MathML import turns every <mspace> into one no-break space (\quad as narrow as \,), but keeps the
+# Unicode spaces Office's own \thinsp, \medsp, \thicksp, \emsp give; read back by width (_unicode_spaces)
+_SPACE_CHARS = [(1.0, " "), (0.5, " "), (0.333, " "), (0.278, " "), (0.222, " "),
+                (0.167, " ")]
+_SPACE_WIDTHS = {" ": 1.0, " ": 0.5, " ": 0.333, " ": 0.278, " ": 0.222,
+                 " ": 0.167, " ": 0.167}
+
+
+def _office_spaces(root: ET.Element) -> None:
+    """<mspace width="1.0em"/> -> <mo>U+2003</mo> (and so on) for Word / PowerPoint; a negative space,
+    which Office cannot show, is left out (Word would make it a positive one)."""
+    for parent in list(root.iter()):
+        for child in list(parent):
+            if child.tag != "{%s}mspace" % MATHML_NS:
+                continue
+            m = re.fullmatch(r"\s*(-?\d*\.?\d+)\s*em\s*", child.get("width") or "")
+            if not m:
+                continue
+            width, chars = float(m.group(1)), ""
+            if width > 0:
+                chars = " " * int(width + 0.02)
+                rest = width - int(width + 0.02)
+                if rest > 0.08:
+                    chars += min(_SPACE_CHARS, key=lambda wc: abs(wc[0] - rest))[1]
+            if not chars:
+                parent.remove(child)
+                continue
+            mo = ET.Element("{%s}mo" % MATHML_NS)
+            mo.text, mo.tail = chars, child.tail
+            parent[list(parent).index(child)] = mo
+
+
+def _unicode_spaces(math: ET.Element) -> None:
+    """<mo> / <mtext> holding only Unicode spaces (what Office keeps, see _office_spaces) -> <mspace> of
+    their width, which texmath reads as \\, \\; \\quad \\qquad... (namespaces already stripped)."""
+    for el in math.iter():
+        if el.tag in ("mo", "mtext") and el.text and len(el) == 0 and all(c in _SPACE_WIDTHS for c in el.text):
+            width = sum(_SPACE_WIDTHS[c] for c in el.text)
+            el.tag, el.text = "mspace", None
+            el.attrib.clear()
+            el.set("width", ("%.3f" % width).rstrip("0").rstrip(".") + "em")
+    # Word writes \qquad's two em spaces as two elements: one space of their width (\qquad, not \quad\quad)
+    for parent in math.iter():
+        children = list(parent)
+        for a, b in zip(children, children[1:]):
+            if a.tag == b.tag == "mspace" and a in list(parent):
+                wa = re.fullmatch(r"(-?\d*\.?\d+)em", a.get("width") or "")
+                wb = re.fullmatch(r"(-?\d*\.?\d+)em", b.get("width") or "")
+                if wa and wb:
+                    b.set("width", ("%.3f" % (float(wa.group(1)) + float(wb.group(1)))).rstrip("0").rstrip(".") + "em")
+                    parent.remove(a)
 
 
 def mathml_elements(eqs: List[Equation]) -> List[Optional[ET.Element]]:
