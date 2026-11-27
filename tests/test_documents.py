@@ -96,10 +96,30 @@ def test_export_to_word_notes_and_failures(tmp_path, monkeypatch):
     assert out.read_bytes() == b"old" and os.listdir(str(tmp_path)) == ["x.docx"]
 
 
+def test_export_to_word_passes_on_what_was_approximated(tmp_path):
+    from mathshuttle.documents import DocumentEquations, Found, write_docx
+    from mathshuttle.pandoc_engine import Equation
+    latex = DocumentEquations("x.tex", "latex", [Found(Equation("\\textcolor{red}{y} + \\tbinom{n}{k}", True), "A")])
+    notes = write_docx(latex, str(tmp_path / "a.docx"))
+    assert any("colour" in n for n in notes) and len(notes) == len(set(notes))
+    office = DocumentEquations("x.docx", "office", [Found(Equation("a \\tag{1}", True), "A")])
+    assert write_docx(office, str(tmp_path / "b.docx")) == []  # LaTeX from Office: no LaTeX-input notes
+
+
+def test_extract_command_checks_macro_files(tmp_path):
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    p = subprocess.run([sys.executable, "-m", "mathshuttle", "extract", os.path.join(DOCS, "paper.tex"),
+                        "--macros", str(tmp_path / "missing.tex"), "--docx", str(tmp_path / "x.docx")],
+                       cwd=ROOT, capture_output=True, env=env)
+    assert p.returncode == 1 and "does not exist" in p.stderr.decode("utf-8")
+    assert not (tmp_path / "x.docx").exists()
+
+
 def test_sized_norm_bars_are_norms():
     from mathshuttle.compat import for_texmath
     from mathshuttle.pandoc_engine import Equation, write_mathml
-    for tex in ("\\left\\lVert x \\right\\rVert", "\\bigl\\lVert x \\bigr\\rVert", "\\Bigl\\| x \\Bigr\\|"):
+    for tex in ("\\left\\lVert x \\right\\rVert", "\\bigl\\lVert x \\bigr\\rVert", "\\Bigl\\| x \\Bigr\\|",
+                "\\left( P \\middle\\lVert Q \\right)", "\\left% a comment\n\\lVert x \\right\\rVert"):
         mathml = write_mathml(Equation(for_texmath(tex)[0], True))
         assert "‖" in mathml and "∥" not in mathml, tex
     assert "∥" in write_mathml(Equation(for_texmath("a \\parallel b")[0], True))  # parallel stays

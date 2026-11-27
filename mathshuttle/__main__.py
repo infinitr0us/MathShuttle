@@ -14,7 +14,7 @@ import os
 import sys
 
 from .compat import load_macros
-from .convert import MODES, convert, convert_equation, office_copy
+from .convert import MODES, convert, convert_equation, macro_notes, office_copy
 
 # how a line of comment (the equation's place in the document) is written in each output format
 _COMMENT = {"latex": "%% %s", "mathml": "<!-- %s -->", "omml": "<!-- %s -->", "typst": "// %s", "eqn": '.\\" %s'}
@@ -138,17 +138,20 @@ def _cli(argv: list[str]) -> int:
                 sys.stderr.write(note + "\n")
         elif args.cmd == "extract":
             from .documents import read_document
+            for path in args.macros:
+                if not os.path.isfile(path):
+                    raise InputError("macro file %s does not exist" % path)
             doc = read_document(args.file)
             macros = load_macros(args.macros)
-            notes = list(doc.notes)
+            notes = list(doc.notes) + macro_notes(macros)
+            if args.docx:  # first: an equation that -t cannot write below does not stop the Word file
+                from .documents import write_docx
+                notes += [n for n in write_docx(doc, args.docx, macros) if n not in notes]
+                notes.append("written to %s" % args.docx)
             for i, found in enumerate(doc.found, 1):
                 text, new = convert_equation(found.equation, args.dst, args.wrapper, macros)
                 notes += [n for n in new if n not in notes]
                 sys.stdout.write(_comment(args.dst, "[%d] %s" % (i, found.where)) + "\n" + text + "\n\n")
-            if args.docx:
-                from .documents import write_docx
-                notes += [n for n in write_docx(doc, args.docx, macros) if n not in notes]
-                notes.append("written to %s" % args.docx)
             sys.stderr.write("".join(n + "\n" for n in notes) + "%d equation(s) in %s\n" % (
                 len(doc.found), os.path.basename(args.file)))
         elif args.cmd == "version":

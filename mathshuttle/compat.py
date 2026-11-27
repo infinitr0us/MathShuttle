@@ -272,12 +272,14 @@ def _rename(tex: str, table: Dict[str, str], hits: List[str]) -> str:
         pos = m.start() + len(new)
 
 
-_SIZED_NORM = re.compile(r"(\\(?:left|right|[bB]igg?[lrm]?)" + _CS + r"\s*)\\[lr]Vert" + _CS)
+_SIZED_NORM = re.compile(r"(\\(?:left|right|middle|[bB]igg?[lrm]?)" + _CS + _GAP.pattern + r")\\[lr]Vert" + _CS)
 
 
 def _sized_norms(tex: str) -> str:
-    """texmath 0.13 writes a sized \\lVert / \\rVert (\\left\\lVert, \\bigr\\rVert...) as U+2225 PARALLEL
-    TO, not the norm bar U+2016 that it writes for \\Vert there (and for \\lVert alone)."""
+    """texmath 0.13 writes a sized \\lVert / \\rVert (\\left\\lVert, \\middle\\lVert, \\bigr\\rVert...) as
+    U+2225 PARALLEL TO, not the norm bar U+2016 that it writes for \\Vert there (and for \\lVert alone).
+    With \\bigl and the like, texmath then writes the bars as plain symbols rather than a delimiter pair,
+    as it already did for \\bigl\\| (the size is fixed there anyway)."""
     pos = 0
     while True:
         m = _find(tex, _SIZED_NORM, pos)

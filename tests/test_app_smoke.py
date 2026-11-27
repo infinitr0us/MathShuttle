@@ -359,8 +359,8 @@ def test_open_document_lists_and_uses_equations(app, tmp_path):
         text = target.read_text(encoding="utf-8")
         assert "% [1] slide 1: Objective" in text and "% [2] slide 2: Update rule" in text
         word = tmp_path / "out.docx"
-        win.export_docx(str(word))
-        assert "2 equations written to" in win.info.get()
+        win.export_docx(str(word))  # in the background
+        assert pump(app, seconds=20, until=lambda: "2 equations written to" in win.info.get())
         from mathshuttle.documents import read_document
         assert len(read_document(str(word)).found) == 2
         win.destroy()

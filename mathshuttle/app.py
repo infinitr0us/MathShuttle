@@ -982,6 +982,10 @@ class Toast(tk.Toplevel):
         self.after(ms, self.destroy)
 
 
+def _written(count: int, path: str) -> str:
+    return "%d equation%s written to %s" % (count, "" if count == 1 else "s", path)
+
+
 class EquationList(tk.Toplevel):
     """The equations of a document: use one as input, copy it for Office or as LaTeX, export all."""
 
@@ -1085,7 +1089,7 @@ class EquationList(tk.Toplevel):
         except OSError as e:
             self.info.set("Could not write %s: %s" % (path, e.strerror or e))
             return
-        self.info.set("%d equations written to %s" % (len(self.doc.found), path))
+        self.info.set(_written(len(self.doc.found), path))
 
     def export_docx(self, path: Optional[str] = None) -> None:
         """All the equations as native equations in a Word document, each under where it was."""
@@ -1096,12 +1100,19 @@ class EquationList(tk.Toplevel):
         if not path:
             return
         from .documents import write_docx
-        try:
-            notes = write_docx(self.doc, path, self.app._macros())
-        except (ConversionError, PandocNotFound) as e:
-            self.info.set(str(e).splitlines()[-1] if str(e).strip() else "Could not export")
-            return
-        self.info.set("   ".join(["%d equations written to %s" % (len(self.doc.found), path)] + notes))
+        macros = self.app._macros()
+        self.info.set("Writing %s..." % os.path.basename(path))
+
+        def done(notes, error) -> None:
+            if not self.winfo_exists():
+                return
+            if error is not None:
+                if not isinstance(error, (ConversionError, PandocNotFound)):
+                    raise error
+                self.info.set(str(error).splitlines()[-1] if str(error).strip() else "Could not export")
+                return
+            self.info.set("   ".join([_written(len(self.doc.found), path)] + notes))
+        self.app._in_background(lambda: write_docx(self.doc, path, macros), done)
 
 
 def main() -> int:

@@ -13,13 +13,14 @@ import json
 import os
 import posixpath
 import re
+import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
 
 from . import compat
-from .pandoc_engine import (MARKDOWN, MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _api, _collect_math, _run,
+from .pandoc_engine import (MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _api, _collect_math, _run,
                             markdown_definitions, markdown_maths, read_omml, split_math_paragraph)
 
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
@@ -354,8 +355,10 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
     folder = os.path.dirname(os.path.abspath(path))
     with open(path, "rb") as f:
         text = decode_text(f.read())
+    # a .md file: pandoc's Markdown, where \[1\] is an escaped bracket (pandoc writes [1] so), not maths
+    # as in pasted chat text (MARKDOWN); raw TeX environments in it are read all the same
     markdown = fmt == "markdown"
-    out, err = _run(["-f", MARKDOWN if markdown else fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
+    out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
     result = DocumentEquations(path, "latex")
     result.notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
                      if line.startswith("[WARNING]")]
@@ -418,25 +421,36 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
     the file as LaTeX text.  The file is written next to `path` first and then put in its place, so a
     failed export leaves an older file as it was."""
     blocks: list = [{"t": "Header", "c": [1, ["", [], []], _inlines("Equations of " + os.path.basename(doc.path))]}]
+    own = doc.source == "latex"
+    notes: List[str] = []
     tags = False
     for i, found in enumerate(doc.found, 1):
-        tex, _ = compat.for_texmath(found.equation.tex, macros if doc.source == "latex" else None, "omml")
-        tags |= bool(re.search(r"\\tag(?![a-zA-Z@])", tex))
+        tex, new = compat.for_texmath(found.equation.tex, macros if own else None, "omml")
+        if own:  # what was approximated (a colour, a resized fraction...); LaTeX from Office has none
+            notes += [n for n in new if n not in notes]
+            tags |= bool(re.search(r"\\tag(?![a-zA-Z@])", tex))
         kind = "DisplayMath" if found.equation.display else "InlineMath"
         blocks.append({"t": "Para", "c": [{"t": "Emph", "c": _inlines("[%d] %s" % (i, found.where))}]})
         blocks.append({"t": "Para", "c": [{"t": "Math", "c": [{"t": kind}, tex]}]})
     source = json.dumps({"pandoc-api-version": _api(), "meta": {}, "blocks": blocks}).encode("utf-8")
-    part = os.path.abspath(path) + ".part"
+    target = os.path.abspath(path)
+    try:  # a name of its own next to the target (two exports at once do not meet)
+        handle, part = tempfile.mkstemp(dir=os.path.dirname(target), prefix="." + os.path.basename(target) + ".",
+                                        suffix=".part")
+        os.close(handle)
+    except OSError as e:
+        raise ConversionError("Could not write %s: %s" % (path, e.strerror or e))
     try:
         _, err = _run(["-f", "json", "-t", "docx", "-o", part], source)
-        os.replace(part, path)
+        os.replace(part, target)
     except OSError as e:  # e.g. the file is open in Word
         raise ConversionError("Could not write %s: %s" % (path, e.strerror or e))
     finally:
-        if os.path.exists(part):
+        try:
             os.remove(part)
-    notes = []
-    failed = err.count("Could not convert TeX math")
+        except OSError:
+            pass  # moved into place, or held for a moment by a virus scanner
+    failed = len(re.findall(r"^\[WARNING\] Could not convert TeX math", err, re.M))
     if failed:
         notes.append("%d equation%s could not be converted; %s in the file as LaTeX text."
                      % (failed, "" if failed == 1 else "s", "it is" if failed == 1 else "they are"))

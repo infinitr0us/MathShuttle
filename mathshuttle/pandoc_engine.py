@@ -285,7 +285,9 @@ _PANDOC_MATH_ENVS = frozenset(
 _STARRED_CASES = frozenset(("cases*", "dcases*", "rcases*", "drcases*"))
 # spaces and comments, which LaTeX skips between a command and its argument
 _TEX_GAP = r"(?:\s|%[^\n]*\n)*"
-_LATEX_TOKEN = re.compile(r"\\begin" + _TEX_GAP + r"\{([^{}]*)\}|\\[a-zA-Z@]+|\\.|%[^\n]*|[{}$]", re.S)
+# (\verb|...| and \url{...} hold their text verbatim: a % in them is no comment)
+_LATEX_TOKEN = re.compile(r"\\begin" + _TEX_GAP + r"\{([^{}]*)\}|\\verb\*?([^\sa-zA-Z*])[^\n]*?\2"
+                          r"|\\(?:url|href)\s*\{[^{}]*\}|\\[a-zA-Z@]+|\\.|%[^\n]*|[{}$]", re.S)
 # commands whose argument is text even inside maths, so that it may hold nested $...$
 _TEXT_IN_MATH = frozenset(
     "\\text \\mbox \\hbox \\makebox \\fbox \\framebox \\raisebox \\parbox \\textrm \\textit \\textbf \\textsf "
@@ -377,50 +379,91 @@ def read_latex_text(text: str, default_display: bool = True) -> "tuple[List[Equa
     are recognised by pandoc's LaTeX reader; \\newcommand definitions in the
     input are expanded.  Input with no delimiters at all is taken as one bare
     equation in the `default_display` mode (texmath handles its macros itself).
-    Text that looks like Markdown (:func:`looks_like_markdown`: "50% of", "$5 and", `code`, **bold**)
-    is read as Markdown, where % is a percent sign and $ next to a number is money; so is text that
-    pandoc's LaTeX reader cannot read at all.
+
+    Text that looks like Markdown (:func:`looks_like_markdown`: "50% of", "$5 and", `code`, **bold**),
+    and text that pandoc's LaTeX reader cannot read at all, is read as Markdown too, where % is a
+    percent sign and $ next to a number is money.  The Markdown reading is taken unless the LaTeX
+    reading found maths that it lost (`$ a + b $` with spaces, which Markdown does not take as maths,
+    or an equation after a "1% comment"): then the text was LaTeX after all.
     """
     if not text.strip():
         raise ConversionError("The input is empty.")
-    if looks_like_markdown(text):
-        eqs = read_markdown(text)
-        if eqs:
-            return eqs, True
+    latex: Optional[List[Equation]] = None  # None: no delimiters (a bare equation)
+    failed: Optional[ConversionError] = None
     if _has_math_delimiters(text):
         try:
-            eqs = _read_json("latex", text.encode("utf-8"))
-        except ConversionError:
-            eqs = read_markdown(text) if not _LATEX_DOCUMENT.search(text) else []
-            if not eqs:
-                raise
-            return eqs, True
-        if eqs:
-            return eqs, False
+            latex = _read_json("latex", text.encode("utf-8"))
+        except ConversionError as e:
+            failed = e
+    if (failed is not None or looks_like_markdown(text)) and not _LATEX_DOCUMENT.search(text):
+        markdown = read_markdown(text)
+        if markdown and (failed is not None or not latex or not _lost(latex, markdown)):
+            return (latex, False) if markdown == latex else (markdown, True)
+    if failed is not None:
+        raise failed
+    if latex:
+        return latex, False
     return [Equation(strip_tex(text), default_display)], False
+
+
+# what LaTeX maths has and prose does not
+_MATH_SIGN = re.compile(r"\\[a-zA-Z]+|[\^_=<>+|]")
+_TEXT_ARGUMENT = re.compile(r"\\(?:text\w*|math(?:rm|it|bf|sf|tt|cal|bb|frak)|operatorname\*?|mbox|begin|end)"
+                            r"\s*\{[^{}]*\}")
+
+
+def _mathy(tex: str) -> bool:
+    """Whether what the LaTeX reader took for an equation looks like maths, not like prose that "$5 and
+    $10" put between dollars: a command or an operator, or a lone variable (x, x1), and no word of three
+    letters or more outside \\text and the like."""
+    bare = _TEXT_ARGUMENT.sub("", tex)
+    if re.search(r"(?<![\\A-Za-z])[A-Za-z]{3,}", bare):
+        return False
+    return bool(_MATH_SIGN.search(tex)) or bool(re.fullmatch(r"\s*\d*[A-Za-z]\d*\s*", tex))  # x, x1, 2x
+
+
+def _lost(latex: List[Equation], markdown: List[Equation]) -> bool:
+    """Whether the Markdown reading lost an equation of the LaTeX reading that looks like maths."""
+    seen = {" ".join(e.tex.split()) for e in markdown}
+    return any(" ".join(e.tex.split()) not in seen and _mathy(e.tex) for e in latex)
 
 
 # Markdown, as chat answers and notes write it: $...$ and $$...$$, and \(...\) / \[...\] (MathJax's)
 MARKDOWN = "markdown+tex_math_single_backslash"
 _LATEX_DOCUMENT = re.compile(r"\\documentclass\b|\\begin\s*\{document\}")
 _MARKDOWN_SIGNS = re.compile(
-    r"(?<![\\\w.])\d+(?:[.,]\d+)?%[ \t]*[^\s%]"                         # 50% of: a percent sign, no comment
-    r"|(?<![\\$\w])\$\d+(?:[.,]\d+)*[.,;:!?)]?[ \t]+[A-Za-z]{2,}\b"     # $5 and: money
-    r"|(?<!`)`[^`'\n]+`(?!`)"                                           # `code`
-    r"|^[ \t]*(?:```|~~~)"                                              # a fenced code block
+    # 50% of, 50 % of, (in %): a percent sign, not a comment (nor %20 in a URL)
+    r"(?<![\\\w.={])\d+(?:[.,]\d+)?[ \t]?%(?![0-9A-Fa-f]{2})[ \t]*[^\s%]|\(in[ \t]+%\)"
+    r"|(?<=[A-Za-z)])%[ \t]+[A-Za-z]{2,}"                               # p% confidence, (100-p)% of
+    # $5 and, $5M, $5/mo, $5, $10, US$5: money
+    r"|(?<![\\$\w])\$\d+(?:[.,]\d+)*(?:[kKmMbB]n?\b|/[A-Za-z]|[.,;:!?)]?[ \t]+[A-Za-z]+\b|[.,;:!?][ \t]*(?:\$|$)"
+    r"|[ \t]+\()"
+    r"|\b[A-Z]{1,3}\$\d"
+    r"|(?<![`\\])`[^`\n]+(?<!\\)`(?!`)|(?<!`)``[^`'\n]+``(?!`)"         # `code`, ``code`` (not ``TeX''s)
+    r"|^[ \t]*(?:```|~~~)[\w+.-]*[ \t]*$"                               # a fenced code block
     r"|^#{1,6}[ \t]+\S"                                                 # # a heading
-    r"|(?<![\w\\^_{*])\*\*[A-Za-z][^*\n]*?\*\*",                        # **bold**
+    r"|(?<![\w\\^_{*])\*\*[^\s*$\\][^*\n]*?\*\*",                       # **bold**
     re.M)
-
-
 _COMMENT_LINE = re.compile(r"^[ \t]*%.*$", re.M)
 
 
+# LaTeX's verbatim text, where a % or # is no sign of anything
+_VERBATIM = re.compile(r"\\verb\*?([^\sa-zA-Z*])[^\n]*?\1|\\(?:url|href)\s*\{[^{}]*\}"
+                       r"|\\begin\s*\{(verbatim\*?|lstlisting|minted)\}.*?\\end\s*\{\2\}", re.S)
+
+
 def looks_like_markdown(text: str) -> bool:
-    """Whether pasted text is Markdown rather than LaTeX: outside LaTeX comment lines it has what LaTeX
-    source does not (a percent sign after a number with text after it, money, `code`, a code fence, a
-    # heading, **bold**), and it is not a LaTeX document."""
-    return bool(_MARKDOWN_SIGNS.search(_COMMENT_LINE.sub("", text))) and not _LATEX_DOCUMENT.search(text)
+    """Whether pasted text may be Markdown rather than LaTeX: outside LaTeX comment lines and verbatim
+    text it has what LaTeX source rarely does (a percent sign after a number, money, `code`, a code
+    fence, a # heading, **bold**); a line that is a LaTeX comment, or a LaTeX document, says LaTeX."""
+    if _COMMENT_LINE.search(text) or _LATEX_DOCUMENT.search(text):
+        return False
+    return bool(_MARKDOWN_SIGNS.search(_VERBATIM.sub(" ", text)))
+
+
+# environments that only occur inside maths (an LLM writes them into Markdown without $$ at times)
+_INNER_MATH_ENV = re.compile(r"\s*\\begin\s*\{(?:aligned|alignedat|gathered|split|cases|dcases|rcases|array|"
+                             r"[pbBvV]?matrix|smallmatrix)\}")
 
 
 def markdown_maths(node, out: List[Equation], definitions: str = "") -> None:
@@ -430,10 +473,13 @@ def markdown_maths(node, out: List[Equation], definitions: str = "") -> None:
     if isinstance(node, dict):
         if node.get("t") == "Math":
             kind, tex = node["c"]
-            out.append(Equation(strip_tex(tex), kind["t"] == "DisplayMath"))
+            if tex.strip():  # not the \[ \] of a task list
+                out.append(Equation(strip_tex(tex), kind["t"] == "DisplayMath"))
             return
         if node.get("t") in ("RawBlock", "RawInline") and node["c"][0] in ("tex", "latex"):
             raw = node["c"][1]
+            if not _has_math_delimiters(raw) and _INNER_MATH_ENV.match(raw):
+                raw = "\\[" + raw + "\\]"  # \begin{aligned} ... written without $$: display maths
             if _has_math_delimiters(raw):
                 try:
                     out.extend(_read_json("latex", (definitions + "\n" + raw).encode("utf-8")))

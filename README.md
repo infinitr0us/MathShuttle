@@ -188,7 +188,11 @@ contain (`50% of`, `$5 and`, `` `code` ``, `**bold**`, a `#` heading or a code f
 `%` comment lines) is read as Markdown: `%` is a percent sign there, `$5` is money, code spans hold
 no maths, and the equations are those in `$…$`, `$$…$$`, `\(…\)`, `\[…\]` and environments such as
 `\begin{align}` written straight into the text. So is text that the LaTeX reader cannot read at all
-(unpaired `$`). The status bar says when this happened. `.md` files are read the same way.
+(unpaired `$`). The text is read both ways, though: if the Markdown reading misses maths that the
+LaTeX one finds (`$ a + b $` with spaces, which Markdown does not take as maths), the text was LaTeX
+after all. The status bar says when the Markdown reading was used. `.md` files are read as pandoc's
+Markdown, with environments written into the text; there `\(…\)` and `\[…\]` are escaped brackets
+(pandoc itself writes `[1]` as `\[1\]`), not maths.
 
 **LaTeX that texmath does not know** is rewritten before conversion (the LaTeX output keeps what
 you wrote): plain-TeX font switches (`{\rm OOD}`, `\rm{OOD}`, `\bf`, `\it`, `\cal`, `\sf`, `\tt`,
