@@ -368,6 +368,52 @@ def test_open_document_lists_and_uses_equations(app, tmp_path):
         del app._show_equations
 
 
+def test_large_document_filters_selection_and_exports(app, tmp_path):
+    from mathshuttle.documents import DocumentEquations, Found
+    from mathshuttle.pandoc_engine import Equation
+
+    found = [Found(Equation("x", False), "Intro") for _ in range(2996)]
+    found += [Found(Equation("x", True), "Results"), Found(Equation("x", True), "Results"),
+              Found(Equation(r"Y\label{eq:y}"), "Results  [eq:y]"), Found(Equation("z", True), "Appendix")]
+    win = app._show_equations(DocumentEquations("thesis.tex", "latex", found, labels={"eq:y": "2.1"}))
+    try:
+        assert win.display_var.get() and str(win.tree.cget("selectmode")) == "extended"
+        assert win.tree.get_children() == ("2996", "2997", "2998", "2999")
+        win.filter_var.set("rEsUlTs")
+        win.distinct_var.set(True)
+        app.update_idletasks()
+        assert win.tree.get_children() == ("2996", "2998")
+        assert win.tree.set("2996", "where") == "Results  (2x)"
+        assert win.tree.set("2998", "where") == "Results  [eq:y]  (2.1)  (1x)"
+        win.tree.selection_set("2998", "2996")
+        assert win._selected() is found[2996]
+        selected = tmp_path / "selection.tex"
+        win.export_selected(str(selected))
+        text = selected.read_text(encoding="utf-8")
+        assert "% [2997] Results  (2x)\n\\[ x \\]" in text
+        assert "% [2999] Results  [eq:y]  (2.1)  (1x)" in text
+        assert text.count("% [") == 2 and "2 equations written" in win.info.get()
+        all_rows = tmp_path / "all.tex"
+        win.export(str(all_rows))
+        assert all_rows.read_text(encoding="utf-8").count("% [") == 3000
+        win.filter_var.set("y\\LABEL")
+        app.update_idletasks()
+        assert win.tree.selection() == ("2998",)
+        win.filter_var.set("absent")
+        app.update_idletasks()
+        assert not win.tree.get_children()
+        win.export_selected(str(tmp_path / "empty.tex"))
+        assert "Select an equation" in win.info.get() and not (tmp_path / "empty.tex").exists()
+        win.filter_var.set("")
+        win.distinct_var.set(False)
+        win.display_var.set(False)
+        app.update_idletasks()
+        assert len(win.tree.get_children()) == 3000
+        assert win.tree.set("2996", "where") == "Results"
+    finally:
+        win.destroy()
+
+
 @pytest.mark.skipif(sys.platform not in ("win32", "darwin"), reason="no hotkey here")
 def test_copy_for_office_hotkey_round_trip(app):
     """The hotkey (a simulated press: no keystroke is sent): LaTeX text on the clipboard becomes an

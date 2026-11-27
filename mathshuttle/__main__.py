@@ -6,10 +6,11 @@ import os
 import re
 import shlex
 import sys
+from dataclasses import replace
 
 from . import __version__
 from .compat import load_macros, merge_notes
-from .convert import MODES, convert, convert_equation, macro_notes, office_copy
+from .convert import MODES, convert, convert_equations, macro_notes, office_copy
 from .documents import READABLE, read_document
 from .latex_wrap import WRAPPER_KEYS
 from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, _mathy, engine_report
@@ -18,9 +19,9 @@ from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocN
 _COMMENT = {"latex": "%% %s", "mathml": "<!-- %s -->", "omml": "<!-- %s -->", "typst": "// %s", "eqn": '.\\" %s'}
 
 
-def _comment(fmt: str, text: str) -> str:
+def _comment(fmt: str, text: str, keep_spacing: bool = False) -> str:
     """A one-line comment in `fmt`; an XML comment may not hold "--" nor end with "-" (a heading "A--B")."""
-    text = " ".join(text.split())
+    text = " ".join(text.splitlines() if keep_spacing else text.split())
     if fmt in ("mathml", "omml"):
         while "--" in text:
             text = text.replace("--", "- -")
@@ -163,6 +164,9 @@ def _cli(argv: list[str]) -> int:
     copy_cmd.add_argument("--index", type=int, default=1, metavar="N",
                           help="copy equation N from the input (default: 1, the first equation)")
     extract_cmd.add_argument("file", metavar="FILE", help="document to read (.tex, .md, .docx or .pptx)")
+    extract_cmd.add_argument("--display", action="store_true", help="keep only display equations")
+    extract_cmd.add_argument("--unique", action="store_true", help="show each distinct LaTeX source once with its count")
+    extract_cmd.add_argument("--match", default="", metavar="TEXT", help="match TEXT in the LaTeX or location, ignoring case")
     extract_cmd.add_argument("--docx", metavar="OUT", help="also write the equations to the Word file OUT")
 
     if argv and argv[0] not in sub.choices and argv[0] not in ("--help", "-h", "--version"):
@@ -220,25 +224,32 @@ def _cli(argv: list[str]) -> int:
             doc = read_document(args.file)
             macros = load_macros(args.macros)
             notes = list(doc.notes) + macro_notes(macros)
+            rows = doc.rows(args.display, args.unique, args.match)
             if args.docx:  # first, and said at once: an equation that -t cannot write below does not stop it
                 from .documents import write_docx
-                written = write_docx(doc, args.docx, macros)
+                export = doc
+                if args.display or args.unique or args.match:
+                    export = replace(doc, found=[replace(row.found, where=row.location) for row in rows])
+                written = write_docx(export, args.docx, macros)
                 sys.stderr.write("".join(n + "\n" for n in written) + "written to %s\n" % args.docx)
                 sys.stderr.flush()
             own = doc.macros(macros)  # a document's own LaTeX: the macro files and its own definitions
             failures = []
-            for i, found in enumerate(doc.found, 1):
-                location = f"[{i}] {' '.join(found.where.split())}"
-                try:
-                    text, new = convert_equation(found.equation, args.dst, args.wrapper, own)
-                except ConversionError as e:
-                    reason = _failure_reason(e)
+            converted = convert_equations([row.found.equation for row in rows], args.dst, args.wrapper, own)
+            for row, result in zip(rows, converted):
+                # Keep the original one-space comments unless we have a new number or count to show.
+                enhanced = bool(row.count or row.where != row.found.where)
+                where = row.location if enhanced else " ".join(row.where.split())
+                location = f"[{row.number}] {where}"
+                if isinstance(result, ConversionError):
+                    reason = _failure_reason(result)
                     text = _comment(args.dst, "Could not be converted: " + reason)
                     failures.append(f"{location}: {reason}")
                 else:
+                    text, new = result
                     notes += [n for n in new if n not in notes]
-                sys.stdout.write(_comment(args.dst, location) + "\n" + text + "\n\n")
-            count = f"{len(doc.found)} equation(s) in {os.path.basename(args.file)}"
+                sys.stdout.write(_comment(args.dst, location, keep_spacing=enhanced) + "\n" + text + "\n\n")
+            count = f"{len(rows)} equation(s) in {os.path.basename(args.file)}"
             for line in merge_notes(notes) + [count] + failures:
                 print(line, file=sys.stderr)
             if failures:

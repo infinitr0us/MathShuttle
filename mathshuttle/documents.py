@@ -51,6 +51,28 @@ class Found:
     where: str          # "Method", "slide 2: Update rule", "footnote 3", "Bounds  [eq:bound]"
     context: str = ""   # the text around it, shortened, with MARK for the equation
 
+    def numbered_location(self, labels: Dict[str, str]) -> str:
+        if labels and r"\label" in self.equation.tex:
+            # Skip commented labels and escaped backslashes. TeX permits whitespace before the key.
+            for m in re.finditer(r"%[^\n]*|\\label(?:\s|%[^\n]*\n)*\{([^{}]+)\}|\\.", self.equation.tex):
+                key = m[1]
+                if key in labels:
+                    heading = re.sub(r"  \[[^{}]*\]$", "", self.where)
+                    return f"{heading}  [{key}]  ({labels[key]})"
+        return self.where
+
+
+@dataclass
+class EquationRow:
+    number: int         # original position in the document, starting at 1
+    found: Found
+    where: str          # location including the number from LaTeX, when available
+    count: int = 0      # occurrence count when grouped
+
+    @property
+    def location(self) -> str:
+        return f"{self.where}  ({self.count}x)" if self.count else self.where
+
 
 @dataclass
 class DocumentEquations:
@@ -62,6 +84,27 @@ class DocumentEquations:
     # not apply (\DeclarePairedDelimiter, the \foreach alphabet idiom...); its \label numbers (.aux)
     definitions: str = ""
     labels: Dict[str, str] = field(default_factory=dict)
+
+    def rows(self, display: bool = False, unique: bool = False, match: str = "") -> List[EquationRow]:
+        """Matching occurrences in source order. Group equal LaTeX after applying both filters."""
+        rows: List[EquationRow] = []
+        first: Dict[str, EquationRow] = {}
+        needle = match.casefold()
+        for number, found in enumerate(self.found, 1):
+            eq = found.equation
+            if display and not eq.display:
+                continue
+            where = found.numbered_location(self.labels)
+            if needle and needle not in eq.tex.casefold() and needle not in where.casefold():
+                continue
+            if unique and eq.tex in first:
+                first[eq.tex].count += 1
+                continue
+            row = EquationRow(number, found, where, 1 if unique else 0)
+            rows.append(row)
+            if unique:
+                first[eq.tex] = row
+        return rows
 
     def macros(self, user: Optional[compat.Macros]) -> Optional[compat.Macros]:
         """The macros for this document's equations: the user's files apply to a document's own LaTeX

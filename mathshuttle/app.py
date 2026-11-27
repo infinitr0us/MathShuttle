@@ -1033,24 +1033,33 @@ def _written(count: int, path: str) -> str:
 
 
 class EquationList(tk.Toplevel):
-    """The equations of a document: use one as input, copy it for Office or as LaTeX, export all."""
+    """Browse and filter a document's equations, or export a selection."""
 
     def __init__(self, app: App, doc) -> None:
         super().__init__(app)
         self.app, self.doc = app, doc
-        self.title("MathShuttle - equations in %s" % os.path.basename(doc.path))
+        self.title("Equations in %s" % os.path.basename(doc.path))
         self.transient(app)
         pad = {"padx": 6, "pady": 4}
-        summary = "%d equation%s" % (len(doc.found), "" if len(doc.found) == 1 else "s")
-        self.info = tk.StringVar(value="   ".join([summary] + doc.notes))
+        self.info = tk.StringVar(self)
         ttk.Label(self, textvariable=self.info, wraplength=900, justify="left").pack(anchor="w", **pad)
+
+        filters = ttk.Frame(self)
+        filters.pack(fill="x", **pad)
+        self.filter_var = tk.StringVar(self)
+        self.display_var = tk.BooleanVar(self, value=len(doc.found) > 200)
+        self.distinct_var = tk.BooleanVar(self, value=False)
+        ttk.Label(filters, text="Filter").pack(side="left")
+        ttk.Entry(filters, textvariable=self.filter_var).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Checkbutton(filters, text="Display only", variable=self.display_var).pack(side="left")
+        ttk.Checkbutton(filters, text="Distinct only", variable=self.distinct_var).pack(side="left")
 
         style = ttk.Style(self)
         style.configure("Equations.Treeview", rowheight=int(app.mono.metrics("linespace") * 1.35), font=app.mono)
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, **pad)
         self.tree = ttk.Treeview(frame, columns=("where", "equation", "context"), show="headings",
-                                 selectmode="browse", style="Equations.Treeview", height=14)
+                                 selectmode="extended", style="Equations.Treeview", height=14)
         for column, title, width in (("where", "Where", 220), ("equation", "Equation (LaTeX)", 520),
                                      ("context", "Context", 300)):
             self.tree.heading(column, text=title, anchor="w")
@@ -1059,12 +1068,11 @@ class EquationList(tk.Toplevel):
         self.tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        for i, found in enumerate(doc.found):
-            self.tree.insert("", "end", iid=str(i),
-                             values=(found.where, " ".join(found.equation.tex.split()), found.context))
-        if doc.found:
-            self.tree.selection_set("0")
-            self.tree.focus("0")
+        self._locations = {}
+        self._refresh_id = None
+        self._refresh()
+        self._traces = [(var, var.trace_add("write", self._schedule_refresh))
+                        for var in (self.filter_var, self.display_var, self.distinct_var)]
         self.tree.bind("<Double-1>", lambda e: self.use())
         self.tree.bind("<Return>", lambda e: self.use())
 
@@ -1075,7 +1083,46 @@ class EquationList(tk.Toplevel):
         ttk.Button(buttons, text="Copy LaTeX", command=self.copy_latex).pack(side="left")
         ttk.Button(buttons, text="Export all as .tex...", command=self.export).pack(side="left", padx=6)
         ttk.Button(buttons, text="as .docx...", command=self.export_docx).pack(side="left")
+        ttk.Button(buttons, text="Export selected as .tex...", command=self.export_selected).pack(side="left", padx=6)
         ttk.Button(buttons, text="Close", command=self.destroy).pack(side="right")
+
+    def destroy(self):
+        if self._refresh_id is not None:
+            self.after_cancel(self._refresh_id)
+        for var, callback in self._traces:
+            var.trace_remove("write", callback)
+        super().destroy()
+
+    def _schedule_refresh(self, *_):
+        if self._refresh_id is None:
+            self._refresh_id = self.after_idle(self._refresh)
+
+    def _refresh(self):
+        self._refresh_id = None
+        rows = self.doc.rows(self.display_var.get(), self.distinct_var.get(), self.filter_var.get())
+        self._visible = {str(row.number - 1): row for row in rows}
+        selection = self.tree.selection()
+        for iid, row in self._visible.items():
+            location = row.location
+            if iid not in self._locations:
+                self.tree.insert("", "end", iid=iid, values=(
+                    location, " ".join(row.found.equation.tex.split()), row.found.context))
+            elif self._locations[iid] != location:
+                self.tree.set(iid, "where", location)
+            self._locations[iid] = location
+        # Reattach cached items in one Tk call. Filtering never deletes and rebuilds thousands of rows.
+        self.tree.set_children("", *self._visible)
+        selected = [iid for iid in selection if iid in self._visible]
+        if not selected and rows:
+            selected = [next(iter(self._visible))]
+        self.tree.selection_set(selected)
+        if selected:
+            self.tree.focus(selected[0])
+        total = len(self.doc.found)
+        summary = f"{total} equation{'s' if total != 1 else ''}"
+        if len(rows) != total:
+            summary += f", {len(rows)} shown"
+        self.info.set("   ".join([summary] + self.doc.notes))
 
     def _selected(self):
         selection = self.tree.selection()
@@ -1140,21 +1187,30 @@ class EquationList(tk.Toplevel):
         self.info.set("LaTeX copied")
 
     def export(self, path: Optional[str] = None) -> None:
+        self._export_rows(self.doc.rows(), path)
+
+    def export_selected(self, path: Optional[str] = None) -> None:
+        selected = self.tree.selection()
+        if not selected:
+            self.info.set("Select an equation first")
+            return
+        self._export_rows([self._visible[i] for i in selected], path)
+
+    def _export_rows(self, rows, path: Optional[str]) -> None:
         path = path or filedialog.asksaveasfilename(
             parent=self, title="Export the equations", defaultextension=".tex",
             initialfile=os.path.splitext(os.path.basename(self.doc.path))[0] + "-equations.tex",
             filetypes=[("LaTeX", "*.tex"), ("All files", "*.*")])
         if not path:
             return
-        text = "".join("%% [%d] %s\n%s\n\n" % (i, found.where, self._latex(found))
-                       for i, found in enumerate(self.doc.found, 1))
+        text = "".join("%% [%d] %s\n%s\n\n" % (row.number, row.location, self._latex(row.found)) for row in rows)
         try:
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write("%% equations of %s (MathShuttle)\n\n%s" % (os.path.basename(self.doc.path), text))
         except OSError as e:
             self.info.set("Could not write %s: %s" % (path, e.strerror or e))
             return
-        self.info.set(_written(len(self.doc.found), path))
+        self.info.set(_written(len(rows), path))
 
     def export_docx(self, path: Optional[str] = None) -> None:
         """All the equations as native equations in a Word document, each under where it was."""

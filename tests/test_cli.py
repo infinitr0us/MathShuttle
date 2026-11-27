@@ -33,7 +33,7 @@ def test_help_explains_the_window_commands_and_examples(capsys):
     ("convert", ["FILE", "--expr", "--from", "--to", "--mode", "--wrapper", "--macros", "--no-tidy", "--annotate"]),
     ("copy", ["FILE", "--expr", "--from", "--mode", "--macros", "--index"]),
     ("paste", ["--to", "--mode", "--wrapper", "--no-tidy"]),
-    ("extract", ["FILE", "--to", "--wrapper", "--macros", "--docx"]),
+    ("extract", ["FILE", "--to", "--wrapper", "--macros", "--docx", "--display", "--unique", "--match"]),
 ])
 def test_each_argument_has_help(cmd, names, capsys):
     help_output = help_text([cmd], capsys)
@@ -175,10 +175,10 @@ def test_extract_default_latex_preserves_unknown_commands(paper, capsys):
 
 
 def test_extract_lists_every_failure_in_order(paper, monkeypatch, capsys):
-    def reject(*args):
-        raise ConversionError("\nUnsupported symbol\nAdditional details")
+    def reject(eqs, *args):
+        return [ConversionError("\nUnsupported symbol\nAdditional details") for eq in eqs]
 
-    monkeypatch.setattr("mathshuttle.__main__.convert_equation", reject)
+    monkeypatch.setattr("mathshuttle.__main__.convert_equations", reject)
     assert main(["extract", paper, "-t", "mathml"]) == 1
     output = capsys.readouterr()
     assert output.out.count("<!-- Could not be converted: Unsupported symbol -->") == 3
@@ -188,3 +188,40 @@ def test_extract_lists_every_failure_in_order(paper, monkeypatch, capsys):
         "[3] Last: Unsupported symbol",
         "3 of 3 equation(s) in paper.tex could not be converted",
     ]
+
+
+def test_extract_filters_preserve_positions_counts_and_aux_numbers(tmp_path, capsys):
+    path = tmp_path / "locations.tex"
+    path.write_text(r"""\section{Intro}
+$y$ $x$ \[x\]
+\section{Method}
+\[x\] $x$ \[x\]
+\begin{equation} L = 0 \label{eq:loss} \end{equation}
+""", encoding="utf-8")
+    path.with_suffix(".aux").write_text(r"\newlabel{eq:loss}{{2.1}{17}{Method}{equation.2.1}{}}", encoding="utf-8")
+    assert main(["extract", str(path), "--unique", "--match", "mEtHod"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("% [") == 2
+    assert "% [4] Method  (3x)\n" in out
+    assert "% [7] Method  [eq:loss]  (2.1)  (1x)\n" in out
+
+    word = tmp_path / "filtered.docx"
+    assert main(["extract", str(path), "--display", "--match", "X", "--unique", "--docx", str(word)]) == 0
+    assert capsys.readouterr().out == "% [3] Intro  (3x)\n\\[ x \\]\n\n"
+    from mathshuttle.documents import read_document
+    assert len(read_document(str(word)).found) == 1
+
+    assert main(["extract", str(path), "--display", "--match", "2.1"]) == 0
+    assert capsys.readouterr().out.startswith("% [7] Method  [eq:loss]  (2.1)\n")
+    assert main(["extract", str(path), "--match", "absent"]) == 0
+    output = capsys.readouterr()
+    assert output.out == "" and output.err.startswith("0 equation(s)")
+
+
+def test_location_uses_the_active_label_with_a_number(tmp_path, capsys):
+    path = tmp_path / "labels.tex"
+    path.write_text("\\section{Bounds}\n\\begin{equation}\nx % \\label{old}\n"
+                    "\\label {current}\n\\end{equation}", encoding="utf-8")
+    path.with_suffix(".aux").write_text("\\newlabel{old}{{7}{9}}\n\\newlabel{current}{{2.3}{9}}", encoding="utf-8")
+    assert main(["extract", str(path)]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "% [1] Bounds  [current]  (2.3)"

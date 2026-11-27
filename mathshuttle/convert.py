@@ -9,7 +9,7 @@ from typing import List, Optional
 from . import compat, diagnose as _diagnose, latex_wrap, tidy as _tidy
 from .pandoc_engine import (READ_FORMATS, WRITE_FORMATS, ConversionError, Equation,  # noqa: F401
                             drop_annotations, looks_like_markdown, mathml_elements, parse_mathml, read_equations,
-                            read_latex_text, readable_mathml, strip_tex, write_equation, write_mathml)
+                            read_latex_text, readable_mathml, strip_tex, write_equation, write_equations, write_mathml)
 
 FORMAT_LABELS = {
     "latex": "LaTeX",
@@ -354,6 +354,37 @@ def convert_equation(eq: Equation, dst: str, wrapper: str = "auto", macros: Opti
         return latex_wrap.wrap(eq.tex, wrapper, display), []
     prepared, notes = for_texmath(eq, "latex", macros, dst)
     return _write(prepared, dst, eq, annotate=annotate, source=eq.tex), notes
+
+
+def convert_equations(eqs: List[Equation], dst: str, wrapper: str = "auto",
+                      macros: Optional[compat.Macros] = None) -> list[tuple[str, List[str]] | ConversionError]:
+    """Document equations in order, with the same notes or error as converting each separately."""
+    if dst == "latex":
+        return [convert_equation(eq, dst, wrapper, macros) for eq in eqs]
+    keys = [(eq.tex, eq.display) for eq in eqs]
+    results = {}
+    pending = []
+    for key in dict.fromkeys(keys):
+        eq = Equation(*key)
+        try:
+            prepared, notes = for_texmath(eq, "latex", macros, dst)
+        except ConversionError as e:
+            results[key] = e
+        else:
+            pending.append((key, eq, prepared, notes))
+    try:
+        outputs = write_equations([prepared for _, _, prepared, _ in pending], dst)
+    except ConversionError:  # e.g. timeout of the whole writer: recover individual results
+        outputs = [None] * len(pending)
+    for (key, eq, prepared, notes), output in zip(pending, outputs):
+        if output is None:
+            try:
+                output = _write(prepared, dst, eq)
+            except ConversionError as e:
+                results[key] = e
+                continue
+        results[key] = output, notes
+    return [results[key] for key in keys]
 
 
 @dataclass

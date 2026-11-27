@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+import uuid
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -1308,9 +1309,22 @@ def read_equations(text: str, fmt: str, default_display: bool = True, tidy: bool
 
 
 # --- writing --------------------------------------------------------------------------
+def _math_para(eq: Equation) -> dict:
+    mode = "DisplayMath" if eq.display else "InlineMath"
+    return {"t": "Para", "c": [{"t": "Math", "c": [{"t": mode}, eq.tex]}]}
+
+
 def _doc_json(eq: Equation) -> bytes:
-    doc = {"pandoc-api-version": _api(), "meta": {},
-           "blocks": [{"t": "Para", "c": [{"t": "Math", "c": [{"t": "DisplayMath" if eq.display else "InlineMath"}, eq.tex]}]}]}
+    doc = {"pandoc-api-version": _api(), "meta": {}, "blocks": [_math_para(eq)]}
+    return json.dumps(doc).encode("utf-8")
+
+
+def _batch_json(eqs: List[Equation], boundary: Optional[dict] = None) -> bytes:
+    blocks = []
+    for i, eq in enumerate(eqs):
+        body = [_math_para(eq)] if boundary is None else [boundary, _math_para(eq), boundary]
+        blocks.append({"t": "Div", "c": [["mseq%d" % i, [], []], body]})
+    doc = {"pandoc-api-version": _api(), "meta": {}, "blocks": blocks}
     return json.dumps(doc).encode("utf-8")
 
 
@@ -1444,6 +1458,11 @@ def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False,
     if not m:
         raise ConversionError("pandoc produced no MathML:\n" + err.strip())
     root = ET.fromstring(m.group(0))
+    return _format_mathml(root, eq, annotate, for_office, source)
+
+
+def _format_mathml(root: ET.Element, eq: Equation, annotate: bool = False, for_office: bool = False,
+                   source: Optional[str] = None) -> str:
     sem = root.find("{%s}semantics" % MATHML_NS)
     if sem is not None and not annotate:
         root.remove(sem)
@@ -1522,33 +1541,29 @@ def _unicode_spaces(math: ET.Element) -> None:
                     parent.remove(a)
 
 
-def mathml_elements(eqs: List[Equation]) -> List[Optional[ET.Element]]:
-    """Each equation as a parsed <math> (texmath's MathML, namespaces stripped), in one pandoc run; None
-    for an equation texmath cannot write.  For comparing renderings (convert.annotation_notes)."""
-    def parse(markup: str) -> ET.Element:
-        root = ET.fromstring(markup)
-        _strip_namespaces(root)
-        _drop_annotations(root)
-        return root
-
+def _batch_mathml(eqs: List[Equation]) -> List[Optional[ET.Element]]:
     if not eqs:
         return []
-    # each equation in a div of its own: one that texmath cannot write (pandoc puts its TeX there as
-    # text) is told apart from the others in the same run
-    doc = {"pandoc-api-version": _api(), "meta": {},
-           "blocks": [{"t": "Div", "c": [["mseq%d" % i, [], []],
-                                         [{"t": "Para", "c": [{"t": "Math", "c": [
-                                             {"t": "DisplayMath" if e.display else "InlineMath"}, e.tex]}]}]]}
-                      for i, e in enumerate(eqs)]}
-    out, _ = _run(["-f", "json", "-t", "html", _LF, *_mathml_flags()], json.dumps(doc).encode("utf-8"))
+    out, _ = _run(["-f", "json", "-t", "html", _LF, *_mathml_flags()], _batch_json(eqs))
     results: List[Optional[ET.Element]] = [None] * len(eqs)
     for div in re.finditer(r'<div id="mseq(\d+)">(.*?)</div>', out.decode("utf-8"), re.S):
         i, found = int(div.group(1)), _MATH_RE.search(div.group(2))
         if found and i < len(eqs):
             try:
-                results[i] = parse(found.group(0))
+                results[i] = ET.fromstring(found.group(0))
             except ET.ParseError:
                 pass
+    return results
+
+
+def mathml_elements(eqs: List[Equation]) -> List[Optional[ET.Element]]:
+    """Each equation as a parsed <math> (texmath's MathML, namespaces stripped), in one pandoc run; None
+    for an equation texmath cannot write.  For comparing renderings (convert.annotation_notes)."""
+    results = _batch_mathml(eqs)
+    for root in results:
+        if root is not None:
+            _strip_namespaces(root)
+            _drop_annotations(root)
     return results
 
 
@@ -1566,21 +1581,36 @@ def readable_mathml(maths: List[ET.Element]) -> List[bool]:
 def write_omml(eq: Equation) -> str:
     out, err = _run(["-f", "json", "-t", "docx", "-o", "-"], _doc_json(eq))
     _check_texmath_warning(err)
-    with zipfile.ZipFile(io.BytesIO(out)) as z:
-        document = ET.fromstring(z.read("word/document.xml"))
-    para_tag, math_tag = "{%s}oMathPara" % OMML_NS, "{%s}oMath" % OMML_NS
-    for el in document.iter():
-        if el.tag in (para_tag, math_tag):
-            return _pretty(el)
+    text = _omml_body(_word_document(out))
+    if text is not None:
+        return text
     raise ConversionError("pandoc produced no OMML:\n" + err.strip())
+
+
+def _word_document(out: bytes) -> ET.Element:
+    with zipfile.ZipFile(io.BytesIO(out)) as z:
+        return ET.fromstring(z.read("word/document.xml"))
+
+
+def _omml_body(paragraph: ET.Element) -> Optional[str]:
+    for el in paragraph.iter():
+        if el.tag in ("{%s}oMathPara" % OMML_NS, "{%s}oMath" % OMML_NS):
+            return _pretty(el)
+    return None
 
 
 def write_eqn(eq: Equation) -> str:
     """groff eqn source (body only, without the .EQ/.EN macros)."""
     out, err = _run(["-f", "json", "-t", "ms", _LF], _doc_json(eq))
     _check_texmath_warning(err)
-    text = out.decode("utf-8")
-    if eq.display:
+    body = _eqn_body(out.decode("utf-8"), eq.display)
+    if body is None:
+        raise ConversionError("pandoc produced no eqn output:\n" + err.strip())
+    return body
+
+
+def _eqn_body(text: str, display: bool) -> Optional[str]:
+    if display:
         m = re.search(r"^\.EQ\n([\s\S]*?)\n\.EN", text, re.M)
         if m:
             return m.group(1)
@@ -1588,9 +1618,7 @@ def write_eqn(eq: Equation) -> str:
     body = "\n".join(lines).strip()
     if body.startswith("@") and body.endswith("@"):
         body = body[1:-1]
-    if not body:
-        raise ConversionError("pandoc produced no eqn output:\n" + err.strip())
-    return body
+    return body or None
 
 
 # pandoc writes a \label as a Typst label after the closing $:  $ x = 1 $<eq:a>, or, when the name is not
@@ -1602,13 +1630,54 @@ def write_typst(eq: Equation) -> str:
     """Typst math (body only, without the $ delimiters or a trailing <label>)."""
     out, err = _run(["-f", "json", "-t", "typst", _LF], _doc_json(eq))
     _check_texmath_warning(err)
-    text = out.decode("utf-8").strip()
-    m = _TYPST_MATH.match(text)
-    if m:
-        text = m.group(1).strip()
+    text = _typst_body(out.decode("utf-8"))
     if not text:
         raise ConversionError("pandoc produced no Typst output:\n" + err.strip())
     return text
+
+
+def _typst_body(text: str) -> str:
+    text = text.strip()
+    m = _TYPST_MATH.match(text)
+    if m:
+        text = m.group(1).strip()
+    return text
+
+
+def write_equations(eqs: List[Equation], fmt: str) -> List[Optional[str]]:
+    """Write a batch of prepared equations. A missing result needs the single-equation diagnostic."""
+    if not eqs:
+        return []
+    if fmt == "mathml":
+        return [_format_mathml(root, eq) if root is not None else None
+                for eq, root in zip(eqs, _batch_mathml(eqs))]
+    if fmt == "omml":
+        out, _ = _run(["-f", "json", "-t", "docx", "-o", "-"], _batch_json(eqs))
+        # Each Div contains exactly one paragraph, including when pandoc writes fallback TeX.
+        paragraphs = _word_document(out).findall("w:body/w:p", {"w": WML_NS})
+        if len(paragraphs) != len(eqs):
+            return [None] * len(eqs)
+        return [_omml_body(p) for p in paragraphs]
+    writer = {"typst": "typst", "eqn": "ms"}[fmt]
+    # ms drops Div identifiers, and Typst adds its own #block wrapper. Raw blocks delimit the
+    # exact writer output for the paragraph, including embedded newlines and labels.
+    marker = "MathShuttle" + uuid.uuid4().hex
+    doc = _batch_json(eqs, {"t": "RawBlock", "c": [writer, marker]})
+    out, _ = _run(["-f", "json", "-t", writer, _LF], doc)
+    parts = out.decode("utf-8").split(marker)
+    if len(parts) != 2 * len(eqs) + 1:
+        return [None] * len(eqs)
+    results = []
+    for eq, text in zip(eqs, parts[1::2]):
+        if fmt == "typst":
+            # A rejected equation begins with an escaped dollar sign, a converted one with $.
+            body = (_typst_body(text) or None) if text.lstrip().startswith("$") else None
+        else:
+            # Fallback TeX uses dollar signs here too. Converted maths uses .EQ or @...@.
+            math = re.match(r"\s*(?:\.(?:LP|PP)\n)?(?:\.EQ\n|@)", text)
+            body = _eqn_body(text, eq.display) if math else None
+        results.append(body)
+    return results
 
 
 def write_equation(eq: Equation, fmt: str, **opts) -> str:

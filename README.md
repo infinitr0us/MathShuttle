@@ -163,12 +163,18 @@ it off. Ctrl+Alt+Shift keeps clear of Word's own Ctrl+Alt shortcuts. On the Mac 
 `~/Library/Application Support/MathShuttle/settings.json`) gives Control+Option+Shift+M: Alt there
 is Option, Cmd is Command.
 
-**Whole documents.** **Open file…** lists every equation of a `.docx`, `.pptx`, `.tex` or `.md` file
-with where it is (the heading above it, the slide and its title, the `\label`) and the sentence
-around it. From the list, use one as input, copy it for Word / PowerPoint or as LaTeX, or export
-them all to a `.tex` file, or to a Word document (`.docx`) holding each as a native equation under
-the line that says where it was, for a collaborator who edits them in Word; on the command line,
-`python -m mathshuttle extract FILE [-t FORMAT] [--docx OUT]`.
+**Whole documents.** **Open file…** lists the equations in a `.docx`, `.pptx`, `.tex` or `.md` file
+with the surrounding sentence and location (heading, slide title or LaTeX label). If a matching
+`.aux` file is available, the location also shows the equation number LaTeX assigned.
+Type in **Filter** to search the LaTeX or location, ignoring case. **Display only** starts checked
+for documents with more than 200 equations. **Distinct only** groups matching occurrences with
+identical LaTeX, showing the first occurrence and the count.
+
+Select a row to use it as input or copy it for Word / PowerPoint or as LaTeX. Use Ctrl (Cmd on
+macOS) or Shift to select several rows. **Export selected as .tex…** writes those rows in document
+order with their original positions. Use and Copy act on the first selected row. The two **Export
+all** options write the entire document to a LaTeX file or to a Word document containing native
+equations under their locations.
 Office equations go through the same Tidy LaTeX as a pasted one. A `.tex` file is read with its
 `\input` / `\include` files, and its own definitions apply to its equations without a macro file:
 those pandoc expands itself and those it does not (`\DeclarePairedDelimiter`, xparse's
@@ -307,6 +313,7 @@ mathshuttle convert -e 'x^2' -t mathml
 mathshuttle copy -e 'x^2'
 mathshuttle paste --wrapper bare
 mathshuttle extract paper.tex -t typst
+mathshuttle extract thesis.tex --display --match Method --unique
 mathshuttle --version
 ```
 
@@ -322,8 +329,12 @@ mathshuttle --version
   `paste` reads an equation copied in Office and writes it to standard output as LaTeX by default.
   Use `--mode inline` or `--mode display` with `convert`, `copy` or `paste` to override the detected mode.
 * `extract FILE` writes the equations from a `.docx`, `.pptx`, `.tex` or `.md` document in order,
-  each with a location comment. The default output is LaTeX. With `-t mathml`, `omml`, `typst`
-  or `eqn`, a failed equation gets a comment explaining the failure, and extraction continues.
+  each with its original position, location and available LaTeX equation number in a comment.
+  Use `--display` for display equations and `--match TEXT` for a case-insensitive search of the LaTeX
+  or location. Add `--unique` to keep the first occurrence of each distinct LaTeX source and show
+  its count among the matches, for example `(3x)`. The filters also apply to `--docx OUT`.
+  The default output is LaTeX. With `-t mathml`, `omml`, `typst` or `eqn`, equations are converted
+  in a batch. A failed equation gets a comment explaining the failure, and extraction continues.
   Standard error lists the failed equations by number and location and reports the count.
   The exit code is 1 if any equation failed or 0 on success. Use `--docx OUT` to also write
   the equations to a Word document.
