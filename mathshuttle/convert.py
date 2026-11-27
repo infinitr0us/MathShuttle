@@ -150,14 +150,22 @@ class OfficeCopy:
     notes: List[str] = field(default_factory=list)
 
 
+def input_equations(text: str, src: str, mode: str = "auto", tidy: bool = True) -> List[Equation]:
+    """The equations of the input, in order: what "Copy for Word/PowerPoint" can copy (by index)."""
+    return _read(text, src, mode, tidy)
+
+
 def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat.Macros] = None,
-                tidy: bool = True) -> OfficeCopy:
-    """What "Copy for Word/PowerPoint" puts on the clipboard (first equation of the input)."""
+                tidy: bool = True, index: int = 0) -> OfficeCopy:
+    """What "Copy for Word/PowerPoint" puts on the clipboard: equation `index` (0: the first) of the
+    input; Word and PowerPoint paste one equation at a time."""
     eqs = _read(text, src, mode, tidy)
+    if not 0 <= index < len(eqs):
+        raise ConversionError("There is no equation %d: the input has %d." % (index + 1, len(eqs)))
     notes: List[str] = []
     if len(eqs) > 1:
-        notes.append("%d equations in the input - only the first one was copied." % len(eqs))
-    eq = eqs[0]
+        notes.append("Equation %d of the %d in the input was copied." % (index + 1, len(eqs)))
+    eq = eqs[index]
     prepared, new = for_texmath(eq, src, macros)
     _add(notes, new)
     if src == "latex":

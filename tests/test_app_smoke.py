@@ -101,6 +101,36 @@ def test_copy_for_office_and_paste_back(app):
     assert pump(app, until=lambda: app.output.get("1.0", "end").startswith("\\begin{align*}"))
 
 
+def test_copy_for_office_lets_you_pick_the_equation(app, monkeypatch):
+    import tkinter as tk
+    copied, popups = [], []
+    monkeypatch.setattr(clipboard, "copy_mathml_for_office", lambda mathml, *a, **k: copied.append(mathml))
+    monkeypatch.setattr(tk.Menu, "tk_popup", lambda menu, x, y, entry=None: popups.append(menu))
+    app.src_var.set("latex")
+    set_input(app, "$a$ and $\\frac{b}{2}$ and \\[c^2\\]")
+    app.copy_for_office()
+    menu = popups[-1]
+    labels = [menu.entrycget(i, "label") for i in (0, 2, 3, 4)]
+    assert labels == ["Next:   1   a", "1   a", "2   \\frac{b}{2}", "3   c^2"]
+    assert menu.type(1) == "separator" and menu.entrycget(0, "underline") == 0  # N, and 1-9
+    assert menu.entrycget(3, "underline") == 0 and not copied  # nothing copied before a choice
+    menu.invoke(3)
+    assert "<mfrac>" in copied[-1] and "Equation 2 of the 3" in app.status_var.get()
+    app.copy_for_office()  # Next is the one after: equation 3
+    assert popups[-1].entrycget(0, "label") == "Next:   3   c^2"
+    popups[-1].invoke(0)
+    assert "<msup>" in copied[-1]
+    app.copy_for_office()
+    assert popups[-1].entrycget(0, "label").startswith("Next:   1")  # after the last, the first again
+    set_input(app, "$x$ and $y$")  # other input: from the first
+    app.copy_for_office()
+    assert popups[-1].entrycget(0, "label") == "Next:   1   x"
+    set_input(app, "$x$")  # one equation: copied at once, no menu
+    count = len(popups)
+    app.copy_for_office()
+    assert len(popups) == count and "<mi>x</mi>" in copied[-1] and "of the" not in app.status_var.get()
+
+
 def test_paste_from_office_takes_omml_from_the_html(app, monkeypatch):
     # what Word copies for a sentence with an equation in it: no MathML, the OMML in its HTML
     omml = '<m:oMath><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath>'

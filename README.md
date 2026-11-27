@@ -86,6 +86,11 @@ with centred columns, so the tool marks these tables the way Word itself exports
 array (`columnspacing="0em"`). `cases` and matrices stay matrices, and so does an `array` unless its
 columns read like an alignment (`\begin{array}{rl} x &= 1`, or `{rcl}` with relations in the middle).
 
+Office pastes one equation at a time. With several equations in the input, **Copy for
+Word/PowerPoint** opens a menu of them; its first item, *Next*, is the one after the equation
+you copied last, so you can paste a paper's equations into a slide one after the other (keys: N
+or the equation's number; on the Mac, then Return). On the command line: `copy --index N`.
+
 **Office → LaTeX.** Select an equation in Word or PowerPoint, press Ctrl+C, then click
 **Paste from Word/PowerPoint** (Ctrl+Shift+V): the tool reads the MathML that Office put on the
 clipboard and converts it (to LaTeX by default; any other target works too). Equation arrays
@@ -214,7 +219,7 @@ LaTeX → LaTeX never re-renders the equation; only the delimiters change.
 ```
 python -m mathshuttle convert -f latex -t omml [--mode display|inline] [--wrapper align]
                                 [--macros FILE ...] [--no-tidy] [FILE]
-python -m mathshuttle copy  [-f latex] [--macros FILE ...] [FILE]   # → clipboard, ready to paste into Office
+python -m mathshuttle copy  [-f latex] [--macros FILE ...] [--index N] [FILE]   # → clipboard, ready to paste into Office
 python -m mathshuttle paste [-t latex] [--wrapper W] [--no-tidy]    # equation copied in Office → stdout
 python -m mathshuttle extract FILE [-t latex] [--wrapper W]          # every equation of a .docx/.pptx/.tex/.md
 python -m mathshuttle version                                       # pandoc + embedded texmath version

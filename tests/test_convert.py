@@ -427,3 +427,31 @@ def test_errors_are_reported():
 def test_write_equation_unknown_format():
     with pytest.raises(ValueError):
         write_equation(Equation("x"), "docx")
+
+
+# ---- which equation "Copy for Word/PowerPoint" copies ---------------------------------------
+def test_office_copy_picks_an_equation():
+    from mathshuttle.convert import input_equations, office_copy
+    text = "$a$ and $\\frac{b}{2}$ and \\[c^2\\]"
+    assert [e.tex for e in input_equations(text, "latex")] == ["a", "\\frac{b}{2}", "c^2"]
+    first, second = office_copy(text, "latex"), office_copy(text, "latex", index=1)
+    assert "<mi>a</mi>" in first.mathml and "<mfrac>" in second.mathml
+    assert "Equation 2 of the 3 in the input was copied." in second.notes
+    assert not office_copy("$a$", "latex").notes  # one equation: nothing to say
+    with pytest.raises(ConversionError, match="no equation 4: the input has 3"):
+        office_copy(text, "latex", index=3)
+
+
+def test_cli_copy_index(monkeypatch, capsys, tmp_path):
+    from mathshuttle import clipboard
+    from mathshuttle.__main__ import main
+    copied = []
+    monkeypatch.setattr(clipboard, "copy_mathml_for_office", lambda mathml, *a, **k: copied.append(mathml))
+    source = tmp_path / "in.tex"
+    source.write_text("$a$ and $\\frac{b}{2}$", encoding="utf-8")
+    assert main(["copy", "--index", "2", str(source)]) == 0
+    assert "<mfrac>" in copied[-1] and "Equation 2 of the 2" in capsys.readouterr().err
+    assert main(["copy", str(source)]) == 0 and "<mi>a</mi>" in copied[-1]  # the first by default
+    assert main(["copy", "--index", "3", str(source)]) == 1
+    assert "no equation 3: the input has 2" in capsys.readouterr().err
+    assert main(["copy", "--index", "0", str(source)]) == 1

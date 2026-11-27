@@ -81,6 +81,8 @@ def _cli(argv: list[str]) -> int:
     p.add_argument("-f", "--from", dest="src", choices=READ_FORMATS, default="latex")
     p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto")
     p.add_argument("--macros", action="append", default=[], metavar="FILE")
+    p.add_argument("--index", type=int, default=1, metavar="N",
+                   help="which equation of the input to copy (1: the first; Office pastes one at a time)")
     p.add_argument("file", nargs="?")
 
     p = sub.add_parser("paste", help="convert the equation copied in Word/PowerPoint")
@@ -117,7 +119,10 @@ def _cli(argv: list[str]) -> int:
             for path in args.macros:
                 if not os.path.isfile(path):
                     raise InputError("macro file %s does not exist" % path)
-            copy = office_copy(_read_source(args.file), args.src, args.mode, load_macros(args.macros))
+            if args.index < 1:
+                raise InputError("--index counts from 1")
+            copy = office_copy(_read_source(args.file), args.src, args.mode, load_macros(args.macros),
+                               index=args.index - 1)
             clipboard.copy_mathml_for_office(copy.mathml)  # the plain text must be the MathML too (see there)
             sys.stderr.write("".join(n + "\n" for n in copy.notes) or "Equation copied - paste it into Word / PowerPoint.\n")
         elif args.cmd == "paste":

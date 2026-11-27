@@ -17,7 +17,7 @@ from tkinter import messagebox, ttk
 from typing import Optional
 
 from . import __version__, clipboard, compat, hotkeys, latex_wrap, preview
-from .convert import FORMAT_LABELS, MODES, Result, convert, macro_notes, office_copy
+from .convert import FORMAT_LABELS, MODES, Result, convert, input_equations, macro_notes, office_copy
 from .latex_wrap import WRAPPERS
 from .pandoc_engine import (INSTALL_HINT, READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description,
                             engine_report)
@@ -73,9 +73,12 @@ WORD / POWERPOINT
   Copy for Word/PowerPoint   converts the input to MathML and places it on the clipboard
           in the "MathML" clipboard format; %(key)s+V in Word, PowerPoint or OneNote then
           inserts a native, editable equation (%(key)s+Shift+C).  align / aligned / split
-          blocks arrive as an Office equation array, lined up at the = signs.
+          blocks arrive as an Office equation array, lined up at the = signs.  With several
+          equations in the input, a menu lets you pick one; its first item, Next, is the
+          one after the equation copied last (keys: N or a number; on the Mac, then Return).
   Paste from Word/PowerPoint   reads the equation you copied in Word / PowerPoint
           (select the equation, %(key)s+C) and converts it to LaTeX (%(key)s+Shift+V).
+          A copied sentence with equations in it gives the LaTeX of each.
 %(hotkey)s
   Open file...   every equation of a .docx / .pptx / .tex / .md file, with where it is.
 
@@ -139,6 +142,7 @@ class App(tk.Tk):
         self._polling = False
         self._running = 0  # conversion threads whose result has not been collected yet
         self._shown_args: Optional[tuple] = None  # conversion arguments of the result in the output pane
+        self._last_copy: "tuple[Optional[str], int]" = (None, -1)  # (input, index) of the equation copied last
         self.settings = self._load_settings()
         # Tk's native macOS windowing, which has the Command modifier and the tk::mac:: hooks
         self.aqua = self.tk.call("tk", "windowingsystem") == "aqua"
@@ -256,7 +260,8 @@ class App(tk.Tk):
         self._preview_seq = 0
         self._last_result: Optional[tuple] = None  # (Result, conversion args) of the output on show
         ttk.Button(bottom, text="Paste from Word/PowerPoint", command=self.paste_from_office).pack(side="right", **pad)
-        ttk.Button(bottom, text="Copy for Word/PowerPoint", command=self.copy_for_office).pack(side="right", **pad)
+        self.copy_button = ttk.Button(bottom, text="Copy for Word/PowerPoint", command=self.copy_for_office)
+        self.copy_button.pack(side="right", **pad)
         ttk.Button(bottom, text="Copy output", command=self.copy_output).pack(side="right", **pad)
 
         # --- input / output panes (take the remaining space) ---
@@ -548,17 +553,51 @@ class App(tk.Tk):
         self._set_status("Output copied to the clipboard as text")
 
     def copy_for_office(self) -> None:
+        """Word and PowerPoint paste one equation at a time: with several in the input, a menu lists
+        them, after a first item "Next", the equation after the one copied last.  Keys: N (Windows; on the
+        Mac N, then Return) copies the next one, 1-9 the one with that number."""
         text = self.input.get("1.0", "end-1c")
         if not text.strip():
             self._set_status("Nothing to copy", error=True)
             return
         try:
-            copy = office_copy(text, self.src_var.get(), self.mode_var.get(), self._macros(), self.tidy_var.get())
+            eqs = input_equations(text, self.src_var.get(), self.mode_var.get(), self.tidy_var.get())
+        except (ConversionError, PandocNotFound) as e:
+            self._set_output(str(e), error=True)
+            self._set_status("Could not copy the equation", error=True)
+            return
+        if len(eqs) <= 1:
+            self.copy_equation(0, text)
+            return
+        labels = []
+        for i, eq in enumerate(eqs):
+            label = " ".join(eq.tex.split())
+            labels.append("%d   %s" % (i + 1, label if len(label) <= 70 else label[:67] + "..."))
+        last = self._last_copy[1] if self._last_copy[0] == text else -1
+        nxt = (last + 1) % len(eqs)
+        menu = tk.Menu(self, tearoff=False)
+        # native menus highlight nothing when they open: the next equation is an item of its own, first
+        menu.add_command(label="Next:   " + labels[nxt], underline=0, command=lambda: self.copy_equation(nxt, text))
+        menu.add_separator()
+        for i, label in enumerate(labels):
+            menu.add_command(label=label, underline=0 if i < 9 else -1, command=lambda i=i: self.copy_equation(i, text))
+        self._copy_menu = menu
+        button = self.copy_button
+        menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+
+    def copy_equation(self, index: int, text: Optional[str] = None) -> None:
+        """Copy equation `index` (0: the first) of the input for Word / PowerPoint."""
+        if text is None:
+            text = self.input.get("1.0", "end-1c")
+        try:
+            copy = office_copy(text, self.src_var.get(), self.mode_var.get(), self._macros(), self.tidy_var.get(),
+                               index=index)
             clipboard.copy_mathml_for_office(copy.mathml)  # the plain text must be the MathML too (see there)
         except (ConversionError, PandocNotFound, clipboard.ClipboardError) as e:
             self._set_output(str(e), error=True)
             self._set_status("Could not copy the equation", error=True)
             return
+        self._last_copy = (text, index)
         msg = "Equation copied  -  press %s+V in Word / PowerPoint / OneNote to insert it as a native equation" % KEY
         self._set_status("   ".join([msg] + copy.notes))
 
