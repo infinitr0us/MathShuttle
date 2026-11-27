@@ -157,8 +157,9 @@ def test_simple_macros_expand_without_a_pandoc_run(monkeypatch):
     macros = compat.load_macros(text=r"\newcommand{\calR}{\mathcal{R}}" "\n" r"\newcommand{\bb}{\mathbb}")
     monkeypatch.setattr(compat, "_expand", lambda *a: pytest.fail("a pandoc run for simple macros"))
     assert compat.for_texmath(r"\calR + \bb R", macros)[0] == r"\mathcal{R}+ \mathbb R"  # (TeX skips the space)
+    monkeypatch.undo()  # right after a command that takes an argument, pandoc decides (as TeX would)
     tight = compat.load_macros(text=r"\newcommand{\RR}{R}" "\n" r"\newcommand{\mass}{m}")
-    assert compat.for_texmath(r"\mathbb\RR + \frac\mass{V}", tight)[0] == r"\mathbb{R}+ \frac{m}{V}"
+    assert shown(r"\mathbb\RR + \frac\mass{V}", tight) == "ℝ+mV"
 
 
 def test_the_fast_path_leaves_what_needs_tex_to_pandoc():
@@ -238,3 +239,46 @@ def test_pack_notes_are_merged_across_equations():
 
 def test_a_letter_range_across_cases_is_no_alphabet():
     assert compat._letters("A,...,z") == []
+
+
+# ---- the final Codex re-check (874d5cb) ----------------------------------------------------------------
+def test_a_macro_of_limits_keeps_them_on_the_sum():
+    macros = compat.load_macros(text=r"\newcommand{\subk}{_{k=1}^N}" "\n" r"\newcommand{\barsep}{|}")
+    assert "<munderover>" in convert(r"\sum\subk E_k", "latex", "mathml", macros=macros).text
+    assert "<m:nary>" in convert(r"\sum\subk E_k", "latex", "omml", macros=macros).text
+    assert "<math" in convert(r"\left\barsep x \right\barsep", "latex", "mathml", macros=macros).text
+
+
+def test_a_conditional_hook_is_not_applied(tmp_path):
+    files = [("compat.sty", r"\AtBeginDocument{\@ifpackageloaded{physics}{\renewcommand{\div}{\nabla\cdot}}{}}")]
+    assert read(paper(tmp_path, r"\usepackage{compat}", r"$6\div 2=3$", files))[0] == ["6÷2=3"]
+
+
+def test_a_labelled_hook_is_applied(tmp_path):
+    out, _ = read(paper(tmp_path, r"\AddToHook{begindocument}[notation]{\renewcommand{\div}{\nabla\cdot}}",
+                        r"$\div F$"))
+    assert out == ["∇⋅F"]
+
+
+def test_a_dollar_in_a_comment_does_not_hide_the_preamble():
+    text = "% An unescaped $ starts math mode.\n\\DeclarePairedDelimiter{\\fence}{\\langle}{\\rangle}\n$\\fence{x}$ and $\\fence{y}$"
+    assert [shown(t) for t in ("x",)] and "<math" in convert(text, "latex", "mathml").text
+    assert convert(text, "latex", "mathml").text.count("⟨") == 2
+
+
+def test_an_indented_code_block_in_a_chat_answer_loads_no_package():
+    text = "To get it, about 50% of people write:\n\n    \\usepackage{physics}\n\nThen $6\\div 2=3$ holds."
+    assert shown(text) == "6÷2=3"
+
+
+def test_many_inputs_of_one_header_do_not_use_up_the_files(tmp_path):
+    files = [("head.tex", "% header"), ("foot.tex", "% footer")]
+    files += [("t%d.tex" % i, "\\input{head}\nrow %d\n\\input{foot}" % i) for i in range(100)]
+    files += [("app.tex", r"\DeclarePairedDelimiter{\floorof}{\lfloor}{\rfloor}")]
+    body = "".join("\\input{t%d}\n" % i for i in range(100)) + "\\input{app}\n$m=\\floorof{x}$"
+    assert read(paper(tmp_path, "\\usepackage{mathtools}", body, files))[0] == ["m=⌊x⌋"]
+
+
+def test_preview_keeps_the_package_a_renewcommand_needs():
+    from mathshuttle import packs
+    assert packs.packages_for(r"\renewcommand{\abs}[1]{\lvert #1\rvert}\abs{x}", set(), {"physics"}) == ["physics"]

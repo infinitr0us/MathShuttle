@@ -8,8 +8,8 @@ from typing import List, Optional
 
 from . import compat, diagnose as _diagnose, latex_wrap, tidy as _tidy
 from .pandoc_engine import (READ_FORMATS, WRITE_FORMATS, ConversionError, Equation,  # noqa: F401
-                            drop_annotations, mathml_elements, parse_mathml, read_equations, read_latex_text,
-                            readable_mathml, strip_tex, write_equation, write_mathml)
+                            drop_annotations, looks_like_markdown, mathml_elements, parse_mathml, read_equations,
+                            read_latex_text, readable_mathml, strip_tex, write_equation, write_mathml)
 
 FORMAT_LABELS = {
     "latex": "LaTeX",
@@ -90,18 +90,22 @@ def _write(prepared: Equation, dst: str, eq: Equation, which: str = "", **kw) ->
         raise _diagnose.explained(e, eq.tex, prepared.tex, which) from None
 
 
-# Markdown code (a fence, `inline code`) and delimited maths: what is not the input's own preamble text
-_CODE_OR_MATHS = re.compile(r"```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]"
-                            r"|\\\([\s\S]*?\\\)|(?<![\\$])\$(?:\\.|[^$\\])+\$")
+# Markdown code: a fence, an indented block (after a blank line), `inline code`
+_MARKDOWN_CODE = re.compile(r"^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*$|(?:(?<=\n\n)|^)(?:(?: {4}|\t)[^\n]*(?:\n|$))+"
+                            r"|(`+)[\s\S]*?\2", re.M)
 
 
-def _with_input_definitions(macros: Optional[compat.Macros], text: str, src: str) -> Optional[compat.Macros]:
+def input_macros(macros: Optional[compat.Macros], text: str, src: str,
+                 as_markdown: bool = False) -> Optional[compat.Macros]:
     """The macros plus what LaTeX input defines outside its equations that pandoc's reader drops
     (\\DeclarePairedDelimiter above $\\abs{x}$, as Open file's Use writes it) and the packages it loads;
-    not from code in a chat answer, nor from one equation's own definitions (those hold for it only)."""
+    in text read as Markdown (a chat answer), not from its code."""
     if src != "latex":
         return macros
-    return compat.with_document(macros, compat.pandoc_leftovers(_CODE_OR_MATHS.sub(" ", text)))
+    # (also when both readings agreed and the LaTeX one was kept: the code is still no preamble)
+    markdown = as_markdown or ("\\" in text and looks_like_markdown(text))
+    return compat.with_document(macros, compat.pandoc_leftovers(_MARKDOWN_CODE.sub(" ", text) if markdown
+                                                                else text))
 
 
 def _read(text: str, src: str, mode: str, tidy: bool) -> List[Equation]:
@@ -137,7 +141,7 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
         raise ValueError("cannot write format %r" % dst)
 
     eqs, as_markdown = _read_text(text, src, mode, tidy)
-    macros = _with_input_definitions(macros, text, src)
+    macros = input_macros(macros, text, src, as_markdown)
     notes: List[str] = [_MARKDOWN_NOTE] if as_markdown else []
     if len(eqs) > 1:
         notes.append("%d equations found in the input; each was converted separately." % len(eqs))
@@ -383,7 +387,7 @@ def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat
         eqs, as_markdown = _read_text(text, src, mode, tidy)
     if not 0 <= index < len(eqs):
         raise ConversionError("There is no equation %d: the input has %d." % (index + 1, len(eqs)))
-    macros = _with_input_definitions(macros, text, src)
+    macros = input_macros(macros, text, src, as_markdown)
     notes: List[str] = [_MARKDOWN_NOTE] if as_markdown else []
     if len(eqs) > 1:
         notes.append("Equation %d of the %d in the input was copied." % (index + 1, len(eqs)))

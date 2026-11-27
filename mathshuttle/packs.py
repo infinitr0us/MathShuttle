@@ -533,7 +533,9 @@ def packages_for(tex: str, defined: Set[str], packages: Set[str]) -> List[str]:
     """The LaTeX packages the pack commands in `tex` come from, for the preview (which sets the LaTeX as
     written): physics or braket (not both: they define the same commands), slashed, tensor, siunitx."""
     from .compat import parse_definitions
-    defined = set(defined) | {d.name for d in parse_definitions(tex)[0]}  # (\newcommand{\abs} in it)
+    # a \newcommand{\abs} of the equation's own would clash with the package's; a \renewcommand needs it
+    defined = set(defined) | {d.name for d in parse_definitions(tex)[0]
+                              if not re.match(r"\s*\\(?:renewcommand|RenewDocumentCommand)", d.source)}
     needed: Set[str] = set()
     for m in re.finditer(r"\\[A-Za-z]+", tex):
         name = m.group()

@@ -625,18 +625,21 @@ def without_verbatim(text: str) -> str:
     return _VERBATIM.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
 
 
-_HOOKS = re.compile(r"\\(?:AtBeginDocument|AddToHook\s*\{\s*begindocument(?:/before|/end)?\s*\})" + _CS)
+_HOOKS = re.compile(r"\\(?:AtBeginDocument" + _CS + r"|AddToHook\s*\{\s*begindocument(?:/before|/end)?\s*\}"
+                    r"(?:\s*\[[^\]]*\])?)")
+# a hook whose definitions depend on something (\@ifpackageloaded{physics}{..}{}): not taken
+_CONDITIONAL = re.compile(r"\\(?:@?if[a-zA-Z@]*|If[A-Za-z]*TF?|IfPackageLoaded[A-Za-z]*)(?![a-zA-Z@])")
 
 
 def _hook_spans(text: str) -> List[Tuple[int, int]]:
-    """The arguments of \\AtBeginDocument{..} and \\AddToHook{begindocument}{..}: definitions there hold
-    for the whole body, but pandoc's reader does not run the hook."""
+    """The arguments of \\AtBeginDocument{..} and \\AddToHook{begindocument}[label]{..} without a condition
+    in them: definitions there hold for the whole body, but pandoc's reader does not run the hook."""
     spans = []
     for m in _HOOKS.finditer(text):
         if _in_comment(text, m.start()):
             continue
         a0, a1 = _argument(text, m.end())
-        if a1 > a0 and text[a0] == "{":
+        if a1 > a0 and text[a0] == "{" and not _CONDITIONAL.search(text, a0, a1):
             spans.append((a0, a1))
     return spans
 
@@ -830,6 +833,29 @@ _NOT_LITERAL = re.compile(r"\\(?:if[a-zA-Z]*|else|fi|xspace|expandafter|noexpand
                           r"let|relax|ensuremath|@ifnextchar|ifx)(?![a-zA-Z@])")
 
 
+_TAKES_ARGUMENT = frozenset(("\\" + n) for n in """
+frac dfrac tfrac cfrac binom dbinom tbinom sqrt mathbb mathbf mathcal mathrm mathit mathsf mathtt mathfrak mathscr
+mathnormal boldsymbol bm pmb operatorname text textrm textbf textit textsf texttt textup textnormal mbox emph hat
+widehat tilde widetilde bar overline underline vec dot ddot dddot check breve acute grave mathring overbrace
+underbrace overset underset stackrel xrightarrow xleftarrow left right middle big Big bigg Bigg bigl bigr Bigl
+Bigr biggl biggr Biggl Biggr bigm Bigm not color textcolor boxed cancel bcancel xcancel phantom hphantom vphantom
+smash mathop mathrel mathbin mathord mathopen mathclose mathpunct mathinner hspace mspace label tag ref eqref
+overleftarrow overrightarrow underleftarrow underrightarrow sideset substack
+""".split())
+
+
+_NO_ARGUMENT: List[frozenset] = []
+
+
+def _no_argument() -> frozenset:
+    """Commands that take no argument (symbols, operators, Greek letters): diagnose's list without those
+    that take one."""
+    if not _NO_ARGUMENT:
+        from .diagnose import _KNOWN
+        _NO_ARGUMENT.append(frozenset(_KNOWN) - _TAKES_ARGUMENT)
+    return _NO_ARGUMENT[0]
+
+
 def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
     """`tex` with its macros expanded here, when every definition it needs is a macro without arguments
     (``\\newcommand{\\calR}{\\mathcal{R}}``: the \\foreach alphabet, \\R for \\mathbb{R}): as TeX replaces
@@ -851,11 +877,12 @@ def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
                 continue
             body = bodies[t.group()]
             before = tex[last:t.start()]
-            # an argument of the command before it (\mathbb\RR, \frac\mass{V}): TeX hands over the whole
-            # macro, so its text is one group there; elsewhere it is put in as it is.  (Not for a body that
-            # is a command waiting for its own argument: \in \bb R with \bb -> \mathbb.)
-            if re.search(r"\\[a-zA-Z@]+$", before or (out[-1] if out else "")) and not re.search(r"\\[a-zA-Z@]+$", body):
-                body = "{%s}" % body
+            # right after a command that takes an argument (\mathbb\RR, \frac\mass{V}, \left\bar) TeX hands
+            # the whole macro over, which plain text in its place would not do: pandoc decides.  After one
+            # that takes none (\in \calR, \sum\subk, \cdot\vx) the text goes in where the macro was.
+            prev = re.search(r"(\\[a-zA-Z@]+)\s*$", before or (out[-1] if out else ""))
+            if prev and (prev.group(1) in _TAKES_ARGUMENT or prev.group(1) not in _no_argument()):
+                return None
             end = t.end()
             if t.group()[1:].isalpha():  # TeX skips the spaces after a control word (\text{\prefix Hz})
                 end = re.compile(r"[ \t]*\n?[ \t]*").match(tex, end).end()

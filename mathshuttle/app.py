@@ -715,8 +715,9 @@ class App(tk.Tk):
         self._preview_seq += 1
         seq = self._preview_seq
         src, tidy, macros = args[1], args[6], self._macros(args[7])
-        if src == "latex":  # with the definitions written into the input that pandoc does not apply
-            macros = compat.with_document(macros, compat.pandoc_leftovers(args[0]))
+        if src == "latex":  # with the definitions written into the input that pandoc does not apply, as converted
+            from .convert import _MARKDOWN_NOTE, input_macros
+            macros = input_macros(macros, args[0], src, _MARKDOWN_NOTE in result.notes)
         equations = list(result.equations[:6])
         dpi = max(96, int(self.winfo_fpixels("1i") * 1.15))
 
@@ -726,8 +727,14 @@ class App(tk.Tk):
             eqs = [tidied(eq) if src != "latex" and tidy else eq for eq in equations]
             tex = " ".join(e.tex for e in eqs)
             definitions = preview.definitions_for(tex, macros if src == "latex" else None)
-            needed = packs.packages_for(tex, set(macros.definitions) if macros is not None else set(),
-                                        macros.packages if macros is not None else set()) if src == "latex" else []
+            needed: list = []
+            if src == "latex":  # per equation (one equation's own \def\abs is not another's)
+                defined = set(macros.definitions) if macros is not None else set()
+                loaded = macros.packages if macros is not None else set()
+                for e in eqs:
+                    needed += [p for p in packs.packages_for(e.tex, defined, loaded) if p not in needed]
+                if {"physics", "braket"} <= set(needed):
+                    needed.remove("physics" if "braket" in loaded and "physics" not in loaded else "braket")
             return preview.render(eqs, definitions, dpi=dpi, packages=needed), len(result.equations)
 
         self._in_background(work, lambda value, error: self._show_preview(seq, value, error))

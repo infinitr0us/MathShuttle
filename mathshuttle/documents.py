@@ -388,7 +388,7 @@ def _local_sources(path: str, text: str) -> str:
     files of up to 4 MB."""
     folder = os.path.dirname(os.path.abspath(path))
     cache: Dict[str, Optional[str]] = {}
-    count = [0]  # files put in (a file \input twice is put in twice, as LaTeX reads it twice)
+    size = [0]  # characters put in (a file \input twice is put in twice, as LaTeX reads it twice)
 
     def read(full: str) -> Optional[str]:
         if full not in cache:
@@ -414,12 +414,13 @@ def _local_sources(path: str, text: str) -> str:
                     full = os.path.normcase(os.path.abspath(os.path.join(folder, candidate)))
                     if not os.path.isfile(full):
                         continue
-                    # a file that includes itself (directly or not) once; a package once, as LaTeX loads it
-                    if full in active or count[0] >= 300 or (package and full in cache):
+                    # a file that includes itself (directly or not) once; a package once, as LaTeX loads it;
+                    # at most 300 different files and 40 million characters in all
+                    if full in active or (package and full in cache) or (full not in cache and len(cache) >= 300):
                         break
                     data = read(full)
-                    if data is not None:
-                        count[0] += 1
+                    if data is not None and size[0] + len(data) <= 40_000_000:
+                        size[0] += len(data)
                         inserted.append(expand(data, active + (full,)))
                     break
             out.append(current[last:m.end()])
