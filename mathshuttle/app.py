@@ -1102,6 +1102,8 @@ class EquationList(tk.Toplevel):
         ttk.Button(buttons, text="Export all as .tex...", command=self.export).pack(side="left", padx=6)
         ttk.Button(buttons, text="as .docx...", command=self.export_docx).pack(side="left")
         ttk.Button(buttons, text="Export selected as .tex...", command=self.export_selected).pack(side="left", padx=6)
+        if os.path.splitext(doc.path)[1].lower() in (".tex", ".md"):  # the text too (wordexport)
+            ttk.Button(buttons, text="Whole file as Word...", command=self.save_document_as_word).pack(side="left")
         ttk.Button(buttons, text="Close", command=self.destroy).pack(side="right")
 
     def destroy(self):
@@ -1253,6 +1255,34 @@ class EquationList(tk.Toplevel):
                 return
             self.info.set("   ".join([_written(len(self.doc.found), path)] + notes))
         self.app._in_background(lambda: write_docx(self.doc, path, macros), done, daemon=False)
+
+    def save_document_as_word(self, path: Optional[str] = None) -> None:
+        """The whole .tex / .md file as a Word document: its text, headings and lists, each equation a
+        native Word equation, numbered and referenced as in the paper (wordexport.document_to_word)."""
+        path = path or filedialog.asksaveasfilename(
+            parent=self, title="Save the whole file as a Word document", defaultextension=".docx",
+            initialfile=os.path.splitext(os.path.basename(self.doc.path))[0] + ".docx",
+            filetypes=[("Word document", "*.docx"), ("All files", "*.*")])
+        if not path:
+            return
+        if os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(self.doc.path)):
+            self.info.set("Choose another file name: that is the file being read")
+            return
+        from .wordexport import document_to_word
+        macros = self.app._macros()  # (document_to_word adds the file's own definitions)
+        source = self.doc.path
+        self.info.set("Writing %s..." % os.path.basename(path))
+
+        def done(notes, error) -> None:
+            if not self.winfo_exists():
+                return
+            if error is not None:
+                if not isinstance(error, (ConversionError, PandocNotFound)):
+                    raise error
+                self.info.set(str(error).splitlines()[-1] if str(error).strip() else "Could not save")
+                return
+            self.info.set("   ".join(["Written: %s" % os.path.basename(path)] + (notes or [])))
+        self.app._in_background(lambda: document_to_word(source, path, macros), done, daemon=False)
 
 
 def main() -> int:

@@ -203,7 +203,8 @@ without Office Math inside) cannot be read; their number is reported.
 Markdown notes or a piece of LaTeX, as a Word document: its prose, headings, lists, tables and code as
 they are, and each equation a native Word equation, made as *Copy for Word/PowerPoint* makes it (your
 macros, the built-in packs). On the command line, `mathshuttle word FILE -o OUT.docx` does the same for a
-passage, and for a whole `.tex` or `.md` file it writes the document: with the paper's own definitions,
+passage. For a whole `.tex` or `.md` file, **Whole file as Word...** in the window of **Open file...** (or
+`mathshuttle word paper.tex -o paper.docx`) writes the document: with the paper's own definitions,
 and with the `.aux` file LaTeX wrote next to it, each numbered equation's number at the right margin as
 Word numbers equations itself (`\tag{..}` too), and `\eqref`, `\ref` and numeric `\cite` showing their
 numbers. An equation that cannot be converted stays LaTeX text, followed by the reason. The rest is

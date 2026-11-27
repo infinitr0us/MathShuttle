@@ -393,6 +393,36 @@ def test_open_document_lists_and_uses_equations(app, tmp_path):
         del app._show_equations
 
 
+def test_whole_tex_file_as_word(app, tmp_path):
+    """The document window of a .tex file writes the whole paper as a Word file; of a .pptx, it has no such button."""
+    import zipfile
+    from mathshuttle.documents import DocumentEquations, Found, read_document
+    from mathshuttle.pandoc_engine import Equation
+    paper = tmp_path / "paper.tex"
+    paper.write_text("\\documentclass{article}\n\\newcommand{\\vv}{\\mathbf{v}}\n\\begin{document}\n"
+                     "\\section{Model}\nThe update is\n\\begin{equation} \\vv_{t+1} = \\vv_t - \\eta g \\label{eq:up}"
+                     "\\end{equation}\nand \\eqref{eq:up} converges.\n\\end{document}\n", encoding="utf-8")
+    (tmp_path / "paper.aux").write_text("\\newlabel{eq:up}{{1.3}{2}}\n", encoding="utf-8")  # LaTeX's numbers
+    win = app._show_equations(read_document(str(paper)))
+    try:
+        buttons = [w.cget("text") for w in win.winfo_children()[-1].winfo_children()]
+        assert "Whole file as Word..." in buttons
+        out = tmp_path / "paper.docx"
+        win.save_document_as_word(str(out))  # in the background
+        assert pump(app, seconds=30, until=lambda: "Written: paper.docx" in win.info.get())
+        xml = zipfile.ZipFile(str(out)).read("word/document.xml").decode("utf-8")
+        assert "<m:oMath" in xml and "#(1.3)" in xml and "(1.3)" in xml.split("#(1.3)")[1].split("converges")[0]
+        win.save_document_as_word(str(paper))
+        assert "another file name" in win.info.get() and "documentclass" in paper.read_text(encoding="utf-8")
+    finally:
+        win.destroy()
+    win = app._show_equations(DocumentEquations("talk.pptx", "pptx", [Found(Equation("x"), "slide 1")]))
+    try:
+        assert "Whole file as Word..." not in [w.cget("text") for w in win.winfo_children()[-1].winfo_children()]
+    finally:
+        win.destroy()
+
+
 def test_large_document_filters_selection_and_exports(app, tmp_path):
     from mathshuttle.documents import DocumentEquations, Found
     from mathshuttle.pandoc_engine import Equation
