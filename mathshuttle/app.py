@@ -149,6 +149,7 @@ class App(tk.Tk):
         self._running = 0  # conversion threads whose result has not been collected yet
         self._shown_args: Optional[tuple] = None  # conversion arguments of the result in the output pane
         self._last_copy: "tuple[Optional[tuple], int]" = (None, -1)  # (_copy_key, index) of the one copied last
+        self._recalled: Optional[tuple] = None  # (pasted MathML, (LaTeX, display) it was copied from, or None)
         self._copy_menu: Optional[tk.Menu] = None
         self.settings = self._load_settings()
         # Tk's native macOS windowing, which has the Command modifier and the tk::mac:: hooks
@@ -506,6 +507,14 @@ class App(tk.Tk):
         """Runs in a background thread; only ever touches the queue."""
         try:
             result: object = convert(*args[:6], macros=self._macros(args[7]), tidy=args[6])
+            recalled = self._recalled
+            if (recalled and recalled[1] and recalled[0] == args[0] and args[1] == "mathml" and args[2] == "latex"
+                    and isinstance(result, Result)):
+                # pasted from Office unedited: the LaTeX it was copied from, as written (recall)
+                from . import recall
+                tex, display = recalled[1]
+                display = display if args[3] == "auto" else args[3] == "display"
+                result = Result(result.equations, [latex_wrap.wrap(tex, args[4], display)], [recall.NOTE])
         except (ConversionError, PandocNotFound) as e:
             result = e
         except Exception:  # pragma: no cover
@@ -620,6 +629,7 @@ class App(tk.Tk):
             self._set_output(str(e), error=True)
             self._set_status("Could not copy the equation", error=True)
             return
+        copy.remember()
         self._last_copy = (key, index)
         msg = "Equation copied  -  press %s+V in Word / PowerPoint / OneNote to insert it as a native equation" % KEY
         self._set_status("   ".join([msg] + copy.notes))
@@ -638,6 +648,10 @@ class App(tk.Tk):
         self.src_var.set(src)
         if self.dst_var.get() == src:
             self.dst_var.set("latex")
+        # an equation copied from here that comes back unedited: its LaTeX as written (recall); the
+        # conversion of exactly this input gives that
+        from . import recall
+        self._recalled = (text, recall.recall(text)) if src == "mathml" else None
         self.input.delete("1.0", "end")
         self.input.insert("1.0", text)
         self.input.edit_modified(False)
@@ -812,13 +826,17 @@ class App(tk.Tk):
                 src = ("mathml" if re.search(r"<(\w+:)?math\b", text) else
                        "omml" if re.search(r"<m:oMath", text) else "latex")
             if src != "latex":
-                latex = convert(text, src, "latex", mode, wrapper, tidy=tidy).text
+                from . import recall
+                recalled = recall.latex_for(text, wrapper, mode) if src == "mathml" else None
+                latex = recalled or convert(text, src, "latex", mode, wrapper, tidy=tidy).text
                 clipboard.set_text(latex, expect_sequence=sequence)
-                return "LaTeX copied: %s" % " ".join(latex.split())[:70], False
+                return "LaTeX copied%s: %s" % (" (as it was copied, unedited)" if recalled else "",
+                                              " ".join(latex.split())[:70]), False
             if not text.strip():
                 return "Nothing to convert: copy LaTeX, or an equation in Word / PowerPoint, first", True
             copy = office_copy(text, "latex", mode, macros)
             clipboard.copy_mathml_for_office(copy.mathml, expect_sequence=sequence)
+            copy.remember()
             return "   ".join(["Equation ready: press %s+V in Word / PowerPoint" % KEY] + copy.notes), False
 
         def finished(value, error):
@@ -1176,6 +1194,7 @@ class EquationList(tk.Toplevel):
         except (ConversionError, PandocNotFound, clipboard.ClipboardError) as e:
             self.info.set("Could not copy: %s" % str(e).splitlines()[0])
             return
+        copy.remember()
         self.info.set("   ".join(["Copied: press %s+V in Word / PowerPoint" % KEY] + copy.notes))
 
     def copy_latex(self) -> None:

@@ -24,6 +24,8 @@ into an equation itself. What this tool adds:
   equation (see *Macros* below).
 * **LaTeX from Office that you can put in a paper** (`\mathrm{OOD}`, `\operatorname{softmax}`,
   `\boldsymbol{\theta}`, `\binom`, `cases`, `a &= b`), without opening Word's equation options.
+  An equation you copied from LaTeX and did not edit in Office comes back as the LaTeX you wrote,
+  with its macros and `\label`.
 * MathML, OMML, Typst and eqn output; a command line; Office versions without LaTeX paste
   (Office 2021 / 2024 LTSC, older Mac Office).
 
@@ -145,6 +147,17 @@ numbers (the tool says so when it copies one). It also makes every MathML space 
 ordinary space, so *Copy for Word/PowerPoint* gives `\,`, `\;`, `\quad`, `\qquad` as the Unicode
 spaces Office keeps (thin, thick, em space), and they come back as the same commands; `\!` is left
 out (Office has no negative space).
+
+**Your own LaTeX back.** An equation copied with MathShuttle that comes back from Word or
+PowerPoint unedited (pasted, then copied again) comes back as the LaTeX you wrote: your macros,
+`\label`, `\tag` and spacing, not the LaTeX rebuilt from Office's MathML, and the status line says
+so. This works in the window, with the hotkey and with `mathshuttle paste`. Each *Copy for
+Word/PowerPoint* notes what the equation shows and the LaTeX it came from in `copied.json`, next to
+`settings.json` (the newest 300 equations, on your computer only). What Word itself changes does
+not count as an edit (bold made bold italic, brackets made a stretchy pair, spaces); a changed symbol,
+script or font does, and then the equation is converted from Office's MathML as usual. Set the
+environment variable `MATHSHUTTLE_RECALL_PATH` to another file to keep the notes there, or to an
+empty value to turn this off.
 
 **LaTeX preview.** With a LaTeX installation on `PATH` (MiKTeX or TeX Live: `latex` and `dvipng`),
 a strip above the buttons shows the equation as LaTeX sets it: what you typed when converting from
@@ -423,6 +436,7 @@ mathshuttle/
   packs.py           built-in packs: physics, braket, slashed, tensor, siunitx literal units, AASTeX
   diagnose.py        texmath's parse errors in plain words (unknown command, unclosed brace...)
   tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
+  recall.py          the LaTeX an equation was copied from, when it comes back from Office unedited
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
   documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are; a .docx of them
   wordexport.py      a passage or a whole .tex / .md document as a Word file (numbers, references, citations)

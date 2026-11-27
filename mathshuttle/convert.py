@@ -393,6 +393,13 @@ class OfficeCopy:
     latex: str            # the same (first) equation as LaTeX.  Not for the clipboard's plain-text
     #                       format: Word pastes from that one (see clipboard.copy_mathml_for_office)
     notes: List[str] = field(default_factory=list)
+    source: Optional[Equation] = None  # the LaTeX it was made from, as written (for recall.remember)
+
+    def remember(self) -> None:
+        """Note it for Paste from Word/PowerPoint (recall): after it is on the clipboard."""
+        if self.source is not None:
+            from . import recall
+            recall.remember(self.mathml, self.source.tex, self.source.display)
 
 
 class Equations(list):
@@ -434,7 +441,8 @@ def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat
     latex = tidied(eq) if tidy and src != "latex" else eq
     if src != "latex" and not latex.tex.isascii():
         _add(notes, [_UNICODE_NOTE])
-    return OfficeCopy(mathml, latex_wrap.wrap(latex.tex, "auto", eq.display), notes)
+    return OfficeCopy(mathml, latex_wrap.wrap(latex.tex, "auto", eq.display), notes,
+                      source=eq if src == "latex" else None)
 
 
 def mathml_for_office(text: str, src: str, mode: str = "auto",

@@ -209,6 +209,7 @@ def _cli(argv: list[str]) -> int:
             source = _read_source(args.file, args.expr, args.cmd)
             copy = office_copy(source, args.src, args.mode, load_macros(args.macros), index=args.index - 1)
             clipboard.copy_mathml_for_office(copy.mathml)  # the plain text must be the MathML too (see there)
+            copy.remember()
             sys.stderr.write("".join(n + "\n" for n in copy.notes) or "Equation copied. Paste it into Word or PowerPoint.\n")
         elif args.cmd == "paste":
             found = clipboard.read_office_equation()
@@ -216,6 +217,13 @@ def _cli(argv: list[str]) -> int:
                 sys.stderr.write("No equation on the clipboard (copy one in Word / PowerPoint first).\n")
                 return 2
             src, text = found
+            from . import recall
+            recalled = recall.latex_for(text, args.wrapper, args.mode) if src == "mathml" and args.dst == "latex" \
+                and args.tidy else None
+            if recalled is not None:  # copied from here and unedited: the LaTeX as written
+                sys.stdout.write(recalled + "\n")
+                sys.stderr.write(recall.NOTE + "\n")
+                return 0
             result = convert(text, src, args.dst, args.mode, args.wrapper, tidy=args.tidy)
             sys.stdout.write(result.text + "\n")
             for note in result.notes:  # e.g. several equations in the copied text
