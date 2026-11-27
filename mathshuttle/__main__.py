@@ -96,6 +96,7 @@ def _cli(argv: list[str]) -> int:
     p.add_argument("-t", "--to", dest="dst", choices=WRITE_FORMATS, default="latex")
     p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto")
     p.add_argument("--macros", action="append", default=[], metavar="FILE")
+    p.add_argument("--docx", metavar="OUT", help="also write them all as native equations to the Word file OUT")
 
     sub.add_parser("version", help="show the pandoc / texmath versions in use")
 
@@ -144,6 +145,10 @@ def _cli(argv: list[str]) -> int:
                 text, new = convert_equation(found.equation, args.dst, args.wrapper, macros)
                 notes += [n for n in new if n not in notes]
                 sys.stdout.write(_comment(args.dst, "[%d] %s" % (i, found.where)) + "\n" + text + "\n\n")
+            if args.docx:
+                from .documents import write_docx
+                notes += [n for n in write_docx(doc, args.docx, macros) if n not in notes]
+                notes.append("written to %s" % args.docx)
             sys.stderr.write("".join(n + "\n" for n in notes) + "%d equation(s) in %s\n" % (
                 len(doc.found), os.path.basename(args.file)))
         elif args.cmd == "version":

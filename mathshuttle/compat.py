@@ -272,6 +272,22 @@ def _rename(tex: str, table: Dict[str, str], hits: List[str]) -> str:
         pos = m.start() + len(new)
 
 
+_SIZED_NORM = re.compile(r"(\\(?:left|right|[bB]igg?[lrm]?)" + _CS + r"\s*)\\[lr]Vert" + _CS)
+
+
+def _sized_norms(tex: str) -> str:
+    """texmath 0.13 writes a sized \\lVert / \\rVert (\\left\\lVert, \\bigr\\rVert...) as U+2225 PARALLEL
+    TO, not the norm bar U+2016 that it writes for \\Vert there (and for \\lVert alone)."""
+    pos = 0
+    while True:
+        m = _find(tex, _SIZED_NORM, pos)
+        if not m:
+            return tex
+        new = m.group(1) + "\\Vert"
+        tex = tex[:m.start()] + new + tex[m.end():]
+        pos = m.start() + len(new)
+
+
 def _commands(tex: str, names, how: str, hits: List[str]) -> str:
     """`how`: "unwrap" (\\cmd[opt]{x} -> {x}; `names` maps each to its number of options), "drop_arg"
     (\\cmd{x} -> {}), "drop" (\\cmd -> {}).  The empty group keeps the atoms around apart."""
@@ -675,6 +691,7 @@ def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml
     out = _font_switches(out)
     out = _rename(out, _RENAMES, hits)
     out = _rename(out, _SYMBOLS, [])
+    out = _sized_norms(out)
     if target in ("mathml", "omml"):
         out = _bold_upright(out)
     out = _rename(out, _RESIZED, resized)

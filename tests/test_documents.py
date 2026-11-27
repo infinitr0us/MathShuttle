@@ -65,6 +65,55 @@ def test_unreadable_files(tmp_path):
         read_document(str(tmp_path / "x.xyz"))
 
 
+@pytest.mark.parametrize("name", ["sample.docx", "sample.pptx", "paper.tex", "notes.md"])
+def test_export_to_word(tmp_path, name):
+    from mathshuttle.documents import write_docx
+    d = doc(name)
+    out = tmp_path / (name + ".docx")
+    assert write_docx(d, str(out)) == []
+    back = read_document(str(out))  # native equations, in order, display or inline as they were
+    assert len(back.found) == len(d.found)
+    assert [f.equation.display for f in back.found] == [f.equation.display for f in d.found]
+    assert all(f.where == "Equations of " + name for f in back.found)
+    assert os.listdir(str(tmp_path)) == [out.name]  # no part file left
+
+
+def test_export_to_word_notes_and_failures(tmp_path, monkeypatch):
+    from mathshuttle import documents
+    from mathshuttle.documents import DocumentEquations, Found, write_docx
+    from mathshuttle.pandoc_engine import Equation
+    d = DocumentEquations("x.tex", "latex", [Found(Equation("\\nosuchmacro{x}", True), "A"),
+                                             Found(Equation("a \\tag{1}", True), "B")])
+    out = tmp_path / "x.docx"
+    notes = write_docx(d, str(out))
+    assert any("1 equation could not be converted" in n for n in notes)
+    assert any("\\tag" in n for n in notes)
+    # a failed run leaves the file that was there as it was
+    out.write_bytes(b"old")
+    monkeypatch.setattr(documents, "_run", lambda *a, **k: (_ for _ in ()).throw(ConversionError("no")))
+    with pytest.raises(ConversionError):
+        write_docx(d, str(out))
+    assert out.read_bytes() == b"old" and os.listdir(str(tmp_path)) == ["x.docx"]
+
+
+def test_sized_norm_bars_are_norms():
+    from mathshuttle.compat import for_texmath
+    from mathshuttle.pandoc_engine import Equation, write_mathml
+    for tex in ("\\left\\lVert x \\right\\rVert", "\\bigl\\lVert x \\bigr\\rVert", "\\Bigl\\| x \\Bigr\\|"):
+        mathml = write_mathml(Equation(for_texmath(tex)[0], True))
+        assert "‖" in mathml and "∥" not in mathml, tex
+    assert "∥" in write_mathml(Equation(for_texmath("a \\parallel b")[0], True))  # parallel stays
+
+
+def test_extract_command_writes_word(tmp_path):
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    out = tmp_path / "eqs.docx"
+    p = subprocess.run([sys.executable, "-m", "mathshuttle", "extract", os.path.join(DOCS, "sample.pptx"),
+                        "--docx", str(out)], cwd=ROOT, capture_output=True, env=env)
+    assert p.returncode == 0 and "written to" in p.stderr.decode("utf-8")
+    assert len(read_document(str(out)).found) == 2
+
+
 def test_extract_command():
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     p = subprocess.run([sys.executable, "-m", "mathshuttle", "extract", os.path.join(DOCS, "sample.pptx")],

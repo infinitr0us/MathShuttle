@@ -1024,6 +1024,7 @@ class EquationList(tk.Toplevel):
         ttk.Button(buttons, text="Copy for Word/PowerPoint", command=self.copy_for_office).pack(side="left", padx=6)
         ttk.Button(buttons, text="Copy LaTeX", command=self.copy_latex).pack(side="left")
         ttk.Button(buttons, text="Export all as .tex...", command=self.export).pack(side="left", padx=6)
+        ttk.Button(buttons, text="as .docx...", command=self.export_docx).pack(side="left")
         ttk.Button(buttons, text="Close", command=self.destroy).pack(side="right")
 
     def _selected(self):
@@ -1085,6 +1086,22 @@ class EquationList(tk.Toplevel):
             self.info.set("Could not write %s: %s" % (path, e.strerror or e))
             return
         self.info.set("%d equations written to %s" % (len(self.doc.found), path))
+
+    def export_docx(self, path: Optional[str] = None) -> None:
+        """All the equations as native equations in a Word document, each under where it was."""
+        path = path or filedialog.asksaveasfilename(
+            parent=self, title="Export the equations to Word", defaultextension=".docx",
+            initialfile=os.path.splitext(os.path.basename(self.doc.path))[0] + "-equations.docx",
+            filetypes=[("Word document", "*.docx"), ("All files", "*.*")])
+        if not path:
+            return
+        from .documents import write_docx
+        try:
+            notes = write_docx(self.doc, path, self.app._macros())
+        except (ConversionError, PandocNotFound) as e:
+            self.info.set(str(e).splitlines()[-1] if str(e).strip() else "Could not export")
+            return
+        self.info.set("   ".join(["%d equations written to %s" % (len(self.doc.found), path)] + notes))
 
 
 def main() -> int:

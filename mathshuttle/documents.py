@@ -18,7 +18,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
 
-from .pandoc_engine import (MARKDOWN, MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _collect_math, _run,
+from . import compat
+from .pandoc_engine import (MARKDOWN, MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _api, _collect_math, _run,
                             markdown_definitions, markdown_maths, read_omml, split_math_paragraph)
 
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
@@ -398,3 +399,47 @@ def read_document(path: str) -> DocumentEquations:
         raise ConversionError("Cannot read %s: %s" % (path, e.strerror or e))
     except (zipfile.BadZipFile, KeyError, ET.ParseError, UnicodeDecodeError) as e:
         raise ConversionError("%s is not a readable %s (%s)" % (os.path.basename(path), READABLE[ext], e))
+
+
+def _inlines(text: str) -> list:
+    """Plain text as pandoc JSON inlines."""
+    out: list = []
+    for word in text.split():
+        if out:
+            out.append({"t": "Space"})
+        out.append({"t": "Str", "c": word})
+    return out
+
+
+def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros] = None) -> List[str]:
+    """The document's equations as a Word document (`path`), each a native equation under a line that
+    says where it was ("[3] Method"), in one pandoc run; for a collaborator who edits them in Word.
+    Macros apply to a document's own LaTeX.  Returns notes: equations that texmath cannot write are in
+    the file as LaTeX text.  The file is written next to `path` first and then put in its place, so a
+    failed export leaves an older file as it was."""
+    blocks: list = [{"t": "Header", "c": [1, ["", [], []], _inlines("Equations of " + os.path.basename(doc.path))]}]
+    tags = False
+    for i, found in enumerate(doc.found, 1):
+        tex, _ = compat.for_texmath(found.equation.tex, macros if doc.source == "latex" else None, "omml")
+        tags |= bool(re.search(r"\\tag(?![a-zA-Z@])", tex))
+        kind = "DisplayMath" if found.equation.display else "InlineMath"
+        blocks.append({"t": "Para", "c": [{"t": "Emph", "c": _inlines("[%d] %s" % (i, found.where))}]})
+        blocks.append({"t": "Para", "c": [{"t": "Math", "c": [{"t": kind}, tex]}]})
+    source = json.dumps({"pandoc-api-version": _api(), "meta": {}, "blocks": blocks}).encode("utf-8")
+    part = os.path.abspath(path) + ".part"
+    try:
+        _, err = _run(["-f", "json", "-t", "docx", "-o", part], source)
+        os.replace(part, path)
+    except OSError as e:  # e.g. the file is open in Word
+        raise ConversionError("Could not write %s: %s" % (path, e.strerror or e))
+    finally:
+        if os.path.exists(part):
+            os.remove(part)
+    notes = []
+    failed = err.count("Could not convert TeX math")
+    if failed:
+        notes.append("%d equation%s could not be converted; %s in the file as LaTeX text."
+                     % (failed, "" if failed == 1 else "s", "it is" if failed == 1 else "they are"))
+    if tags:
+        notes.append("\\tag numbers are not carried over (Word numbers equations itself).")
+    return notes
