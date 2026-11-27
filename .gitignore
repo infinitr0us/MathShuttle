@@ -8,3 +8,4 @@ dist/
 tests/_settings_tmp.json
 reviews/
 probe-out/
+.venv-build/

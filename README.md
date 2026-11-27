@@ -45,9 +45,17 @@ Requirement: **pandoc** (`winget install JohnMacFarlane.Pandoc`). The app looks 
 
 The same code runs on macOS: the window, every conversion, the command line, **Open file…**, the LaTeX
 preview and the tests (checked on macOS 27.2 with Python 3.12 / Tk 9.0 and Python 3.9 / Tk 8.6, pandoc
-3.14 from Homebrew, MacTeX 2026). Install pandoc with `brew install pandoc` and start the window with
-`python3 -m mathshuttle` (any Python ≥ 3.9 with tkinter; uv's 3.11 and later work in a `.venv` as they are,
-its 3.9 there needs `TCL_LIBRARY` set to its `lib/tcl8.6`). An app started from the
+3.14 from Homebrew, MacTeX 2026). Install pandoc with `brew install pandoc`, then either
+
+* `MathShuttle.app`: the standalone app (no Python needed), from the release zip or built with
+  `./build_app.sh` (see *Building the app* below); drag it into Applications. It is not signed by a
+  registered developer: the first time you open a downloaded copy, macOS refuses; open it once with
+  System Settings > Privacy & Security > *Open Anyway* (or remove the download mark with
+  `xattr -dr com.apple.quarantine MathShuttle.app`). A copy built on your Mac opens directly.
+* or `python3 -m mathshuttle` (any Python ≥ 3.9 with tkinter; uv's 3.11 and later work in a `.venv` as
+  they are, its 3.9 there needs `TCL_LIBRARY` set to its `lib/tcl8.6`).
+
+An app started from the
 Finder does not get the shell's `PATH`, so pandoc is also looked for in `/opt/homebrew/bin` and
 `/usr/local/bin`, and `latex` / `dvipng` in `/Library/TeX/texbin`. The shortcuts take Command as well as
 Control (Cmd+Shift+C, Cmd+Shift+V, Cmd+Return); the settings are kept in
@@ -56,16 +64,15 @@ Control (Cmd+Shift+C, Cmd+Shift+V, Cmd+Return); the settings are kept in
 **Word / PowerPoint for Mac** (16.115, checked with `tools/mac_office_probe.py`): the clipboard code
 uses the general pasteboard (NSPasteboard, through the Objective-C runtime with ctypes). Word copies an
 equation as MathML under `public.mathml` and `public.mathml.presentation`, PowerPoint under
-`public.mathml`; Word pastes from either, PowerPoint only from `public.mathml`. *Copy for Word/PowerPoint* writes both, and the MathML as plain
-text too: without the plain text, PowerPoint puts the equation into a new text box of its own instead
-of the one you clicked into. For a selection of text with equations in it, and for lines aligned at
-`=`, Mac Word copies no MathML; *Paste from Word/PowerPoint* then reads the equations from the HTML it
-copies along. macOS may ask once before the app reads what another app copied (paste privacy).
+`public.mathml`; Word pastes from either, PowerPoint only from `public.mathml`. *Copy for
+Word/PowerPoint* writes both, and the MathML as plain text too: without the plain text, PowerPoint
+puts the equation into a new text box of its own instead of the one you clicked into. For a selection
+of text with equations in it, and for lines aligned at `=`, Mac Word copies no MathML; *Paste from
+Word/PowerPoint* then reads the equations from the HTML it copies along. macOS may ask once before the
+app reads what another app copied (paste privacy).
 
-Not there yet:
-
-* **The hotkey**: Windows only for now; its checkbox says so.
-* A standalone app: `build_exe.ps1` builds the Windows `.exe` only.
+Not there yet: **the hotkey** is Windows only for now (its checkbox says so). Cmd+Shift+C / Cmd+Shift+V
+work while the MathShuttle window is in front.
 
 ## Word / PowerPoint workflow
 
@@ -240,6 +247,19 @@ searched for `pandoc.exe`, and an `MATHSHUTTLE_PANDOC` that names no file is an 
 .\build_exe.ps1 -Shortcut           # + Start-menu shortcut   (-DesktopShortcut for the desktop)
 .\build_exe.ps1 -BundlePandoc       # + copies pandoc.exe into dist\MathShuttle\ (self-contained, see Licence)
 ```
+
+### Building the app (macOS)
+
+```sh
+./build_app.sh                          # creates .venv-build, installs PyInstaller, builds dist/MathShuttle.app
+./build_app.sh --zip                    # + the release zip (tools/make_release.py macos)
+PYTHON=/path/to/python3 ./build_app.sh  # build with that Python (it needs tkinter with Tk 8.6 or later)
+```
+
+The app is signed ad hoc (no developer certificate), as every Apple silicon program must be.
+For a release, `tools/make_release.py windows` (after `build_exe.ps1`, with `.venv\Scripts\python`) and
+`tools/make_release.py macos` zip the app with `LICENSE.txt`, `README.md` and a `THIRD-PARTY-NOTICES.txt`
+made from the licences of the Python, Tcl/Tk and PyInstaller the build used.
 
 ## Tests
 
