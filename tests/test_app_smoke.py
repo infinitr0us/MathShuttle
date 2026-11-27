@@ -345,6 +345,9 @@ def test_copy_for_office_hotkey_round_trip(app):
     """The hotkey (a simulated press: no keystroke is sent): LaTeX text on the clipboard becomes an
     equation for Office, and pressing again turns it back into LaTeX text.  Overwrites the clipboard."""
     from mathshuttle import hotkeys
+    # the window's start-up check (50 ms after it opens) registers the hotkey itself: let it run first,
+    # or it replaces the listener below (run alone, this test is the first to run Tk's events)
+    assert pump(app, until=lambda: app.engine_var.get())
     app.src_var.set("latex")
     # not the user's key, which a running MathShuttle may hold (the Mac has no F21-F24)
     app.hotkey = "Ctrl+Alt+Shift+F23" if sys.platform == "win32" else "Ctrl+Alt+Shift+F18"
