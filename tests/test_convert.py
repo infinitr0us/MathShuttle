@@ -326,8 +326,8 @@ def test_mathml_for_office_shapes_ragged_tables_and_arrays(tex, cells, back):
     from mathshuttle.convert import mathml_for_office
     ns = "{http://www.w3.org/1998/Math/MathML}"
     office = mathml_for_office(tex, "latex")[0]  # what Copy for Word/PowerPoint puts on the clipboard
-    if cells is None:
-        assert office == write_equation(read_equations(tex, "latex")[0], "mathml")
+    if cells is None:  # (commas carry separator="false" for Word: see pandoc_engine._office_commas)
+        assert office.replace(' separator="false"', "") == write_equation(read_equations(tex, "latex")[0], "mathml")
     else:
         table = next(ET.fromstring(office).iter(ns + "mtable"))
         assert table.get("columnspacing") == "0em"
