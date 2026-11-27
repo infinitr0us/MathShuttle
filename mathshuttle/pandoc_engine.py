@@ -1504,17 +1504,20 @@ def _office_spaces(root: ET.Element) -> None:
 def _unicode_spaces(math: ET.Element) -> None:
     """<mo> / <mtext> holding only Unicode spaces (what Office keeps, see _office_spaces) -> <mspace> of
     their width, which texmath reads as \\, \\; \\quad \\qquad... (namespaces already stripped)."""
+    converted = set()
     for el in math.iter():
         if el.tag in ("mo", "mtext") and el.text and len(el) == 0 and all(c in _SPACE_WIDTHS for c in el.text):
             width = sum(_SPACE_WIDTHS[c] for c in el.text)
             el.tag, el.text = "mspace", None
             el.attrib.clear()
             el.set("width", ("%.3f" % width).rstrip("0").rstrip(".") + "em")
-    # Word writes \qquad's two em spaces as two elements: one space of their width (\qquad, not \quad\quad)
+            converted.add(el)
+    # Word writes \qquad's two em spaces as two elements: one space of their width (\qquad, not \quad\quad);
+    # only those (spaces MathML writes itself, \ \ for instance, stay as they are)
     for parent in math.iter():
         children = list(parent)
         for a, b in zip(children, children[1:]):
-            if a.tag == b.tag == "mspace" and a in list(parent):
+            if a in converted and b in converted and a in list(parent):
                 wa = re.fullmatch(r"(-?\d*\.?\d+)em", a.get("width") or "")
                 wb = re.fullmatch(r"(-?\d*\.?\d+)em", b.get("width") or "")
                 if wa and wb:
