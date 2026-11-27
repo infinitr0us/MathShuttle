@@ -536,6 +536,40 @@ def test_stale_tex_annotation_structure_and_renderers(shown, tex, stale):
     assert bool(annotation_notes(ANNOTATED % ("<mrow>%s</mrow>" % shown, tex))) == stale
 
 
+@pytest.mark.parametrize("shown, tex, stale", [
+    # where an argument ends: x^n+1 is not x^{n+1}, nor a/b+c a/(b+c), nor sqrt(x)+y sqrt(x+y)
+    ("<msup><mi>x</mi><mi>n</mi></msup><mo>+</mo><mn>1</mn>", "x^{n+1}", True),
+    ("<mfrac><mi>a</mi><mi>b</mi></mfrac><mo>+</mo><mi>c</mi>", "\\frac{a}{b+c}", True),
+    ("<msqrt><mi>x</mi></msqrt><mo>+</mo><mi>y</mi>", "\\sqrt{x+y}", True),
+    ("<msup><mi>x</mi><mrow><mi>n</mi><mo>+</mo><mn>1</mn></mrow></msup>", "x^{n+1}", False),
+    # under-scripts: an arrow under a sum is a limit unless marked accentunder; over: the accent attribute
+    ("<munder accentunder='false'><mo>&#x2211;</mo><mo>&#x2190;</mo></munder>", "\\sum_{\\to}", True),
+    ("<munder><mo movablelimits='true'>lim</mo><mo accentunder='false'>&#x2192;</mo></munder>"
+     "<msub><mi>x</mi><mi>n</mi></msub>", "\\lim_{\\rightarrow} x_n", False),
+    ("<munderover accent='true'><mo>&#x2211;</mo><mi>i</mi><mo>^</mo></munderover>", "\\sum_{j}", True),
+    # prescripts, phantoms, symbols written two ways
+    ("<mmultiscripts><mi>C</mi><mprescripts/><mn>6</mn><mn>14</mn></mmultiscripts>", "{}_{6}^{14}C", False),
+    ("<mi>x</mi><mphantom><mi>A</mi></mphantom><mi>y</mi>", "x\\vphantom{A}y", False),
+    ("<mi>a</mi><mo>:=</mo><mi>b</mi>", "a \\coloneqq b", False),
+    ("<mi>a</mi><mo>&#x27FA;</mo><mi>b</mi>", "a \\iff b", False),
+])
+def test_stale_tex_annotation_argument_bounds_and_scripts(shown, tex, stale):
+    from mathshuttle.convert import annotation_notes
+    assert bool(annotation_notes(ANNOTATED % ("<mrow>%s</mrow>" % shown, tex))) == stale
+
+
+def test_stale_tex_annotation_next_to_content_mathml():
+    from mathshuttle.convert import annotation_notes
+    ns = 'xmlns="http://www.w3.org/1998/Math/MathML"'
+    # presentation shown, Content MathML beside it: the TeX is still compared with what is shown
+    parallel = ('<math %s><semantics><mi>y</mi><annotation-xml encoding="MathML-Content"><ci>y</ci>'
+                '</annotation-xml><annotation encoding="application/x-tex">x</annotation></semantics></math>' % ns)
+    assert annotation_notes(parallel)
+    # Content MathML as the primary: nothing shown to compare with
+    primary = '<math %s><semantics><pi/><annotation encoding="application/x-tex">\\pi</annotation></semantics></math>' % ns
+    assert annotation_notes(primary) == []
+
+
 def test_annotation_notes_not_for_what_the_annotation_gives():
     from mathshuttle.convert import annotation_notes
     # MathShuttle's own inline equation read back: compared in its own (inline) mode
@@ -557,8 +591,14 @@ def test_annotation_notes_draw_all_annotations_in_one_pandoc_run(monkeypatch):
     from mathshuttle.convert import annotation_notes
     runs = []
     real = pandoc_engine._run
-    monkeypatch.setattr(pandoc_engine, "_run", lambda *a, **k: (runs.append(1), real(*a, **k))[1])
-    many = "".join(ANNOTATED % ("<msub><mi>x</mi><mn>%d</mn></msub>" % i, "x_%d" % i) for i in range(30))
+    monkeypatch.setattr(pandoc_engine, "_run",
+                        lambda args, *a, **k: (runs.append(1) if "html" in args else None, real(args, *a, **k))[1])
+    many = "".join(ANNOTATED % ("<msub><mi>x</mi><mn>%d</mn></msub>" % i, "x_{%d}" % i) for i in range(30))
+    assert annotation_notes(many) == [] and len(runs) == 1
+    # an unreadable annotation among them does not split the run, and is not flagged
+    many = "".join(ANNOTATED % ("<msub><mi>x</mi><mn>%d</mn></msub>" % i, "x_{%d}" % i if i != 29 else "\\nosuchmacro{x}")
+                   for i in range(30))
+    runs.clear()
     assert annotation_notes(many) == [] and len(runs) == 1
 
 

@@ -98,9 +98,10 @@ clipboard and converts it (to LaTeX by default; any other target works too). Equ
 that Office exports as a bare `<mtable>` are recognised and come back as `aligned`, not `matrix`
 (continuation lines such as `&+ c` included). When Word copies no MathML (a sentence with
 equations in it selected, or on the Mac lines aligned at `=`), the equations are read from the
-HTML that Word copies along, where they are stored as OMML. An equation broken into lines (Shift+Enter,
-or *Insert Manual Break*, whose lines Windows Word's MathML puts on one line) comes back as one
-`aligned` block, lined up at the `=` signs when Word aligns them; so does it from a `.docx`.
+HTML that Word copies along, where they are stored as OMML. Lines made with Shift+Enter and lined up
+with *Align at =* come back as one `aligned` block (without *Align at* they are separate equations,
+as Word stores them); so does an equation with manual line breaks (*Insert Manual Break*, whose
+lines Windows Word's MathML puts on one line), lined up where Word lines them up. Also from a `.docx`.
 
 With **Tidy LaTeX** (on by default; `--no-tidy` on the command line), the LaTeX is what an author
 would write rather than texmath's literal rendering of Office's structure:

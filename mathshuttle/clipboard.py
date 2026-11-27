@@ -110,14 +110,18 @@ def read_office_equation() -> Optional[Tuple[str, str]]:
     failing that ("omml", OMML) of the equations in the HTML that Word copies along (a selection of text
     with equations in it, or lines that Mac Word copies without MathML); None if neither is there."""
     from .office_html import omml_from_html
+    sequence = sequence_number()
     mathml = read_equation_from_office()
     if mathml:
-        if "mtable" not in mathml:
-            # Word's MathML puts the lines of an equation with manual line breaks (Insert Manual Break)
-            # on one line; its HTML keeps them (m:brk)
+        # Word's MathML puts the lines of an equation with manual line breaks (Insert Manual Break) on
+        # one line; its HTML keeps them (m:brk).  The HTML is a second read: if it fails, or something
+        # else was copied in between, the MathML is what was copied
+        try:
             omml = omml_from_html(_backend().read_office_html())
-            if omml and re.search(r"<m:brk\b", omml):
-                return "omml", omml
+        except ClipboardError:
+            omml = None
+        if omml and re.search(r"<m:brk\b", omml) and sequence_number() == sequence:
+            return "omml", omml
         return "mathml", mathml
     omml = omml_from_html(_backend().read_office_html())
     return ("omml", omml) if omml else None

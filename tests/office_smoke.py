@@ -194,9 +194,14 @@ def test_powerpoint(copy, eq_array: bool, expected_back=None):
         print("  MathZones.Count after paste into textbox:", tr2.MathZones.Count)
         print("  text:", tr2.Text[:100])
         assert tr2.MathZones.Count >= 1, "PowerPoint did not create a native equation from the MathML clipboard"
-        tr2.MathZones.Item(1).Copy()
-        time.sleep(0.5)
-        mml_back = show_clipboard()
+        for attempt in range(2):
+            # PowerPoint occasionally puts only the text there on the first copy (seen once in ~30 runs)
+            tr2.MathZones.Item(1).Copy()
+            time.sleep(0.5)
+            mml_back = show_clipboard()
+            if mml_back:
+                break
+            print("  (no MathML copied, retrying once)")
         assert mml_back, "PowerPoint did not put MathML on the clipboard"
         print("  MathML -> LaTeX:", [e.tex for e in read_equations(mml_back, "mathml")])
         # an equation array is exported as a table without column gaps

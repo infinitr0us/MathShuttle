@@ -137,42 +137,57 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
 
 
 # ---- a TeX annotation that does not show what its MathML shows -----------------------------------
-# characters that renderers use for the same thing (NFKC also folds 𝑥 / x, ϕ / φ, … / ...); invisible
-# operators and zero-width spaces go
-# (applied after NFKC, which has made "…" "...": "⋯" too; MathType writes angle brackets as < >)
-_SAME_SYMBOL = {ord(a): b for a, b in (("⋅", "·"), ("∙", "·"), ("−", "-"), ("∗", "*"), ("∣", "|"), ("∥", "‖"),
-                                        ("⋯", "..."), ("⩽", "≤"), ("⩾", "≥"), ("⟨", "<"), ("〈", "<"),
-                                        ("〈", "<"), ("⟩", ">"), ("〉", ">"), ("〉", ">"))}
+# characters that renderers use for the same thing (applied after NFKC, which folds 𝑥 / x, ϕ / φ and
+# makes "…" "..."); MathType writes angle brackets as < >; invisible operators and zero-width spaces go
+_SAME_SYMBOL = {ord(a): b for a, b in (
+    ("⋅", "·"), ("∙", "·"), ("−", "-"), ("∗", "*"), ("∣", "|"), ("∥", "‖"), ("⋯", "..."), ("⩽", "≤"), ("⩾", "≥"),
+    ("⟨", "<"), ("〈", "<"), ("〈", "<"), ("⟩", ">"), ("〉", ">"), ("〉", ">"), ("≔", ":="), ("⟺", "⇔"), ("⟹", "⇒"),
+    ("⟸", "⇐"), ("⟷", "↔"), ("⟶", "→"), ("⟵", "←"), ("⟼", "↦"))}
 _SAME_SYMBOL.update({cp: None for cp in (0x2061, 0x2062, 0x2063, 0x2064, 0x200B)})
-# what renderers put over or under a symbol as an accent, each in its own way (\hat: ^ ˆ U+0302, ...)
-_ACCENTS = frozenset("^ˆ~˜¯‾ˉ_˘ˇ˙¨´`°˚→←↔‿⁀⏞⏟⏜⏝⎴⎵︷︸" + "".join(map(chr, range(0x0300, 0x0370)))
+# what renderers put over or under a symbol as an accent, each in its own way (\hat: ^ ˆ U+0302, ...);
+# arrows only over it (\vec): under an operator an arrow is a limit (\lim_{\to})
+_ACCENTS = frozenset("^ˆ~˜¯‾ˉ_˘ˇ˙¨´`°˚‿⁀⏞⏟⏜⏝⎴⎵︷︸" + "".join(map(chr, range(0x0300, 0x0370)))
                      + "".join(map(chr, range(0x20D0, 0x20F0))))
+_OVER_ACCENTS = _ACCENTS | frozenset("→←↔⟶⟵⟷")
 _SCRIPTS = {"msub": "_", "munder": "_", "msup": "^", "mover": "^", "msubsup": "_^", "munderover": "_^"}
-_CONTENT_MATHML = frozenset("apply ci cn csymbol bind bvar lambda share cerror cs".split())
+_PRESENTATION_TOKENS = frozenset("mi mn mo mtext ms".split())
 
 
 def _local(el) -> str:
     return el.tag.rsplit("}", 1)[-1] if isinstance(el.tag, str) else ""
 
 
-def _is_accent(parent, child) -> bool:
-    if (parent.get("accent") or parent.get("accentunder") or child.get("accent") or "").lower() == "true":
-        return True
+def _is_accent(parent, child, over: bool) -> bool:
+    """Whether `child`, over (or under) `parent`'s base, is an accent rather than a script or limit: as
+    the attribute says (over: accent, on the element or its <mo>; under: the element's accentunder -
+    texmath marks an arrow under \\lim accent="true" on its <mo>); without one, an <mo> of accent
+    characters."""
+    said = (parent.get("accent") or child.get("accent")) if over else parent.get("accentunder")
+    if said is not None:
+        return said.strip().lower() == "true"
     text = "".join(child.itertext()).strip()
-    return _local(child) == "mo" and bool(text) and all(ch in _ACCENTS for ch in text)
+    return _local(child) == "mo" and bool(text) and all(ch in (_OVER_ACCENTS if over else _ACCENTS) for ch in text)
 
 
 def _symbols(math) -> str:
-    """What a <math> shows, for comparing two renderings of an equation: its symbols in order, with a
-    mark for each script (_ ^), fraction (/) and root (√), fences of <mfenced> written out; no spacing,
-    no invisible operators, font variants folded (NFKC), accents left out (renderers write them with
-    different characters).  Sub- and superscripts and limits under or over an operator are marked
-    alike: renderers choose between them by display mode."""
+    """What a <math> shows, for comparing two renderings of an equation: its symbols in order, a script
+    (_{..} ^{..}), fraction ({..}/{..}) or root (√{..}) marked with its arguments' bounds, the fences of
+    <mfenced> written out, prescripts before their base; no spacing, no invisible operators, nothing
+    in <mphantom>, font variants folded (NFKC), accents left out (renderers write them with different
+    characters).  Sub- and superscripts and limits under or over an operator are marked alike:
+    renderers choose between them by display mode."""
     out: List[str] = []
+
+    def arg(el) -> None:
+        out.append("{")
+        walk(el)
+        out.append("}")
 
     def walk(el) -> None:
         tag = _local(el)
-        kids = list(el)
+        kids = [k for k in el if _local(k) != "none"] if tag != "mmultiscripts" else list(el)
+        if tag == "mphantom":
+            return
         if tag == "mfenced":
             seps = [ch for ch in el.get("separators", ",") if not ch.isspace()]
             out.append(el.get("open", "("))
@@ -185,41 +200,68 @@ def _symbols(math) -> str:
         out.append(el.text or "")
         if tag in _SCRIPTS and kids:
             walk(kids[0])
-            for mark, child in zip(_SCRIPTS[tag], kids[1:]):
-                if not (tag in ("mover", "munder", "munderover") and _is_accent(el, child)):
-                    out.append(mark)
-                    walk(child)
+            for k, (mark, child) in enumerate(zip(_SCRIPTS[tag], kids[1:])):
+                over = mark == "^"
+                if tag in ("mover", "munder", "munderover") and _is_accent(el, child, over):
+                    continue
+                out.append(mark)
+                arg(child)
+            return
+        if tag == "mmultiscripts" and kids:  # base, (sub sup)*, <mprescripts/>, (sub sup)*
+            names = [_local(k) for k in kids]
+            split = names.index("mprescripts") if "mprescripts" in names else len(kids)
+            post, pre = kids[1:split], kids[split + 1:]
+            for scripts in (pre, None, post):
+                if scripts is None:
+                    walk(kids[0])
+                    continue
+                for k in range(0, len(scripts) - 1, 2):
+                    for mark, child in (("_", scripts[k]), ("^", scripts[k + 1])):
+                        if _local(child) != "none":
+                            out.append(mark)
+                            arg(child)
             return
         if tag == "mfrac" and len(kids) == 2:
-            walk(kids[0])
+            arg(kids[0])
             out.append("/")
-            walk(kids[1])
+            arg(kids[1])
             return
         if tag in ("msqrt", "mroot"):
             out.append("√")
+            if tag == "mroot" and len(kids) == 2:
+                arg(kids[1])
+                kids = kids[:1]
+            out.append("{")
+            for child in kids:
+                walk(child)
+            out.append("}")
+            return
         for child in kids:
             walk(child)
 
     walk(math)
     text = unicodedata.normalize("NFKC", "".join(out)).translate(_SAME_SYMBOL)
-    return "".join(ch for ch in text if not ch.isspace())
+    text = "".join(ch for ch in text if not ch.isspace())
+    while "{}" in text:  # an empty base or script (texmath's {}_{6}^{14}C) marks nothing
+        text = text.replace("{}", "")
+    return text
 
 
 def annotation_notes(text: str, macros: Optional[compat.Macros] = None) -> List[str]:
     """MathML that carries its TeX source as an annotation (MathType, KaTeX / MathJax pages, the "TeX
     annotation" option): a note for each <math> whose annotation shows something else than the MathML
     itself, which the conversion follows - it was edited after the TeX was written.  Not compared: an
-    annotation that cannot be read (macros not given), and Content MathML, whose LaTeX comes from the
-    annotation.  The annotations are drawn by texmath in one pandoc run, in each equation's mode."""
+    annotation that cannot be read (macros not given), and an equation with no presentation MathML
+    (Content MathML: its LaTeX comes from the annotation).  The annotations are drawn by texmath in
+    one pandoc run, in each equation's mode."""
     try:
         maths = parse_mathml(text)
     except ConversionError:
         return []
     todo = []  # (number, math, annotation, the annotation as texmath gets it)
     for i, math in enumerate(maths, 1):
-        content = any(_local(el) in _CONTENT_MATHML for el in math.iter())
-        tex = drop_annotations(math)
-        if content or not tex or not tex.strip():
+        tex = drop_annotations(math)  # what is left is what the equation shows
+        if not tex or not tex.strip() or not any(_local(e) in _PRESENTATION_TOKENS for e in math.iter()):
             continue
         try:
             prepared, _ = for_texmath(Equation(strip_tex(tex), math.get("display") == "block"), "latex", macros)

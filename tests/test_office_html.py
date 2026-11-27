@@ -244,11 +244,17 @@ def test_cf_html_header():
 class _FakeBackend:
     def __init__(self, mathml, html):
         self.mathml, self.html = mathml, html
+        self.sequence = 1
+
+    def sequence_number(self):
+        return self.sequence
 
     def read_equation_from_office(self):
         return self.mathml
 
     def read_office_html(self):
+        if isinstance(self.html, Exception):
+            raise self.html
         return self.html
 
 
@@ -324,6 +330,45 @@ def test_manual_breaks_win_over_flat_mathml(monkeypatch):
     assert src == "omml" and body(omml) == "\\begin{aligned}\na & = b \\\\\n & = c\n\\end{aligned}"
     monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(flat, block("<m:oMath><m:r>a=b=c</m:r></m:oMath>")))
     assert clipboard.read_office_equation() == ("mathml", flat)  # no break: the MathML, as before
+    # a matrix inside does not hide a break around it
+    with_matrix = flat.replace("<mi>c</mi>", "<mtable><mtr><mtd><mi>c</mi></mtd></mtr></mtable>")
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(with_matrix, broken))
+    assert clipboard.read_office_equation()[0] == "omml"
+    # the HTML is a second read: when it fails, or the clipboard changed meanwhile, the MathML stands
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(flat, clipboard.ClipboardError("busy")))
+    assert clipboard.read_office_equation() == ("mathml", flat)
+    changing = _FakeBackend(flat, broken)
+    real_read = changing.read_office_html
+
+    def read_after_a_copy():
+        changing.sequence += 1
+        return real_read()
+    changing.read_office_html = read_after_a_copy
+    monkeypatch.setattr(clipboard, "_backend_module", changing)
+    assert clipboard.read_office_equation() == ("mathml", flat)
+
+
+def test_more_line_breaks():
+    r = lambda text, props="": "<m:r>%s<m:t>%s</m:t></m:r>" % ("<m:rPr>%s</m:rPr>" % props if props else "", text)  # noqa: E731
+    para = lambda *ms: "<m:oMathPara>%s</m:oMathPara>" % "".join("<m:oMath>%s</m:oMath>" % m for m in ms)  # noqa: E731
+    # equations of one paragraph without alignment marks stay separate; the broken one is aligned alone,
+    # at its second operator (m:alnAt="2")
+    assert latex(para(r("u=v"), r("a=b+c") + r("+d", '<m:brk m:alnAt="2"/>'))) == \
+        "\\[ u = v \\]\n\n\\[\n\\begin{aligned}\na = b & + c \\\\\n & + d\n\\end{aligned}\n\\]"
+    # an inline equation with a manual break stays inline
+    inline = "<m:oMath>%s%s</m:oMath>" % (r("a=b"), r("+c", '<m:brk m:alnAt="1"/>'))
+    assert latex(inline) == "$\\begin{aligned}\na & = b \\\\\n & + c\n\\end{aligned}$"
+    # a run with two texts is cut once, each text kept once; text next to a line break is kept
+    assert body(para("<m:r><m:t>a=b</m:t><m:t>+x</m:t></m:r>" + r("+c", '<m:brk m:alnAt="1"/>'))) == \
+        "\\begin{aligned}\na & = b + x \\\\\n & + c\n\\end{aligned}"
+    assert body(para(r("a") + r("=b", "<m:aln/>") + "<m:r><w:t>q</w:t><w:br/></m:r>", r("=c", "<m:aln/>"))) == \
+        "\\begin{aligned}\na & = bq \\\\\n & = c\n\\end{aligned}"
+    # an explicit mark on the first line, a break after it: the new line still starts at the point
+    assert body(para(r("a") + r("=b", "<m:aln/>") + r("+c", '<m:brk m:alnAt="1"/>'))) == \
+        "\\begin{aligned}\na & = b \\\\\n & + c\n\\end{aligned}"
+    # upright text is not counted for m:alnAt (its hyphen is no operator)
+    assert body(para(r("pre-test", "<m:nor/>") + r("=b") + r("+c", '<m:brk m:alnAt="1"/>'))) == \
+        "\\begin{aligned}\n\\text{pre-test} & = b \\\\\n & + c\n\\end{aligned}"
 
 
 def test_alignment_marks():

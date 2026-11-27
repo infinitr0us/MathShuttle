@@ -688,118 +688,193 @@ def _separator() -> ET.Element:
     return run
 
 
-def _is_line_break_run(el: ET.Element) -> bool:
-    """A run that only holds Word's line break (<m:r><w:br/></m:r>, ending a line of a math paragraph)."""
-    return el.tag == _q("r") and el.find("{%s}br" % WML_NS) is not None and \
-        not "".join(t.text or "" for t in el.iter(_q("t"))).strip()
+def _without_line_breaks(line: List[ET.Element]) -> List[ET.Element]:
+    """The line without Word's line breaks (<w:br/> in a run: the end of a line of a math paragraph): a
+    run that held only the break goes, from a run with more in it only the break."""
+    out = []
+    for el in line:
+        if el.tag == _q("r"):
+            breaks = [c for c in el if c.tag == "{%s}br" % WML_NS]
+            if breaks:
+                for br in breaks:
+                    el.remove(br)
+                if not "".join(el.itertext()).strip():
+                    continue
+        out.append(el)
+    return out
 
 
-def _manual_breaks(math: ET.Element) -> "tuple[List[List[ET.Element]], Optional[int]]":
-    """The lines of one m:oMath split at its manual line breaks (a run whose m:rPr holds m:brk: Word's
-    "Insert Manual Break"; the run starts the new line), copies with the m:brk removed; and the m:alnAt
-    of the first break (the operator of the line before that the next lines align to), if any."""
-    lines: List[List[ET.Element]] = [[]]
-    aln_at = None
+def _take(el: ET.Element, holder: str, name: str) -> Optional[ET.Element]:
+    """Remove and return the property `name` (m:brk, m:aln) from el's `holder` (m:rPr, m:boxPr), dropping
+    the holder when nothing is left in it; None if it has none."""
+    props = el.find(_q(holder))
+    found = props.find(_q(name)) if props is not None else None
+    if found is not None:
+        props.remove(found)
+        if not len(props) and not props.attrib:
+            el.remove(props)
+    return found
+
+
+def _line_break_of(el: ET.Element) -> Optional[ET.Element]:
+    """The manual line break (m:brk, Word's "Insert Manual Break") with which el starts a new line, taken
+    out of its run (m:rPr) or operator box (m:boxPr)."""
+    if el.tag == _q("r"):
+        return _take(el, "rPr", "brk")
+    if el.tag == _q("box"):
+        return _take(el, "boxPr", "brk")
+    return None
+
+
+class _Line:
+    """A line of an equation: its elements (copies), and the m:alnAt of the manual break it starts with,
+    if any (the number of the operator of the equation's first line it aligns to)."""
+
+    def __init__(self, broken: bool = False, aln_at: Optional[int] = None):
+        self.elements: List[ET.Element] = []
+        self.broken = broken
+        self.aln_at = aln_at
+
+
+def _lines(math: ET.Element) -> List[_Line]:
+    """The lines of one m:oMath, split at its manual line breaks (m:brk directly in it)."""
+    lines = [_Line()]
     for child in math:
         child = copy.deepcopy(child)
-        brk = child.find("%s/%s" % (_q("rPr"), _q("brk"))) if child.tag == _q("r") else None
+        brk = _line_break_of(child)
         if brk is not None:
-            props = child.find(_q("rPr"))
-            if aln_at is None and len(lines) == 1:
-                try:
-                    aln_at = int(brk.get(_q("alnAt"), "")) or None
-                except ValueError:
-                    pass
-            props.remove(brk)
-            if not len(props) and not props.attrib:
-                child.remove(props)
-            lines.append([])
-        lines[-1].append(child)
-    return lines, aln_at
+            try:
+                aln_at = int(brk.get(_q("alnAt"), "")) or None
+            except ValueError:
+                aln_at = None
+            lines.append(_Line(True, aln_at))
+        lines[-1].elements.append(child)
+    return lines
 
 
 def _is_operator(ch: str) -> bool:
     return unicodedata.category(ch) == "Sm" or ch in "-/*!"
 
 
+def _split_run(run: ET.Element, text: ET.Element, pos: int) -> "tuple[ET.Element, ET.Element]":
+    """A run cut before character `pos` of its m:t `text`: what comes before (with the run's
+    properties) and what follows (with a copy of them); each piece of text in one of them only."""
+    first, second = ET.Element(run.tag, run.attrib), ET.Element(run.tag, run.attrib)
+    props = run.find(_q("rPr"))
+    if props is not None:
+        second.append(copy.deepcopy(props))
+    target = first
+    for child in run:
+        if child is text:
+            head, tail = copy.deepcopy(child), copy.deepcopy(child)
+            head.text, tail.text = (child.text or "")[:pos], (child.text or "")[pos:]
+            if head.text:
+                first.append(head)
+            second.append(tail)
+            target = second
+        else:
+            target.append(child)
+    return first, second
+
+
 def _before_operator(line: List[ET.Element], n: int) -> bool:
-    """Put "&" before the n-th operator character of the line's own runs (splitting a run "a=b" at it)."""
+    """Put "&" before the n-th operator of the line: an operator character in a run of maths (not one of
+    upright text, m:nor), or an operator box (m:opEmu) as one; a run "a=b" is cut at its "="."""
     count = 0
     for index, child in enumerate(line):
-        text = child.find(_q("t")) if child.tag == _q("r") else None
-        for pos, ch in enumerate(text.text or "" if text is not None else ""):
-            if not _is_operator(ch):
-                continue
+        if child.tag == _q("box") and child.find("%s/%s" % (_q("boxPr"), _q("opEmu"))) is not None:
             count += 1
             if count == n:
-                if pos:
-                    rest = copy.deepcopy(child)
-                    rest.find(_q("t")).text = text.text[pos:]
-                    text.text = text.text[:pos]
-                    index += 1
-                    line.insert(index, rest)
                 line.insert(index, _separator())
+                return True
+            continue
+        if child.tag != _q("r") or child.find("%s/%s" % (_q("rPr"), _q("nor"))) is not None:
+            continue
+        before = False  # text of this run before the operator
+        for text in child.findall(_q("t")):
+            for pos, ch in enumerate(text.text or ""):
+                if not _is_operator(ch):
+                    before = True
+                    continue
+                count += 1
+                if count != n:
+                    before = True
+                    continue
+                if before or pos:
+                    first, second = _split_run(child, text, pos)
+                    line[index:index + 1] = [first, _separator(), second]
+                else:
+                    line.insert(index, _separator())
                 return True
     return False
 
 
-def _aligned_lines(el: ET.Element, lines: List[List[ET.Element]], aln_at: Optional[int]) -> ET.Element:
-    """Lines (lists of elements, copies) as one m:oMathPara with an m:eqArr whose rows have a run "&" at
-    the alignment point: texmath reads that as an aligned block.  The point is the line's m:aln mark
-    (Word: "Align at ="); without marks, after manual breaks, the aln_at-th operator of the first line
-    and the start of the others (no aln_at: the start of every line)."""
-    out = ET.Element(_q("oMathPara"))
-    out.extend(copy.deepcopy(c) for c in el if c.tag == _q("oMathParaPr"))
-    arr = ET.SubElement(ET.SubElement(out, _q("oMath")), _q("eqArr"))
-    marked = any(_alignment_mark(line) is not None for line in lines)
+def _aligned_block(lines: List[_Line]) -> ET.Element:
+    """Lines as one m:oMath holding an m:eqArr whose rows have a run "&" at the alignment point: texmath
+    reads that as an aligned block.  A row's point is its m:aln mark (Word: "Align at =").  Rows
+    without one: a line that a manual break started begins at the point; the first line has it before
+    the operator the first break names (m:alnAt), else at its start when no line has a mark."""
+    math = ET.Element(_q("oMath"))
+    arr = ET.SubElement(math, _q("eqArr"))
+    marked = any(_alignment_mark(line.elements) is not None for line in lines)
+    first_target = next((line.aln_at for line in lines if line.broken), None)
     for number, line in enumerate(lines):
-        line = [c for c in line if not _is_line_break_run(c)]
-        if marked:
-            found = _alignment_mark(line)
-            if found is not None:
-                element, mark = found
-                props = next(p for p in element if mark in list(p))
-                props.remove(mark)
-                if not len(props) and not props.attrib:
-                    element.remove(props)
-                line.insert(line.index(element), _separator())
-        elif not (number == 0 and aln_at and _before_operator(line, aln_at)):
-            if number or not aln_at:
-                line.insert(0, _separator())
-        ET.SubElement(arr, _q("e")).extend(line)
-    return out
+        row = _without_line_breaks(line.elements)
+        found = _alignment_mark(row)
+        if found is not None:
+            element, mark = found
+            props = next(p for p in element if mark in list(p))
+            props.remove(mark)
+            if not len(props) and not props.attrib:
+                element.remove(props)
+            row.insert(row.index(element), _separator())
+        elif line.broken:
+            row.insert(0, _separator())
+        elif number == 0 and not (first_target and _before_operator(row, first_target)) and not marked:
+            row.insert(0, _separator())
+        ET.SubElement(arr, _q("e")).extend(row)
+    return math
 
 
 def split_math_paragraph(el: ET.Element) -> List[ET.Element]:
-    """An m:oMathPara holding several m:oMath (Word: a math paragraph with one equation per line, the
-    lines of Shift+Enter) as one m:oMathPara per equation - texmath would read them as one product
-    (x y) - or, when the lines are aligned at marks (m:aln), as one aligned block; an equation with
-    manual line breaks (m:brk) as an aligned block too; anything else as it is.  Lines with an "&" of
-    their own stay as they are: in an equation array texmath would take it for an alignment point."""
-    para, math, props = ("{%s}%s" % (OMML_NS, t) for t in ("oMathPara", "oMath", "oMathParaPr"))
+    """Word's math paragraphs and line breaks, as texmath can read them:
+    * an m:oMathPara holding several m:oMath (the lines of Shift+Enter) whose lines are aligned at marks
+      (m:aln, "Align at =") as one aligned block; without marks, as one m:oMathPara per equation
+      (texmath would read them as one product, x y);
+    * an equation with manual line breaks (m:brk, "Insert Manual Break") as an aligned block, display
+      or inline as it was;
+    * anything else as it is.
+    Lines with an "&" of their own are left as they are: in an equation array texmath would take it
+    for an alignment point."""
+    para, math, props = _q("oMathPara"), _q("oMath"), _q("oMathParaPr")
     maths = [c for c in el if c.tag == math] if el.tag == para else ([el] if el.tag == math else [])
-    text = "{%s}t" % OMML_NS
-    literal_amp = any("&" in (t.text or "") for m in maths for t in m.iter(text))
-    lines: List[List[ET.Element]] = []
-    aln_at = None
-    broken = False
-    for m in maths:
-        parts, at = _manual_breaks(m)
-        broken |= len(parts) > 1
-        aln_at = aln_at if aln_at is not None else at
-        lines += parts
-    if broken and not literal_amp:
-        return [_aligned_lines(el if el.tag == para else ET.Element(para), lines, aln_at)]
-    if len(maths) <= 1 or el.tag != para:
+    if not maths:
         return [el]
-    if any(_alignment_mark(m) is not None for m in maths) and not literal_amp:
-        return [_aligned_lines(el, [[copy.deepcopy(c) for c in m] for m in maths], None)]
-    out = []
-    for m in maths:
+
+    def own_amp(*ms: ET.Element) -> bool:
+        return any("&" in (t.text or "") for m in ms for t in m.iter(_q("t")))
+
+    def in_para(*children: ET.Element) -> ET.Element:
         piece = ET.Element(para)
-        piece.extend(c for c in el if c.tag == props)
-        piece.append(m)
-        out.append(piece)
+        piece.extend(copy.deepcopy(c) for c in el if c.tag == props)
+        piece.extend(children)
+        return piece
+
+    if el.tag == para and len(maths) > 1 and any(_alignment_mark(m) is not None for m in maths) \
+            and not own_amp(*maths):
+        return [in_para(_aligned_block([line for m in maths for line in _lines(m)]))]
+    out = []
+    changed = False
+    for m in maths:
+        lines = _lines(m)
+        if len(lines) > 1 and not own_amp(m):
+            block = _aligned_block(lines)
+            changed = True
+            out.append(in_para(block) if el.tag == para else block)
+        else:
+            out.append(in_para(m) if el.tag == para else m)
+    if not changed and len(maths) == 1:
+        return [el]
     return out
 
 
@@ -1074,18 +1149,22 @@ def mathml_elements(eqs: List[Equation]) -> List[Optional[ET.Element]]:
 
     if not eqs:
         return []
+    # each equation in a div of its own: one that texmath cannot write (pandoc puts its TeX there as
+    # text) is told apart from the others in the same run
     doc = {"pandoc-api-version": _api(), "meta": {},
-           "blocks": [{"t": "Para", "c": [{"t": "Math", "c": [{"t": "DisplayMath" if e.display else "InlineMath"},
-                                                             e.tex]}]} for e in eqs]}
+           "blocks": [{"t": "Div", "c": [["mseq%d" % i, [], []],
+                                         [{"t": "Para", "c": [{"t": "Math", "c": [
+                                             {"t": "DisplayMath" if e.display else "InlineMath"}, e.tex]}]}]]}
+                      for i, e in enumerate(eqs)]}
     out, _ = _run(["-f", "json", "-t", "html", _LF, *_mathml_flags()], json.dumps(doc).encode("utf-8"))
-    found = _MATH_RE.findall(out.decode("utf-8"))
-    if len(found) == len(eqs):
-        return [parse(m) for m in found]
-    results: List[Optional[ET.Element]] = []  # one of them failed (pandoc wrote its TeX as text): one by one
-    for e in eqs:
+    html = out.decode("utf-8")
+    results: List[Optional[ET.Element]] = []
+    for i in range(len(eqs)):
+        div = re.search(r'<div id="mseq%d">(.*?)</div>' % i, html, re.S)
+        found = _MATH_RE.search(div.group(1)) if div else None
         try:
-            results.append(parse(write_mathml(e)))
-        except (ConversionError, ET.ParseError):
+            results.append(parse(found.group(0)) if found else None)
+        except ET.ParseError:
             results.append(None)
     return results
 

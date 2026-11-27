@@ -569,7 +569,7 @@ class App(tk.Tk):
             return
         # what the menu shows is what its items copy: input, settings and macros as they are now
         key = self._copy_key(text)
-        macros = self._macros()
+        macros = self._macros(key[4])
         try:
             eqs = input_equations(text, key[1], key[2], key[3])
         except (ConversionError, PandocNotFound) as e:
@@ -601,15 +601,16 @@ class App(tk.Tk):
         menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
 
     def _copy_key(self, text: str) -> tuple:
-        """What decides the equations of the input: the text, the source format, the mode, Tidy, the macros."""
-        return (text, self.src_var.get(), self.mode_var.get(), self.tidy_var.get(), tuple(self.macro_files),
-                self.macro_text)
+        """What decides the equations of the input: the text, the source format, the mode, Tidy, the macros
+        (files with their modification times: an edited file starts Next again)."""
+        return (text, self.src_var.get(), self.mode_var.get(), self.tidy_var.get(), self._macro_key())
 
     def copy_equation(self, index: int, key: Optional[tuple] = None, eqs=None, macros=None) -> None:
         """Copy equation `index` (0: the first) of the input for Word / PowerPoint; with `key`, `eqs` and
         `macros` as the menu took them (else the input and settings as they are now)."""
         if key is None:
-            key, eqs, macros = self._copy_key(self.input.get("1.0", "end-1c")), None, self._macros()
+            key, eqs = self._copy_key(self.input.get("1.0", "end-1c")), None
+            macros = self._macros(key[4])
         text, src, mode, tidy = key[:4]
         try:
             copy = office_copy(text, src, mode, macros, tidy, index=index, eqs=eqs)

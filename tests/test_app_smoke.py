@@ -152,6 +152,29 @@ def test_equation_menu_copies_what_it_shows(app, monkeypatch):
     assert not first.winfo_exists() and popups[-1].winfo_exists()  # one menu at a time
 
 
+def test_equation_menu_starts_again_after_a_macro_file_changes(app, monkeypatch, tmp_path):
+    import os
+    import tkinter as tk
+    copied, popups = [], []
+    monkeypatch.setattr(clipboard, "copy_mathml_for_office", lambda mathml, *a, **k: copied.append(mathml))
+    monkeypatch.setattr(tk.Menu, "tk_popup", lambda menu, x, y, entry=None: popups.append(menu))
+    macros = tmp_path / "macros.tex"
+    macros.write_text("\\newcommand{\\vv}{\\mathbf{v}}\n", encoding="utf-8")
+    monkeypatch.setattr(app, "macro_files", [str(macros)])
+    app.src_var.set("latex")
+    set_input(app, "$a$ and $\\vv$ and $c$")
+    app.copy_for_office()
+    popups[-1].invoke(0)  # equation 1
+    app.copy_for_office()
+    assert popups[-1].entrycget(0, "label") == "Next:   2   \\vv"
+    macros.write_text("\\newcommand{\\vv}{\\vec{v}}\n", encoding="utf-8")  # the same name, another definition
+    os.utime(macros, ns=(macros.stat().st_atime_ns, macros.stat().st_mtime_ns + 10**9))
+    app.copy_for_office()
+    assert popups[-1].entrycget(0, "label") == "Next:   1   a"  # an edited macro file: from the first
+    popups[-1].invoke(3)
+    assert "→" in copied[-1] or "&#x2192;" in copied[-1]  # with the new definition
+
+
 def test_paste_from_office_takes_omml_from_the_html(app, monkeypatch):
     # what Word copies for a sentence with an equation in it: no MathML, the OMML in its HTML
     omml = '<m:oMath><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath>'
