@@ -369,6 +369,18 @@ def test_more_line_breaks():
     # upright text is not counted for m:alnAt (its hyphen is no operator)
     assert body(para(r("pre-test", "<m:nor/>") + r("=b") + r("+c", '<m:brk m:alnAt="1"/>'))) == \
         "\\begin{aligned}\n\\text{pre-test} & = b \\\\\n & + c\n\\end{aligned}"
+    # in a paragraph with marks, a break aligns its own equation's first line, no other
+    assert body(para(r("u+w=z"), r("x") + r("=y", "<m:aln/>"), r("a=b+c") + r("+d", '<m:brk m:alnAt="2"/>'))) == \
+        "\\begin{aligned}\nu + w = z \\\\\nx & = y \\\\\na = b & + c \\\\\n & + d\n\\end{aligned}"
+    # operators counted in w:t too, in document order; an operator box that is off is no operator;
+    # the middle dot is one (Word's MathML: <mo>·</mo>)
+    assert body(para("<m:r><w:t>a</w:t><m:t>=b</m:t></m:r>" + r("+c", '<m:brk m:alnAt="1"/>'))) == \
+        "\\begin{aligned}\na & = b \\\\\n & + c\n\\end{aligned}"
+    off_box = '<m:box><m:boxPr><m:opEmu m:val="0"/></m:boxPr><m:e>%s</m:e></m:box>' % r("b")
+    assert body(para(r("a") + off_box + r("=c") + r("+d", '<m:brk m:alnAt="1"/>'))) == \
+        "\\begin{aligned}\nab & = c \\\\\n & + d\n\\end{aligned}"
+    assert body(para(r("a\u00b7b=c") + r("+d", '<m:brk m:alnAt="2"/>'))) == \
+        "\\begin{aligned}\na \\cdot b & = c \\\\\n & + d\n\\end{aligned}"
 
 
 def test_alignment_marks():

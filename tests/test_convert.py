@@ -558,6 +558,39 @@ def test_stale_tex_annotation_argument_bounds_and_scripts(shown, tex, stale):
     assert bool(annotation_notes(ANNOTATED % ("<mrow>%s</mrow>" % shown, tex))) == stale
 
 
+@pytest.mark.parametrize("shown, tex, stale", [
+    # bars, braces and arrows as renderers write them: decided by what is shown, not by accent="..."
+    ("<mover accent='false'><mi>x</mi><mo>¯</mo></mover>", "\\overline{x}", False),           # Word
+    ("<munder><mi>x</mi><mo accent='true'>―</mo></munder>", "\\underline{x}", False),         # MathJax
+    ("<munder><mrow><mi>A</mi><mi>B</mi></mrow><mo>←</mo></munder>", "\\underleftarrow{AB}", False),
+    ("<mover><mo>=</mo><mo>→</mo></mover>", "\\overset{\\to}{=}", False),
+    ("<mover><mover><mrow><mi>x</mi><mo>+</mo><mi>y</mi></mrow><mo>⏞</mo></mover><mi>n</mi></mover>",
+     "\\overbrace{x+y}^{n}", False),
+    # an arrow over or under an operator is a limit, and its direction counts
+    ("<mover><mo>lim</mo><mo>←</mo></mover>", "\\lim^{\\rightarrow}", True),
+    ("<munder><mi>lim</mi><mo>→</mo></munder><mi>x</mi>", "\\lim_{\\to} x", False),            # Word's <mi>
+    # shown braces are not argument bounds; an empty script slot is nothing; fences without content
+    ("<mi>f</mi><mo>(</mo><mo>{</mo><mo>}</mo><mo>)</mo>", "f()", True),
+    ("<mmultiscripts><mi>C</mi><mprescripts/><mrow/><mn>14</mn></mmultiscripts>", "{}^{14}C", False),
+    ("<mfenced open='{' close='}'/>", "\\{x\\}", True),
+    # Word's linear fraction, with its denominator's bounds
+    ("<mrow><mi>a</mi></mrow><mo>/</mo><mrow><mi>b</mi></mrow>", "\\tfrac{a}{b}", False),
+    ("<mrow><mi>a</mi></mrow><mo>/</mo><mrow><mi>b</mi></mrow><mo>+</mo><mi>c</mi>", "\\frac{a}{b+c}", True),
+])
+def test_stale_tex_annotation_accents_braces_and_fractions(shown, tex, stale):
+    from mathshuttle.convert import annotation_notes
+    assert bool(annotation_notes(ANNOTATED % ("<mrow>%s</mrow>" % shown, tex))) == stale
+
+
+def test_no_annotation_note_when_the_latex_comes_from_the_annotation():
+    # Content MathML with presentation inside <ci>: texmath cannot read it, the LaTeX is the annotation's
+    mixed = ('<math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><apply><plus/><ci><msub><mi>a</mi>'
+             '<mn>1</mn></msub></ci><cn>1</cn></apply><annotation encoding="application/x-tex">a_1+1</annotation>'
+             '</semantics></math>')
+    result = convert(mixed, "mathml", "latex")
+    assert result.text == "$a_1+1$" and result.notes == []
+
+
 def test_stale_tex_annotation_next_to_content_mathml():
     from mathshuttle.convert import annotation_notes
     ns = 'xmlns="http://www.w3.org/1998/Math/MathML"'
@@ -591,8 +624,11 @@ def test_annotation_notes_draw_all_annotations_in_one_pandoc_run(monkeypatch):
     from mathshuttle.convert import annotation_notes
     runs = []
     real = pandoc_engine._run
-    monkeypatch.setattr(pandoc_engine, "_run",
-                        lambda args, *a, **k: (runs.append(1) if "html" in args else None, real(args, *a, **k))[1])
+    def counting(args, *a, **k):  # the drawing (JSON -> HTML), not pandoc's capability probes
+        if list(args[:4]) == ["-f", "json", "-t", "html"]:
+            runs.append(1)
+        return real(args, *a, **k)
+    monkeypatch.setattr(pandoc_engine, "_run", counting)
     many = "".join(ANNOTATED % ("<msub><mi>x</mi><mn>%d</mn></msub>" % i, "x_{%d}" % i) for i in range(30))
     assert annotation_notes(many) == [] and len(runs) == 1
     # an unreadable annotation among them does not split the run, and is not flagged

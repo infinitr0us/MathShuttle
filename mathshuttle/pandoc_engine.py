@@ -753,7 +753,14 @@ def _lines(math: ET.Element) -> List[_Line]:
 
 
 def _is_operator(ch: str) -> bool:
-    return unicodedata.category(ch) == "Sm" or ch in "-/*!"
+    return unicodedata.category(ch) == "Sm" or ch in "-/*!·"  # Word's MathML: <mo>·</mo>
+
+
+def _is_on(el: ET.Element, path: str) -> bool:
+    """Whether the OMML property at `path` (m:rPr/m:nor, m:boxPr/m:opEmu) is there and on (m:val absent,
+    or not 0 / off / false)."""
+    found = el.find(path)
+    return found is not None and found.get(_q("val"), "on").strip().lower() not in ("0", "off", "false")
 
 
 def _split_run(run: ET.Element, text: ET.Element, pos: int) -> "tuple[ET.Element, ET.Element]":
@@ -781,17 +788,18 @@ def _before_operator(line: List[ET.Element], n: int) -> bool:
     """Put "&" before the n-th operator of the line: an operator character in a run of maths (not one of
     upright text, m:nor), or an operator box (m:opEmu) as one; a run "a=b" is cut at its "="."""
     count = 0
+    texts = (_q("t"), "{%s}t" % WML_NS)
     for index, child in enumerate(line):
-        if child.tag == _q("box") and child.find("%s/%s" % (_q("boxPr"), _q("opEmu"))) is not None:
+        if child.tag == _q("box") and _is_on(child, "%s/%s" % (_q("boxPr"), _q("opEmu"))):
             count += 1
             if count == n:
                 line.insert(index, _separator())
                 return True
             continue
-        if child.tag != _q("r") or child.find("%s/%s" % (_q("rPr"), _q("nor"))) is not None:
+        if child.tag != _q("r") or _is_on(child, "%s/%s" % (_q("rPr"), _q("nor"))):
             continue
         before = False  # text of this run before the operator
-        for text in child.findall(_q("t")):
+        for text in [c for c in child if c.tag in texts]:  # m:t, and w:t that Word also reads
             for pos, ch in enumerate(text.text or ""):
                 if not _is_operator(ch):
                     before = True
@@ -809,30 +817,32 @@ def _before_operator(line: List[ET.Element], n: int) -> bool:
     return False
 
 
-def _aligned_block(lines: List[_Line]) -> ET.Element:
-    """Lines as one m:oMath holding an m:eqArr whose rows have a run "&" at the alignment point: texmath
-    reads that as an aligned block.  A row's point is its m:aln mark (Word: "Align at =").  Rows
-    without one: a line that a manual break started begins at the point; the first line has it before
-    the operator the first break names (m:alnAt), else at its start when no line has a mark."""
+def _aligned_block(equations: List[List[_Line]]) -> ET.Element:
+    """The lines of one or more equations (each m:oMath's, see _lines) as one m:oMath holding an
+    m:eqArr whose rows have a run "&" at the alignment point: texmath reads that as an aligned block.
+    A row's point is its m:aln mark (Word: "Align at =").  Rows without one: a line that a manual break
+    started begins at the point; an equation's first line has it before the operator its first break
+    names (m:alnAt), else at its start when no line has a mark."""
     math = ET.Element(_q("oMath"))
     arr = ET.SubElement(math, _q("eqArr"))
-    marked = any(_alignment_mark(line.elements) is not None for line in lines)
-    first_target = next((line.aln_at for line in lines if line.broken), None)
-    for number, line in enumerate(lines):
-        row = _without_line_breaks(line.elements)
-        found = _alignment_mark(row)
-        if found is not None:
-            element, mark = found
-            props = next(p for p in element if mark in list(p))
-            props.remove(mark)
-            if not len(props) and not props.attrib:
-                element.remove(props)
-            row.insert(row.index(element), _separator())
-        elif line.broken:
-            row.insert(0, _separator())
-        elif number == 0 and not (first_target and _before_operator(row, first_target)) and not marked:
-            row.insert(0, _separator())
-        ET.SubElement(arr, _q("e")).extend(row)
+    marked = any(_alignment_mark(line.elements) is not None for lines in equations for line in lines)
+    for lines in equations:
+        target = next((line.aln_at for line in lines if line.broken), None)  # for this equation's line 1
+        for number, line in enumerate(lines):
+            row = _without_line_breaks(line.elements)
+            found = _alignment_mark(row)
+            if found is not None:
+                element, mark = found
+                props = next(p for p in element if mark in list(p))
+                props.remove(mark)
+                if not len(props) and not props.attrib:
+                    element.remove(props)
+                row.insert(row.index(element), _separator())
+            elif line.broken:
+                row.insert(0, _separator())
+            elif number == 0 and not (target and _before_operator(row, target)) and not marked:
+                row.insert(0, _separator())
+            ET.SubElement(arr, _q("e")).extend(row)
     return math
 
 
@@ -862,13 +872,13 @@ def split_math_paragraph(el: ET.Element) -> List[ET.Element]:
 
     if el.tag == para and len(maths) > 1 and any(_alignment_mark(m) is not None for m in maths) \
             and not own_amp(*maths):
-        return [in_para(_aligned_block([line for m in maths for line in _lines(m)]))]
+        return [in_para(_aligned_block([_lines(m) for m in maths]))]
     out = []
     changed = False
     for m in maths:
         lines = _lines(m)
         if len(lines) > 1 and not own_amp(m):
-            block = _aligned_block(lines)
+            block = _aligned_block([lines])
             changed = True
             out.append(in_para(block) if el.tag == para else block)
         else:
@@ -1157,16 +1167,26 @@ def mathml_elements(eqs: List[Equation]) -> List[Optional[ET.Element]]:
                                              {"t": "DisplayMath" if e.display else "InlineMath"}, e.tex]}]}]]}
                       for i, e in enumerate(eqs)]}
     out, _ = _run(["-f", "json", "-t", "html", _LF, *_mathml_flags()], json.dumps(doc).encode("utf-8"))
-    html = out.decode("utf-8")
-    results: List[Optional[ET.Element]] = []
-    for i in range(len(eqs)):
-        div = re.search(r'<div id="mseq%d">(.*?)</div>' % i, html, re.S)
-        found = _MATH_RE.search(div.group(1)) if div else None
-        try:
-            results.append(parse(found.group(0)) if found else None)
-        except ET.ParseError:
-            results.append(None)
+    results: List[Optional[ET.Element]] = [None] * len(eqs)
+    for div in re.finditer(r'<div id="mseq(\d+)">(.*?)</div>', out.decode("utf-8"), re.S):
+        i, found = int(div.group(1)), _MATH_RE.search(div.group(2))
+        if found and i < len(eqs):
+            try:
+                results[i] = parse(found.group(0))
+            except ET.ParseError:
+                pass
     return results
+
+
+def readable_mathml(maths: List[ET.Element]) -> List[bool]:
+    """Whether texmath can read each parsed <math> (:func:`parse_mathml`, annotations dropped): one
+    pandoc run when it reads them all, else one each (pandoc turns a <math> it rejects into text)."""
+    raw = [_serialize_math(copy.deepcopy(m)) for m in maths]
+    if not raw:
+        return []
+    if len(_read_json("html", b"".join(raw))) == len(raw):
+        return [True] * len(raw)
+    return [bool(_read_json("html", r)) for r in raw]
 
 
 def write_omml(eq: Equation) -> str:
