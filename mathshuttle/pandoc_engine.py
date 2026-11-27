@@ -364,21 +364,115 @@ def _has_math_delimiters(text: str) -> bool:
 
 
 def read_latex(text: str, default_display: bool = True) -> List[Equation]:
-    """Extract every equation from LaTeX source.
+    """Extract every equation from LaTeX source (:func:`read_latex_text`)."""
+    return read_latex_text(text, default_display)[0]
+
+
+def read_latex_text(text: str, default_display: bool = True) -> "tuple[List[Equation], bool]":
+    """Every equation of LaTeX source, or of Markdown text with LaTeX maths in it (a chat answer, notes),
+    and whether it was read as Markdown.
 
     Delimited maths ($...$, \\(...\\), $$...$$, \\[...\\], equation/align/gather/
     multline/eqnarray/... environments, several of them, with prose in between)
     are recognised by pandoc's LaTeX reader; \\newcommand definitions in the
     input are expanded.  Input with no delimiters at all is taken as one bare
     equation in the `default_display` mode (texmath handles its macros itself).
+    Text that looks like Markdown (:func:`looks_like_markdown`: "50% of", "$5 and", `code`, **bold**)
+    is read as Markdown, where % is a percent sign and $ next to a number is money; so is text that
+    pandoc's LaTeX reader cannot read at all.
     """
     if not text.strip():
         raise ConversionError("The input is empty.")
-    if _has_math_delimiters(text):
-        eqs = _read_json("latex", text.encode("utf-8"))
+    if looks_like_markdown(text):
+        eqs = read_markdown(text)
         if eqs:
-            return eqs
-    return [Equation(strip_tex(text), default_display)]
+            return eqs, True
+    if _has_math_delimiters(text):
+        try:
+            eqs = _read_json("latex", text.encode("utf-8"))
+        except ConversionError:
+            eqs = read_markdown(text) if not _LATEX_DOCUMENT.search(text) else []
+            if not eqs:
+                raise
+            return eqs, True
+        if eqs:
+            return eqs, False
+    return [Equation(strip_tex(text), default_display)], False
+
+
+# Markdown, as chat answers and notes write it: $...$ and $$...$$, and \(...\) / \[...\] (MathJax's)
+MARKDOWN = "markdown+tex_math_single_backslash"
+_LATEX_DOCUMENT = re.compile(r"\\documentclass\b|\\begin\s*\{document\}")
+_MARKDOWN_SIGNS = re.compile(
+    r"(?<![\\\w.])\d+(?:[.,]\d+)?%[ \t]*[^\s%]"                         # 50% of: a percent sign, no comment
+    r"|(?<![\\$\w])\$\d+(?:[.,]\d+)*[.,;:!?)]?[ \t]+[A-Za-z]{2,}\b"     # $5 and: money
+    r"|(?<!`)`[^`'\n]+`(?!`)"                                           # `code`
+    r"|^[ \t]*(?:```|~~~)"                                              # a fenced code block
+    r"|^#{1,6}[ \t]+\S"                                                 # # a heading
+    r"|(?<![\w\\^_{*])\*\*[A-Za-z][^*\n]*?\*\*",                        # **bold**
+    re.M)
+
+
+_COMMENT_LINE = re.compile(r"^[ \t]*%.*$", re.M)
+
+
+def looks_like_markdown(text: str) -> bool:
+    """Whether pasted text is Markdown rather than LaTeX: outside LaTeX comment lines it has what LaTeX
+    source does not (a percent sign after a number with text after it, money, `code`, a code fence, a
+    # heading, **bold**), and it is not a LaTeX document."""
+    return bool(_MARKDOWN_SIGNS.search(_COMMENT_LINE.sub("", text))) and not _LATEX_DOCUMENT.search(text)
+
+
+def markdown_maths(node, out: List[Equation], definitions: str = "") -> None:
+    """The equations of pandoc JSON read from Markdown, in order: its Math, and the maths of raw TeX in it
+    (a \\begin{align} ... \\end{align} written straight into the text), read by the LaTeX reader with
+    the definitions (\\newcommand ...) that the text makes."""
+    if isinstance(node, dict):
+        if node.get("t") == "Math":
+            kind, tex = node["c"]
+            out.append(Equation(strip_tex(tex), kind["t"] == "DisplayMath"))
+            return
+        if node.get("t") in ("RawBlock", "RawInline") and node["c"][0] in ("tex", "latex"):
+            raw = node["c"][1]
+            if _has_math_delimiters(raw):
+                try:
+                    out.extend(_read_json("latex", (definitions + "\n" + raw).encode("utf-8")))
+                except ConversionError:
+                    pass  # raw TeX that is not maths after all
+            return
+        for v in node.values():
+            markdown_maths(v, out, definitions)
+    elif isinstance(node, list):
+        for v in node:
+            markdown_maths(v, out, definitions)
+
+
+def markdown_definitions(blocks) -> str:
+    """The macro definitions (raw TeX with \\newcommand, \\def, ...) of Markdown read by pandoc."""
+    found: List[str] = []
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            if node.get("t") in ("RawBlock", "RawInline") and node["c"][0] in ("tex", "latex") \
+                    and (_MACRO_DEF.search(node["c"][1]) or "\\DeclareMathOperator" in node["c"][1]):
+                found.append(node["c"][1])
+            else:
+                for v in node.values():
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(blocks)
+    return "\n".join(found)
+
+
+def read_markdown(text: str) -> List[Equation]:
+    """The equations of Markdown text (:data:`MARKDOWN`), in order."""
+    out, _ = _run(["-f", MARKDOWN, "-t", "json"], text.encode("utf-8"))
+    blocks = json.loads(out)["blocks"]
+    eqs: List[Equation] = []
+    markdown_maths(blocks, eqs, markdown_definitions(blocks))
+    return eqs
 
 
 _XML_ENTITIES = ("lt", "gt", "amp", "quot", "apos")

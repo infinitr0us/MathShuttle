@@ -18,8 +18,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
 
-from .pandoc_engine import (MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _collect_math, _run,
-                            read_omml, split_math_paragraph)
+from .pandoc_engine import (MARKDOWN, MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _collect_math, _run,
+                            markdown_definitions, markdown_maths, read_omml, split_math_paragraph)
 
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -353,12 +353,15 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
     folder = os.path.dirname(os.path.abspath(path))
     with open(path, "rb") as f:
         text = decode_text(f.read())
-    out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
+    markdown = fmt == "markdown"
+    out, err = _run(["-f", MARKDOWN if markdown else fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
     result = DocumentEquations(path, "latex")
     result.notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
                      if line.startswith("[WARNING]")]
+    blocks = json.loads(out)["blocks"]
+    definitions = markdown_definitions(blocks) if markdown else ""
     heading = ""
-    for block in json.loads(out)["blocks"]:
+    for block in blocks:
         context = ""
         if isinstance(block, dict) and block.get("t") == "Header":
             words: List[str] = []
@@ -369,7 +372,10 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
             _inline_text(block["c"], words)
             context = _shorten("".join(words))
         eqs: List[Equation] = []
-        _collect_math(block, eqs)  # also the maths of a heading
+        if markdown:  # with the maths of raw TeX in the text (\begin{align} ... without $$)
+            markdown_maths(block, eqs, definitions)
+        else:
+            _collect_math(block, eqs)  # also the maths of a heading
         for eq in eqs:
             label = re.search(r"\\label\{([^{}]*)\}", eq.tex)
             where = (heading or "(before the first heading)") + ("  [%s]" % label.group(1) if label else "")

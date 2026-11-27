@@ -8,8 +8,8 @@ from typing import List, Optional
 
 from . import compat, latex_wrap, tidy as _tidy
 from .pandoc_engine import (READ_FORMATS, WRITE_FORMATS, ConversionError, Equation,  # noqa: F401
-                            drop_annotations, mathml_elements, parse_mathml, read_equations, readable_mathml,
-                            strip_tex, write_equation, write_mathml)
+                            drop_annotations, mathml_elements, parse_mathml, read_equations, read_latex_text,
+                            readable_mathml, strip_tex, write_equation, write_mathml)
 
 FORMAT_LABELS = {
     "latex": "LaTeX",
@@ -82,7 +82,19 @@ def for_texmath(eq: Equation, src: str, macros: Optional[compat.Macros],
 
 
 def _read(text: str, src: str, mode: str, tidy: bool) -> List[Equation]:
-    return apply_mode(read_equations(text, src, default_display=(mode != "inline"), tidy=tidy), mode)
+    return _read_text(text, src, mode, tidy)[0]
+
+
+def _read_text(text: str, src: str, mode: str, tidy: bool) -> "tuple[List[Equation], bool]":
+    """The equations of the input, and whether LaTeX input was read as Markdown (a chat answer)."""
+    if src == "latex":
+        eqs, as_markdown = read_latex_text(text, default_display=(mode != "inline"))
+        return apply_mode(eqs, mode), as_markdown
+    return apply_mode(read_equations(text, src, default_display=(mode != "inline"), tidy=tidy), mode), False
+
+
+_MARKDOWN_NOTE = ("Read as Markdown text (a chat answer, notes): % is a percent sign there and $5 is money; "
+                  "the equations are those in $...$, $$...$$, \\(...\\) and \\[...\\].")
 
 
 def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "auto",
@@ -101,8 +113,8 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
     if dst not in WRITE_FORMATS:
         raise ValueError("cannot write format %r" % dst)
 
-    eqs = _read(text, src, mode, tidy)
-    notes: List[str] = []
+    eqs, as_markdown = _read_text(text, src, mode, tidy)
+    notes: List[str] = [_MARKDOWN_NOTE] if as_markdown else []
     if len(eqs) > 1:
         notes.append("%d equations found in the input; each was converted separately." % len(eqs))
 
