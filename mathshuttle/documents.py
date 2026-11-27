@@ -21,7 +21,7 @@ from typing import Callable, List, Optional, Tuple
 
 from . import compat
 from .pandoc_engine import (MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _api, _collect_math, _run,
-                            markdown_definitions, markdown_maths, read_omml, split_math_paragraph)
+                            markdown_maths, read_omml, split_math_paragraph)
 
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -363,7 +363,7 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
     result.notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
                      if line.startswith("[WARNING]")]
     blocks = json.loads(out)["blocks"]
-    definitions = markdown_definitions(blocks) if markdown else ""
+    definitions: List[str] = []  # the raw TeX definitions so far (a .md file)
     heading = ""
     for block in blocks:
         context = ""
@@ -377,7 +377,7 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
             context = _shorten("".join(words))
         eqs: List[Equation] = []
         if markdown:  # with the maths of raw TeX in the text (\begin{align} ... without $$)
-            markdown_maths(block, eqs, definitions)
+            markdown_maths(block, eqs, definitions, folder)
         else:
             _collect_math(block, eqs)  # also the maths of a heading
         for eq in eqs:
@@ -425,10 +425,13 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
     notes: List[str] = []
     tags = False
     for i, found in enumerate(doc.found, 1):
-        tex, new = compat.for_texmath(found.equation.tex, macros if own else None, "omml")
+        try:
+            tex, new = compat.for_texmath(found.equation.tex, macros if own else None, "omml")
+        except ConversionError:  # (a definition compat cannot use): as it is, pandoc writes it as text
+            tex, new = found.equation.tex, []
         if own:  # what was approximated (a colour, a resized fraction...); LaTeX from Office has none
             notes += [n for n in new if n not in notes]
-            tags |= bool(re.search(r"\\tag(?![a-zA-Z@])", tex))
+            tags |= bool(re.search(r"\\tag(?![a-zA-Z@])", re.sub(r"(?<!\\)%[^\n]*", "", tex)))
         kind = "DisplayMath" if found.equation.display else "InlineMath"
         blocks.append({"t": "Para", "c": [{"t": "Emph", "c": _inlines("[%d] %s" % (i, found.where))}]})
         blocks.append({"t": "Para", "c": [{"t": "Math", "c": [{"t": kind}, tex]}]})
@@ -455,5 +458,5 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
         notes.append("%d equation%s could not be converted; %s in the file as LaTeX text."
                      % (failed, "" if failed == 1 else "s", "it is" if failed == 1 else "they are"))
     if tags:
-        notes.append("\\tag numbers are not carried over (Word numbers equations itself).")
+        notes.append("\\tag numbers are not carried over: number the equations in Word if they need numbers.")
     return notes

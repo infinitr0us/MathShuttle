@@ -148,8 +148,9 @@ def _cli(argv: list[str]) -> int:
                 from .documents import write_docx
                 notes += [n for n in write_docx(doc, args.docx, macros) if n not in notes]
                 notes.append("written to %s" % args.docx)
+            own = macros if doc.source == "latex" else None  # macros apply to a document's own LaTeX
             for i, found in enumerate(doc.found, 1):
-                text, new = convert_equation(found.equation, args.dst, args.wrapper, macros)
+                text, new = convert_equation(found.equation, args.dst, args.wrapper, own)
                 notes += [n for n in new if n not in notes]
                 sys.stdout.write(_comment(args.dst, "[%d] %s" % (i, found.where)) + "\n" + text + "\n\n")
             sys.stderr.write("".join(n + "\n" for n in notes) + "%d equation(s) in %s\n" % (

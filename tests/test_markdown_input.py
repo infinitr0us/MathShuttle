@@ -142,6 +142,35 @@ def test_chat_money_percent_and_code(text, eqs):
     assert [" ".join(e.tex.split()) for e in found] == eqs and as_markdown
 
 
+def test_code_fences_money_and_raw_tex():
+    # a LaTeX example in a chat answer's code block (with \documentclass and a % line) is not the input
+    fence = ("Here is a document:\n\n```latex\n\\documentclass{article}\n% a comment\n\\begin{document}\n"
+             "$example$\n\\end{document}\n```\n\nThen use $x$.\n")
+    assert found(fence) == [("i", "x")]
+    # pandoc's Markdown takes "$5.00 ($" for maths: read again with that $ escaped
+    assert found("**Cost:** the plan is $5.00 ($p$ after tax) and $x$ is the quantity.") == [("i", "p"), ("i", "x")]
+    # maths inside raw TeX of the text; definitions in raw TeX apply after them only, and once
+    assert found("In Markdown, \\textbf{Use $x$} and $y$. **Bold**") == [("i", "x"), ("i", "y")]
+    eqs = found("**A** \\begin{equation}\\vec{x}\\end{equation}\n\n\\renewcommand{\\vec}[1]{\\mathbf{#1}}\n\n"
+                "\\begin{equation}\\vec{y}\\end{equation}")
+    assert len(eqs) == 2 and "\\vec{x}" in eqs[0][1] and "\\mathbf{y}" in eqs[1][1]
+
+
+@pytest.mark.parametrize("text", ["The plans cost $5 and $10 per month.", "Run `echo $HOME and $PATH` to see."])
+def test_markdown_without_maths_has_no_equation(text):
+    from mathshuttle.pandoc_engine import ConversionError
+    with pytest.raises(ConversionError, match="No equation found"):
+        input_equations(text, "latex")
+
+
+def test_markdown_file_input_is_found_next_to_it(tmp_path):
+    from mathshuttle.documents import read_document
+    (tmp_path / "part.tex").write_text("$P$\n", encoding="utf-8")
+    md = tmp_path / "n.md"
+    md.write_text("# T\n\n\\begin{center}$A$ and \\input{part.tex}\\end{center}\n", encoding="utf-8")
+    assert [f.equation.tex for f in read_document(str(md)).found] == ["A", "P"]
+
+
 def test_same_reading_both_ways_gives_no_note():
     # $2 x$ looks like money to the detector, but both readers find the same: no Markdown note
     result = convert("Let $2 x$ and $y$ hold.", "latex", "mathml")

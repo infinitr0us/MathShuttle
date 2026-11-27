@@ -343,11 +343,12 @@ def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat
     """What "Copy for Word/PowerPoint" puts on the clipboard: equation `index` (0: the first) of the
     input; Word and PowerPoint paste one equation at a time.  `eqs`: the input's equations, when the
     caller read them already (:func:`input_equations` with the same arguments)."""
+    as_markdown = False
     if eqs is None:
-        eqs = _read(text, src, mode, tidy)
+        eqs, as_markdown = _read_text(text, src, mode, tidy)
     if not 0 <= index < len(eqs):
         raise ConversionError("There is no equation %d: the input has %d." % (index + 1, len(eqs)))
-    notes: List[str] = []
+    notes: List[str] = [_MARKDOWN_NOTE] if as_markdown else []
     if len(eqs) > 1:
         notes.append("Equation %d of the %d in the input was copied." % (index + 1, len(eqs)))
     eq = eqs[index]

@@ -106,6 +106,17 @@ def test_export_to_word_passes_on_what_was_approximated(tmp_path):
     assert write_docx(office, str(tmp_path / "b.docx")) == []  # LaTeX from Office: no LaTeX-input notes
 
 
+def test_export_to_word_keeps_going_past_an_equation_compat_rejects(tmp_path):
+    from mathshuttle.documents import DocumentEquations, Found, write_docx
+    from mathshuttle.pandoc_engine import Equation
+    d = DocumentEquations("x.tex", "latex", [Found(Equation("x", True), "A"),
+                                             Found(Equation("{\\newcommand{\\vct}{V}\\vct}", True), "B"),
+                                             Found(Equation("y", True), "C")])
+    out = tmp_path / "x.docx"
+    notes = write_docx(d, str(out))
+    assert len(read_document(str(out)).found) == 2 and any("could not be converted" in n for n in notes)
+
+
 def test_extract_command_checks_macro_files(tmp_path):
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     p = subprocess.run([sys.executable, "-m", "mathshuttle", "extract", os.path.join(DOCS, "paper.tex"),
