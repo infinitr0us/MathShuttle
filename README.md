@@ -4,7 +4,7 @@ Move equations between LaTeX and Word / PowerPoint, both ways, offline. Copy LaT
 paper's macros) and paste it into Office as a native, editable equation; copy an equation in
 Office and get LaTeX you can put in a paper. MathShuttle also converts between **LaTeX, MathML
 and OMML** (Office Math), with eqn and Typst output, as a local stand-in for the
-[texmath web demo](https://johnmacfarlane.net/texmath.html). Windows (macOS in progress, see below),
+[texmath web demo](https://johnmacfarlane.net/texmath.html). Windows and macOS (see *macOS* below),
 Python standard library.
 
 The conversion engine *is* texmath: it runs inside [pandoc](https://pandoc.org) (same author),
@@ -41,7 +41,7 @@ Requirement: **pandoc** (`winget install JohnMacFarlane.Pandoc`). The app looks 
 `pandoc.exe` next to itself, on `PATH`, then in `%LOCALAPPDATA%\Pandoc`; set
 `MATHSHUTTLE_PANDOC` to point at a specific copy.
 
-## macOS (in progress)
+## macOS
 
 The same code runs on macOS: the window, every conversion, the command line, **Open file…**, the LaTeX
 preview and the tests (checked on macOS 27.2 with Python 3.12 / Tk 9.0 and Python 3.9 / Tk 8.6, pandoc
@@ -55,8 +55,8 @@ Control (Cmd+Shift+C, Cmd+Shift+V, Cmd+Return); the settings are kept in
 
 **Word / PowerPoint for Mac** (16.115, checked with `tools/mac_office_probe.py`): the clipboard code
 uses the general pasteboard (NSPasteboard, through the Objective-C runtime with ctypes). Word copies an
-equation as MathML under `public.mathml` and `public.mathml.presentation`; Word pastes from either,
-PowerPoint only from `public.mathml`. *Copy for Word/PowerPoint* writes both, and the MathML as plain
+equation as MathML under `public.mathml` and `public.mathml.presentation`, PowerPoint under
+`public.mathml`; Word pastes from either, PowerPoint only from `public.mathml`. *Copy for Word/PowerPoint* writes both, and the MathML as plain
 text too: without the plain text, PowerPoint puts the equation into a new text box of its own instead
 of the one you clicked into. For a selection of text with equations in it, and for lines aligned at
 `=`, Mac Word copies no MathML; *Paste from Word/PowerPoint* then reads the equations from the HTML it
@@ -259,7 +259,7 @@ On macOS the Windows-only tests (the hotkey) are skipped, and the pasteboard tes
 (`tests/test_clipboard_macos.py`) read back only what they wrote themselves.
 `tests\fixtures\word` holds what Word 16.0.20527 really writes (MathML and OMML) for typical
 equations typed into it; the tidy tests run on those. `tests/fixtures/mac_word` holds what Mac Word
-16.115 copies (MathML, and the HTML fragment with the OMML).
+and PowerPoint 16.115 copy (MathML, and the HTML fragment with the OMML).
 
 ### What Word does with the clipboard (16.0.20527)
 

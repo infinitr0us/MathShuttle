@@ -122,6 +122,35 @@ def test_word(copy, eq_array: bool, expected_back=None):
             word.Quit()
 
 
+def test_word_sentence():
+    """A sentence with an equation in it: Word copies no MathML then, only the HTML with the OMML in it,
+    which Paste from Word/PowerPoint reads (clipboard.read_office_equation)."""
+    print("== Word, a sentence with an inline equation")
+    was_running = is_running("WINWORD.EXE")
+    word = win32com.client.DispatchEx("Word.Application")
+    word.Visible = False
+    doc = word.Documents.Add()
+    try:
+        doc.Content.Text = "Let EQ be given."
+        found = doc.Content
+        found.Find.Execute("EQ")
+        found.Text = "x^2"
+        doc.OMaths.Add(found).OMaths(1).BuildUp()
+        doc.Paragraphs(1).Range.Select()
+        paste(word.Selection.Copy)
+        time.sleep(0.5)
+        print("  MathML on the clipboard:", bool(clipboard.read_equation_from_office()))
+        got = clipboard.read_office_equation()
+        assert got and got[0] == "omml", "no equation found in Word's HTML"
+        tex = convert(got[1], "omml", "latex", wrapper="bare").text
+        print("  Paste from Word (HTML):", tex)
+        assert tex == "x^{2}"
+    finally:
+        doc.Close(0)
+        if not was_running:
+            word.Quit()
+
+
 def test_powerpoint(copy, eq_array: bool, expected_back=None):
     print("== PowerPoint")
     was_running = is_running("POWERPNT.EXE")
@@ -172,4 +201,6 @@ if __name__ == "__main__":
         print("MathML:", copy.mathml[:200].replace("\n", " "))
         test_word(copy, tex in EQUATION_ARRAYS, ROUND_TRIP.get(tex))
         test_powerpoint(copy, tex in EQUATION_ARRAYS, ROUND_TRIP.get(tex))
+    print("#" * 70)
+    test_word_sentence()
     print("done")

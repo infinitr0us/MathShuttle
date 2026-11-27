@@ -101,6 +101,21 @@ def test_copy_for_office_and_paste_back(app):
     assert pump(app, until=lambda: app.output.get("1.0", "end").startswith("\\begin{align*}"))
 
 
+def test_paste_from_office_takes_omml_from_the_html(app, monkeypatch):
+    # what Word copies for a sentence with an equation in it: no MathML, the OMML in its HTML
+    omml = '<m:oMath><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath>'
+    monkeypatch.setattr(clipboard, "read_office_equation", lambda: ("omml", omml))
+    app.src_var.set("latex")
+    app.dst_var.set("omml")
+    app.paste_from_office()
+    assert app.src_var.get() == "omml" and app.dst_var.get() == "latex"  # not OMML -> OMML
+    assert app.input.get("1.0", "end").strip() == omml
+    assert pump(app, until=lambda: app.output.get("1.0", "end").strip() == "$\\frac{a}{b}$")
+    monkeypatch.setattr(clipboard, "read_office_equation", lambda: None)
+    app.paste_from_office()
+    assert "No equation on the clipboard" in app.status_var.get()
+
+
 def test_swap_moves_output_to_input(app):
     app.src_var.set("latex")
     app.dst_var.set("mathml")

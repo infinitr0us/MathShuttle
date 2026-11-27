@@ -36,6 +36,7 @@ def body(text: str, src: str = "omml", tidy: bool = True) -> str:
     ("display", r"\[ \frac{a}{b} \]"),
     ("sentence", r"$\frac{a}{b}$"),                           # text around an inline equation: no MathML
     ("aligned", "\\[\n\\begin{aligned}\na & = b + c \\\\\n & = c + b\n\\end{aligned}\n\\]"),
+    ("powerpoint", r"\[ x^{2} + \alpha \]"),                 # PowerPoint: &#119909; entities, other tags
 ])
 def test_equations_from_mac_word_html(name, expected):
     assert latex(omml_from_html(fixture(name + ".html"))) == expected
@@ -86,6 +87,7 @@ def test_aligned_lines_in_omml():
 @pytest.mark.parametrize("name, expected", [
     ("inline", r"\[ x^{2} + \alpha \]"),   # Word: <mo>&#xA0;</mo> at the end, the space typed after \alpha
     ("display", r"\[ \frac{a}{b} \]"),
+    ("powerpoint", r"\[ x^{2} + \alpha \]"),
 ])
 def test_space_typed_at_the_end_in_word(name, expected):
     assert latex(fixture(name + ".mathml.xml"), "mathml") == expected
