@@ -620,20 +620,40 @@ _VERBATIM = re.compile(r"\\begin\s*\{(verbatim\*?|Verbatim\*?|lstlisting|minted|
 
 
 def without_verbatim(text: str) -> str:
-    """LaTeX source without its verbatim parts (a LaTeX example in a tutorial is no definition)."""
-    return _VERBATIM.sub(lambda m: "\n" * m.group().count("\n"), text)
+    """LaTeX source with its verbatim parts blanked out (a LaTeX example in a tutorial is no
+    definition), keeping every other character where it was (offsets into it hold for `text`)."""
+    return _VERBATIM.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
+
+
+_HOOKS = re.compile(r"\\(?:AtBeginDocument|AddToHook\s*\{\s*begindocument(?:/before|/end)?\s*\})" + _CS)
+
+
+def _hook_spans(text: str) -> List[Tuple[int, int]]:
+    """The arguments of \\AtBeginDocument{..} and \\AddToHook{begindocument}{..}: definitions there hold
+    for the whole body, but pandoc's reader does not run the hook."""
+    spans = []
+    for m in _HOOKS.finditer(text):
+        if _in_comment(text, m.start()):
+            continue
+        a0, a1 = _argument(text, m.end())
+        if a1 > a0 and text[a0] == "{":
+            spans.append((a0, a1))
+    return spans
 
 
 def pandoc_leftovers(text: str) -> str:
     """The definitions in LaTeX source that pandoc's reader does not apply (\\DeclarePairedDelimiter(X),
-    the \\foreach alphabet loop), with the source's \\usepackage lines: what a document or a pasted
-    preamble adds to the macros of its equations, which pandoc already expanded otherwise.  Only
-    those: re-applying all definitions would also apply one that holds in a group elsewhere."""
+    the \\foreach alphabet loop, those in \\AtBeginDocument), with what they use and the source's
+    \\usepackage lines: what a document or a pasted preamble adds to the macros of its equations,
+    which pandoc already expanded otherwise.  Only those: re-applying all definitions would also
+    apply one that holds in a group elsewhere."""
     text = without_verbatim(text)
-    if not any(k in text for k in ("\\DeclarePairedDelimiter", "\\foreach", "\\@for", "usepackage")):
+    if not any(k in text for k in ("\\DeclarePairedDelimiter", "\\foreach", "\\@for", "usepackage", "RequirePackage",
+                                   "\\AtBeginDocument", "\\AddToHook")):
         return ""
     defs, _ = parse_definitions(text, document=True)
-    wanted = [d for d in defs if d.paired or d.loop]
+    hooks = _hook_spans(text)
+    wanted = [d for d in defs if d.paired or d.loop or _in(hooks, d.span[0])]
     # with the definitions those use (\DeclarePairedDelimiter{\pr}{\myL}{\myR} and \myL's \newcommand)
     names = {n for d in wanted for n in d.uses}
     while True:
@@ -641,7 +661,7 @@ def pandoc_leftovers(text: str) -> str:
         if not more:
             break
         names |= more
-    keep = [d.source for d in defs if d.paired or d.loop or d.name in names]
+    keep = [d.source for d in defs if d.paired or d.loop or d.name in names or _in(hooks, d.span[0])]
     keep += ["\\usepackage{%s}" % p for p in sorted(packages_in(text))]
     return "\n".join(keep)
 
@@ -803,8 +823,11 @@ def _expand(body: str, sources: List[str]) -> Optional[str]:
     return eqs[0].tex if len(eqs) == 1 else None
 
 
-_SIMPLE_DEF = re.compile(r"\s*\\(?:(?:re)?newcommand\*?|providecommand\*?|[gex]?def)\s*\{?\s*(\\[a-zA-Z]+)\s*\}?"
+_SIMPLE_DEF = re.compile(r"\s*\\(?:(?:re)?newcommand\*?|providecommand\*?|g?def)\s*\{?\s*(\\[a-zA-Z]+)\s*\}?"
                          r"\s*\{([\s\S]*)\}\s*")
+# a body that needs TeX itself (a mode test, a look ahead, expansion control): pandoc expands those
+_NOT_LITERAL = re.compile(r"\\(?:if[a-zA-Z]*|else|fi|xspace|expandafter|noexpand|csname|protect|futurelet|"
+                          r"let|relax|ensuremath|@ifnextchar|ifx)(?![a-zA-Z@])")
 
 
 def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
@@ -814,7 +837,7 @@ def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
     bodies: Dict[str, str] = {}
     for d in definitions:
         m = _SIMPLE_DEF.fullmatch(d.source)
-        if not m or m.group(1) != d.name or "#" in m.group(2) or "@" in d.source:
+        if not m or m.group(1) != d.name or "#" in m.group(2) or "@" in d.source or _NOT_LITERAL.search(m.group(2)):
             return None
         if d.source.lstrip().startswith("\\providecommand") and d.name in bodies:
             continue  # \providecommand defines only what is not defined yet
@@ -827,10 +850,19 @@ def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
             if t.group() not in bodies:
                 continue
             body = bodies[t.group()]
-            if re.search(r"\\[a-zA-Z@]+$", body) and re.match(r"[a-zA-Z@]", tex[t.end():t.end() + 1]):
-                body += " "  # \calR x -> \mathcal{R} x; \bb R -> \mathbb R, not \mathbbR
-            out += [tex[last:t.start()], body]
-            last = t.end()
+            before = tex[last:t.start()]
+            # an argument of the command before it (\mathbb\RR, \frac\mass{V}): TeX hands over the whole
+            # macro, so its text is one group there; elsewhere it is put in as it is.  (Not for a body that
+            # is a command waiting for its own argument: \in \bb R with \bb -> \mathbb.)
+            if re.search(r"\\[a-zA-Z@]+$", before or (out[-1] if out else "")) and not re.search(r"\\[a-zA-Z@]+$", body):
+                body = "{%s}" % body
+            end = t.end()
+            if t.group()[1:].isalpha():  # TeX skips the spaces after a control word (\text{\prefix Hz})
+                end = re.compile(r"[ \t]*\n?[ \t]*").match(tex, end).end()
+            if re.search(r"\\[a-zA-Z@]+$", body) and re.match(r"[a-zA-Z@]", tex[end:end + 1]):
+                body += " "  # \bb R -> \mathbb R, not \mathbbR
+            out += [before, body]
+            last = end
         if not out:
             return tex
         tex = "".join(out) + tex[last:]

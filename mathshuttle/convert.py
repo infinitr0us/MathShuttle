@@ -90,12 +90,18 @@ def _write(prepared: Equation, dst: str, eq: Equation, which: str = "", **kw) ->
         raise _diagnose.explained(e, eq.tex, prepared.tex, which) from None
 
 
+# Markdown code (a fence, `inline code`) and delimited maths: what is not the input's own preamble text
+_CODE_OR_MATHS = re.compile(r"```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]"
+                            r"|\\\([\s\S]*?\\\)|(?<![\\$])\$(?:\\.|[^$\\])+\$")
+
+
 def _with_input_definitions(macros: Optional[compat.Macros], text: str, src: str) -> Optional[compat.Macros]:
     """The macros plus what LaTeX input defines outside its equations that pandoc's reader drops
-    (\\DeclarePairedDelimiter above $\\abs{x}$, as Open file's Use writes it) and the packages it loads."""
+    (\\DeclarePairedDelimiter above $\\abs{x}$, as Open file's Use writes it) and the packages it loads;
+    not from code in a chat answer, nor from one equation's own definitions (those hold for it only)."""
     if src != "latex":
         return macros
-    return compat.with_document(macros, compat.pandoc_leftovers(text))
+    return compat.with_document(macros, compat.pandoc_leftovers(_CODE_OR_MATHS.sub(" ", text)))
 
 
 def _read(text: str, src: str, mode: str, tidy: bool) -> List[Equation]:

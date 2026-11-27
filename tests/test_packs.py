@@ -138,5 +138,5 @@ def test_paired_delimiter_x_and_xparse_and_the_alphabet_loop():
     assert prepared(r"\inp*{a}{b}", macros)[0] == r"{\left\langle {{a}, {b}}\right\rangle}"
     assert prepared(r"\KL[r]{q}", macros)[0] == r"D_{\mathrm{KL}}(r \Vert q)"
     assert prepared(r"\KL{q}", macros)[0] == r"D_{\mathrm{KL}}(p \Vert q)"
-    assert prepared(r"\calR + \calZ", macros)[0] == r"\mathcal{R} + \mathcal{Z}"
+    assert prepared(r"\calR + \calZ", macros)[0] == r"\mathcal{R}+ \mathcal{Z}"  # (TeX skips the space)
     assert not macros.skipped

@@ -526,9 +526,14 @@ _add("siunitx", "numlist", _numlist)
 _QUANTITY_NAMES = ("\\qty", "\\SI")
 
 
+_SHARED = {"\\bra", "\\ket", "\\braket"}  # in physics and in braket, with different meanings
+
+
 def packages_for(tex: str, defined: Set[str], packages: Set[str]) -> List[str]:
     """The LaTeX packages the pack commands in `tex` come from, for the preview (which sets the LaTeX as
     written): physics or braket (not both: they define the same commands), slashed, tensor, siunitx."""
+    from .compat import parse_definitions
+    defined = set(defined) | {d.name for d in parse_definitions(tex)[0]}  # (\newcommand{\abs} in it)
     needed: Set[str] = set()
     for m in re.finditer(r"\\[A-Za-z]+", tex):
         name = m.group()
@@ -537,6 +542,8 @@ def packages_for(tex: str, defined: Set[str], packages: Set[str]) -> List[str]:
         package, _, loaded_only = PACKS[name]
         if loaded_only and package not in packages or package == "aastex":
             continue
+        if package == "physics" and name in _SHARED and not _physics_style(packages):
+            package = "braket"  # the paper's own provider of \bra, \ket, \braket
         if name == "\\qty":  # siunitx' \qty{12}{kHz} or physics' \qty(..)
             probe = _Args(tex, m.end())
             probe.option()

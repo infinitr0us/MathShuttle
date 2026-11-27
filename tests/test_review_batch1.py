@@ -156,7 +156,41 @@ def test_a_let_alias_of_a_paired_delimiter():
 def test_simple_macros_expand_without_a_pandoc_run(monkeypatch):
     macros = compat.load_macros(text=r"\newcommand{\calR}{\mathcal{R}}" "\n" r"\newcommand{\bb}{\mathbb}")
     monkeypatch.setattr(compat, "_expand", lambda *a: pytest.fail("a pandoc run for simple macros"))
-    assert compat.for_texmath(r"\calR + \bb R", macros)[0] == r"\mathcal{R} + \mathbb R"
+    assert compat.for_texmath(r"\calR + \bb R", macros)[0] == r"\mathcal{R}+ \mathbb R"  # (TeX skips the space)
+    tight = compat.load_macros(text=r"\newcommand{\RR}{R}" "\n" r"\newcommand{\mass}{m}")
+    assert compat.for_texmath(r"\mathbb\RR + \frac\mass{V}", tight)[0] == r"\mathbb{R}+ \frac{m}{V}"
+
+
+def test_the_fast_path_leaves_what_needs_tex_to_pandoc():
+    for text, tex, expected in (
+            (r"\def\energy{E}\edef\initial{\energy}\def\energy{F}", r"\initial+\energy", "E+F"),
+            (r"\newcommand{\pM}{p\xspace}", r"\pM", "p")):
+        assert shown(tex, compat.load_macros(text=text)).startswith(expected)
+
+
+def test_document_hooks_and_requirepackage(tmp_path):
+    out, _ = read(paper(tmp_path, r"\usepackage{mathtools}\AtBeginDocument{\renewcommand{\div}{\nabla\cdot}}",
+                        r"$\div F$"))
+    assert out == ["∇⋅F"]
+    (tmp_path / "paper.tex").unlink()
+    out, _ = read(paper(tmp_path, r"\RequirePackage{physics}", r"$\div F$"))
+    assert out == ["∇⋅F"]
+
+
+def test_code_in_a_chat_answer_loads_no_package():
+    assert shown("Use `\\usepackage{physics}` for that. Then $6\\div 2=3$.") == "6÷2=3"
+
+
+def test_a_file_input_twice_is_read_twice(tmp_path):
+    files = [("sq.tex", r"\DeclarePairedDelimiter{\fence}{[}{]}"), ("pa.tex", r"\DeclarePairedDelimiter{\fence}{(}{)}")]
+    out, _ = read(paper(tmp_path, r"\usepackage{mathtools}\input{sq}\input{pa}\input{sq}", r"$\fence{x}$", files))
+    assert out == ["[x]"]
+
+
+def test_preview_packages_follow_the_paper():
+    from mathshuttle import packs
+    assert packs.packages_for(r"\braket{\psi}", set(), {"braket"}) == ["braket"]
+    assert packs.packages_for(r"\newcommand{\abs}[1]{(#1)}\abs{x}", set(), set()) == []
 
 
 @pytest.mark.parametrize("tex", [r"\text{for \(\textbf{x} = 1\)}", r"x_\text{a \textbf{b}}",

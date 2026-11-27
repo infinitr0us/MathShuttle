@@ -1064,9 +1064,12 @@ class EquationList(tk.Toplevel):
         own = self.doc.macros(None) if self.doc.source == "latex" else None
         if own is None:
             return latex
-        # (all of them: in the window they then win over the user's macros, as for the document)
+        # (all of them: in the window they then win over the user's macros, as for the document), and the
+        # packages that decide what pack commands mean (braket's \braket{a} is not physics')
+        from .packs import PACKS
+        packages = {p for p, _, _ in PACKS.values()} & own.packages
         needed = [d.source for d in own.needed(found.equation.tex)]
-        return "\n".join(needed + [latex])
+        return "\n".join(["\\usepackage{%s}" % p for p in sorted(packages)] + needed + [latex])
 
     def use(self) -> None:
         found = self._selected()

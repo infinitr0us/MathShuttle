@@ -387,9 +387,22 @@ def _local_sources(path: str, text: str) -> str:
     win over the file's), without comments and verbatim parts, for its definitions.  At most 300
     files of up to 4 MB."""
     folder = os.path.dirname(os.path.abspath(path))
-    seen = {os.path.normcase(os.path.abspath(path))}
+    cache: Dict[str, Optional[str]] = {}
+    count = [0]  # files put in (a file \input twice is put in twice, as LaTeX reads it twice)
 
-    def expand(current: str) -> str:
+    def read(full: str) -> Optional[str]:
+        if full not in cache:
+            try:
+                if os.path.getsize(full) > 4 << 20:
+                    cache[full] = None
+                else:
+                    with open(full, "rb") as f:
+                        cache[full] = _source_text(f.read())
+            except OSError:
+                cache[full] = None
+        return cache[full]
+
+    def expand(current: str, active: Tuple[str, ...]) -> str:
         current = compat.without_verbatim(re.sub(r"(?<!\\)((?:\\\\)*)%[^\n]*", r"\1", current))
         out, last = [], 0
         for m in _READS.finditer(current):
@@ -399,22 +412,21 @@ def _local_sources(path: str, text: str) -> str:
                 name = name.strip()
                 for candidate in ([name + ".sty"] if package else [name, name + ".tex"]) if name else []:
                     full = os.path.normcase(os.path.abspath(os.path.join(folder, candidate)))
-                    if full in seen or len(seen) >= 300 or not os.path.isfile(full):
+                    if not os.path.isfile(full):
                         continue
-                    seen.add(full)
-                    try:
-                        if os.path.getsize(full) > 4 << 20:
-                            break
-                        with open(full, "rb") as f:
-                            inserted.append(expand(_source_text(f.read())))
-                    except OSError:
-                        pass
+                    # a file that includes itself (directly or not) once; a package once, as LaTeX loads it
+                    if full in active or count[0] >= 300 or (package and full in cache):
+                        break
+                    data = read(full)
+                    if data is not None:
+                        count[0] += 1
+                        inserted.append(expand(data, active + (full,)))
                     break
             out.append(current[last:m.end()])
             out += ["\n" + part + "\n" for part in inserted]
             last = m.end()
         return "".join(out) + current[last:]
-    return expand(text)
+    return expand(text, (os.path.normcase(os.path.abspath(path)),))
 
 
 def _document_bounds(text: str) -> Tuple[Optional[int], Optional[int]]:
