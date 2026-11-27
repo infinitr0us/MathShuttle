@@ -468,8 +468,10 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
             pass  # moved into place, or held for a moment by a virus scanner
     failed = len(re.findall(r"^\[WARNING\] Could not convert TeX math", err, re.M))
     if failed:
-        notes.append("%d equation%s could not be converted; %s in the file as LaTeX text."
-                     % (failed, "" if failed == 1 else "s", "it is" if failed == 1 else "they are"))
+        notes.append("%d equation%s could not be converted; %s in the file as LaTeX text.%s"
+                     % (failed, "" if failed == 1 else "s", "it is" if failed == 1 else "they are",
+                        " A definition of the document's that pandoc does not apply (\\DeclarePairedDelimiter "
+                        "in the preamble) can be given as a macro file (Macros..., --macros)." if own else ""))
     if tags:
         notes.append("\\tag numbers are not carried over: number the equations in Word if they need numbers.")
     return notes

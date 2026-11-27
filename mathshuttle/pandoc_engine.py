@@ -440,15 +440,23 @@ def _mathy(tex: str) -> bool:
     bare = _TEXT_ARGUMENT.sub("", tex)
     if re.search(r"(?<![\\A-Za-z])[A-Za-z]{3,}", bare):
         return False
+    pairs = re.findall(r"(?<![\\A-Za-z])[A-Za-z]{2}(?![A-Za-z])", bare)  # xy, nm (not "to", "of")
     return bool(_MATH_SIGN.search(tex) or re.fullmatch(r"\s*\d*[A-Za-z]\d*\s*", tex)  # x, x1, 2x
                 or re.fullmatch(r"\s*-?\d[\d.,;:\s+\-*/]*\d\s*|\s*\d\s*", tex)      # 42, 1/2, 0, 1, 10 - 3
-                or re.search(r"(?<![\\A-Za-z0-9])[A-Za-z](?![A-Za-z])", bare))    # 2 x (not 5M)
+                or re.search(r"(?<![\\A-Za-z0-9])[A-Za-z](?![A-Za-z])", bare)     # 2 x (not 5M)
+                or any(p.lower() not in _SHORT_WORDS for p in pairs))
+
+
+# two-letter English words: prose between two prices ("$5M to $10M"), not a product like xy
+_SHORT_WORDS = frozenset("to of in on or is at by as an if it be we so no up do my me us he am per".split())
 
 
 def _price(tex: str, text: str) -> bool:
     """Whether the LaTeX reader's "equation" `tex` is what lies between two prices in `text`: its
     closing $ is the start of an amount ("$5 + $10")."""
     if re.fullmatch(r"\s*\d[\d.,]*\s*\|.*", tex, re.S):  # "$10 | $y$ |": a price in a Markdown table
+        return True
+    if "|" in tex and _TABLE_RULE.search(text):  # "| | B |": what lies between two cells' dollars
         return True
     pattern = r"\$\s*" + r"\s*".join(re.escape(t) for t in tex.split()) + r"\s*\$\d"
     return bool(tex.split()) and bool(re.search(pattern, text))
@@ -475,18 +483,16 @@ _MARKDOWN_SIGNS = re.compile(
     # 50% of, 50 % of, (in %): a percent sign, not a comment (nor %20 in a URL)
     r"(?<![\\\w.={])\d+(?:[.,]\d+)?[ \t]?%(?![0-9A-Fa-f]{2})[ \t]*[^\s%]|\((?:in[ \t]+)?%\)"
     r"|(?:(?<![\\\w])[A-Za-z]|\))%[ \t]+[A-Za-z]{2,}"                   # p% confidence, (100-p)% of
-    # $5 and, $5M, $5/mo, $5, $10, US$5: money
-    r"|(?<![\\$\w])\$\d+(?:[.,]\d+)*(?:[kKmMbB]n?\b|/[A-Za-z]|[.,;:!?)]?[ \t]+[A-Za-z]+\b|[.,;:!?][ \t]*(?:\$|$)"
-    r"|[ \t]+\()"
-    r"|\b[A-Z]{1,3}\$\d"
+    r"|\b[A-Z]{1,3}\$\d"                                                # US$5 (other money: _money)
     # `code`, ``code``; not TeX's quotes (`inner' and `outer', ``fast'' and ``slow'')
     r"|(?<![`\\])`(?![^`\n]*\w'['\s,.;:)!?])[^`\n]+(?<!\\)`(?!`)|(?<!`)``[^`'\n]+``(?!`)"
-    r"|^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*\|[ \t]*:?-{3,}"                  # a table's | --- | --- |"
-    r"|^[ \t]*(?:```[^`\n]*|~~~[\w+.-]*[ \t]*(?:\{[^}\n]*\})?[ \t]*)\r?$"  # a fenced code block
+    r"|^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*\|[ \t]*:?-{3,}"                  # a table's | --- | --- |
+    r"|^[ \t]*(?:>[ \t]?)*(?:```[^`\n]*|~~~[\w+.-]*[ \t]*(?:\{[^}\n]*\})?[ \t]*)\r?$"  # a code fence
     r"|^#{1,6}[ \t]+\S"                                                 # # a heading
     r"|(?<![\w\\^_{*])\*\*[^\s*$\\][^*\n]*?\*\*",                       # **bold**
     re.M)
 _COMMENT_LINE = re.compile(r"^[ \t]*%.*$", re.M)
+_TABLE_RULE = re.compile(r"^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*\|[ \t]*:?-{3,}", re.M)
 
 
 # LaTeX's verbatim text, where a % or # is no sign of anything
@@ -495,7 +501,8 @@ _VERBATIM = re.compile(r"\\verb\*?([^\sa-zA-Z*])[^\n]*?\1|\\(?:url|href)\s*\{[^{
 
 
 # Markdown's code: a fenced block (``` or ~~~ to the same fence) and `inline code`
-_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(?:(?<=`)[^`\n]*|(?<=~)[^\n]*)\n.*?^[ \t]*\1[`~]*[ \t]*\r?$", re.M | re.S)
+_FENCE = re.compile(r"^[ \t]*(?:>[ \t]?)*(`{3,}|~{3,})(?:(?<=`)[^`\n]*|(?<=~)[^\n]*)\n.*?"
+                    r"^[ \t]*(?:>[ \t]?)*\1[`~]*[ \t]*\r?$", re.M | re.S)  # (also in a > quote)
 _INLINE_CODE = re.compile(r"(?<![`\\])(`+)(?!`)(?![^`\n]*\w'['\s,.;:)!?])[^\n]+?(?<!`)\1(?!`)")
 
 
@@ -510,9 +517,34 @@ def looks_like_markdown(text: str) -> bool:
     fence, a # heading, **bold**); a line that is a LaTeX comment, or a LaTeX document, outside
     Markdown's code says LaTeX."""
     prose = _without_code(text)
-    if _COMMENT_LINE.search(prose) or _LATEX_DOCUMENT.search(prose):
+    if _COMMENT_LINE.search(_OBSIDIAN_COMMENT.sub(" ", prose)) or _LATEX_DOCUMENT.search(prose):
         return False
-    return bool(_MARKDOWN_SIGNS.search(_without_tex_comments(_VERBATIM.sub(" ", text))))
+    plain = _without_tex_comments(_VERBATIM.sub(" ", text))
+    return bool(_MARKDOWN_SIGNS.search(plain)) or _money(plain)
+
+
+_MONEY = re.compile(r"(?<![\\$\w])\$(\d[\d.,]*)")
+
+
+def _money(text: str) -> bool:
+    """Whether the text has a dollar amount, which LaTeX would take for the start of maths: a $ and a
+    number whose next $ does not close it as Markdown maths would (that $ comes after a space, or
+    before a digit: "$5 and $10", "$5M to $10M", "$5-$10"; or there is none), or that a unit or a
+    bracket with maths follows ("$5/mo", "$5/1M tokens", "$5.00 ($p$"); not $2 n$, $10 nm$, $42$,
+    $1/2$, $2(x+1)$, $2k+1$."""
+    for m in _MONEY.finditer(text):
+        after = text[m.end():]
+        if re.match(r"/(?:[A-Za-z]|\d+[kKmMbB]\b)|[ \t]+\(\s*\$", after):
+            return True
+        close = re.search(r"(?<!\\)\$", after)
+        if close is None or (close.start() and after[close.start() - 1].isspace()) \
+                or after[close.end():close.end() + 1].isdigit():
+            return True
+    return False
+
+
+# Obsidian's comments (%% ... %%), not shown
+_OBSIDIAN_COMMENT = re.compile(r"(?<!\\)%%.*?%%", re.S)
 
 
 def _without_tex_comments(text: str) -> str:
@@ -599,10 +631,13 @@ def _latex_maths(source: str, cwd: Optional[str]) -> List[Equation]:
     return list(_LATEX_MATHS_CACHE[key])
 
 
-# what pandoc's Markdown reader took for maths but is money: "$5.00 ($p$ after tax)" gives "5.00 (", a
-# number and then prose or an opening bracket ($42$, $1/2$, $2 x$ are maths)
-_MONEY_MATH = re.compile(r"\d[\d.,]*(?:[kKmMbB]n?)?(?:/[A-Za-z]+)?(?:[ \t]*[-–][ \t]*\\?\$\d[\d.,]*)?"
-                         r"(?:\s+\S|\s*[(;:!?])")
+def _money_math(tex: str) -> bool:
+    """Whether what pandoc's Markdown reader took for inline maths is money: "$5.00 ($p$ after tax)"
+    gives "5.00 (", a number up to an opening bracket, or a number and prose; $42$, $1/2$, $2 x$,
+    $10 nm$ are maths."""
+    tex = tex.strip()
+    return bool(re.match(r"\d", tex)) and (tex.endswith(("(", "[")) or bool(
+        re.search(r"(?<![\\A-Za-z])[A-Za-z]{3,}", _TEXT_ARGUMENT.sub("", tex))))
 
 
 def _money_dollar(text: str, tex: str) -> Optional[int]:
@@ -613,10 +648,24 @@ def _money_dollar(text: str, tex: str) -> Optional[int]:
     return found.start() if found else None
 
 
+def _without_obsidian_comments(text: str) -> str:
+    """Markdown without Obsidian's %% comments %% (outside code), which a note does not show."""
+    if "%%" not in text:
+        return text
+    spans = [(m.start(), m.end()) for m in _FENCE.finditer(text)] + \
+            [(m.start(), m.end()) for m in _INLINE_CODE.finditer(text)]
+
+    def drop(m):
+        return m.group(0) if any(a <= m.start() < b for a, b in spans) else " "
+    return _OBSIDIAN_COMMENT.sub(drop, text)
+
+
 def markdown_blocks(text: str, fmt: str = MARKDOWN, cwd: Optional[str] = None) -> "tuple[list, str]":
     """pandoc's JSON blocks of Markdown text and its warnings.  An inline "equation" that is money (a
     number, then prose: "$5.00 ($p$ after tax)" gives "5.00 (") is read again with its $ escaped, so
     that the dollar it took as its end starts the equation it belongs to."""
+    _LATEX_MATHS_CACHE.clear()  # (an \input file may have changed since the last reading)
+    text = _without_obsidian_comments(text)
     rounds = 8
     while True:
         out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=cwd)
@@ -625,7 +674,7 @@ def markdown_blocks(text: str, fmt: str = MARKDOWN, cwd: Optional[str] = None) -
         _collect_math(blocks, maths)
         escaped = text
         for e in maths:
-            if not e.display and _MONEY_MATH.match(e.tex) and not _mathy(e.tex):
+            if not e.display and _money_math(e.tex):
                 at = _money_dollar(escaped, e.tex)
                 if at is not None:
                     escaped = escaped[:at] + "\\" + escaped[at:]

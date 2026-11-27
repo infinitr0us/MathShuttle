@@ -216,6 +216,37 @@ def test_final_check_cases(text, eqs):
     assert [" ".join(e.tex.split()) for e in read_latex_text(text)[0]] == eqs
 
 
+@pytest.mark.parametrize("text, eqs", [
+    # LaTeX: $2 n$, $10 nm$, $2 xy$ are maths, no money; so a comment's maths stays out
+    ("Use $2 n$ samples. % old: $n$\nReport $p$.", ["2 n", "p"]),
+    ("Use $2 n$ samples.% old: $n$\nReport $p$.", ["2 n", "p"]),
+    ("The cross term is $2 xy$ and the square term is $x^2$.", ["2 xy", "x^2"]),
+    ("Calibration used a $10 nm$ film at $300 K$.", ["10 nm", "300 K"]),
+    ("Doubling $x$ gives $2 x$, while $ xy $ denotes the interaction.", ["x", "2 x", "xy"]),
+    ("We call $x$ the `left' operand and $y$ the `right' operand.", ["x", "y"]),
+    ("Let $2(x+1)$ and $2k+1$ be odd.", ["2(x+1)", "2k+1"]),
+    # chat and notes
+    ("| Tier | Fee | Capacity |\n| --- | --- | --- |\n| A | $5 | $n$ |\n| B | $10 | $2n$ |\n", ["n", "2n"]),
+    ("The API costs $5/1M tokens for input and $15/1M tokens for output.\n\nLet $f(x)=x^2$ and $h$.",
+     ["f(x)=x^2", "h"]),
+    ("> ```latex\n> $a+b$\n> ```\n\nThe result in your case is $c=d$.\n", ["c=d"]),
+    ("**Fit result.** We used a $10 nm$ film and measured $h=9.8$ after curing.", ["10 nm", "h=9.8"]),
+    ("%% Old derivation: $p=0.7$ %%\n\nThe new estimate has 90% credibility at $p=0.8$.\n\n$w$\n", ["p=0.8", "w"]),
+])
+def test_codex_final_cases(text, eqs):
+    assert [" ".join(e.tex.split()) for e in read_latex_text(text)[0]] == eqs
+
+
+def test_markdown_file_input_read_afresh(tmp_path):
+    from mathshuttle.documents import read_document
+    (tmp_path / "s.tex").write_text("\\newcommand{\\slope}{2}\n", encoding="utf-8")
+    md = tmp_path / "n.md"
+    md.write_text("# N\n\n\\input{s.tex}\n\n\\begin{align} y &= \\slope x \\end{align}\n", encoding="utf-8")
+    assert "2x" in read_document(str(md)).found[0].equation.tex
+    (tmp_path / "s.tex").write_text("\\newcommand{\\slope}{3}\n", encoding="utf-8")
+    assert "3x" in read_document(str(md)).found[0].equation.tex  # the edited \input file
+
+
 def test_markdown_file_money_before_maths(tmp_path):
     from mathshuttle.documents import read_document
     md = tmp_path / "price.md"
