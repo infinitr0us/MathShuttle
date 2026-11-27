@@ -730,10 +730,10 @@ class App(tk.Tk):
             # what was copied: if something else is copied while this converts, it is not overwritten
             sequence = clipboard.sequence_number()
             found = clipboard.read_office_equation()
-            text = clipboard.get_text() or ""
             if found:
                 src, text = found
             else:
+                text = clipboard.get_text() or ""
                 src = ("mathml" if re.search(r"<(\w+:)?math\b", text) else
                        "omml" if re.search(r"<m:oMath", text) else "latex")
             if src != "latex":

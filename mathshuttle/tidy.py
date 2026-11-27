@@ -19,6 +19,7 @@ cleans the TeX texmath wrote.  The caller checks that the result still converts.
 """
 from __future__ import annotations
 
+import bisect
 import copy
 import itertools
 import re
@@ -574,89 +575,100 @@ def tidy_tex(tex: str, display: bool) -> str:
 
 # TeX tokens for _edge_spaces: a control word, a control symbol (\\, "\ ", \~ ...), ~, white space, a
 # brace, a run of other characters
-_EDGE_TOKEN = re.compile(r"\\[a-zA-Z@]+|\\.|~|\s+|[{}]|[^\\~\s{}]+", re.S)
+_EDGE_TOKEN = re.compile(r"\\[a-zA-Z@]+|\\.?|~|\s+|[{}]|[^\\~\s{}]+", re.S)  # \.? : a lone \ at the end too
 _TYPED_SPACES = frozenset(["~", "\\ "])                  # how texmath writes a space typed in Word
 _SMALL_SPACES = frozenset(["\\,", "\\:", "\\;", "\\>"])  # removed with a typed space next to them
 _ARGUMENT_ENVS = frozenset("array subarray alignat alignat* alignedat".split())  # \begin{array}{rl}
 
 
-def _line_starts_and_ends(tokens: List[str]) -> "tuple[set, set]":
-    """Token indices where a line starts (the equation's start, after a row break \\\\, after
-    \\begin{env} and its arguments) and where one ends (the end, a row break, \\end)."""
-    starts, ends = {0}, {len(tokens)}
+def _line_starts_and_ends(tokens: List[str]) -> "tuple[dict, list]":
+    """({token index where a line starts: what a "[" or "*" there would turn into an option of, or ""},
+    sorted token indices where a line ends).  A line starts at the equation's start, after a row break
+    \\\\ (and its \\\\*, \\\\[2pt]) and after \\begin{env} (and its [t], and the {rl} of an array); it
+    ends at the end, at a row break and at \\end."""
+    starts, ends = {0: ""}, [len(tokens)]
 
     def skip_space(i: int) -> int:
         while i < len(tokens) and tokens[i].isspace():
             i += 1
         return i
 
-    def group_end(i: int, open_: str, close: str) -> int:
-        """Index after the group that starts at tokens[i] == open_ (balanced), or -1."""
+    def group_end(i: int) -> int:
+        """Index after the {...} group that starts at tokens[i] (balanced), or -1."""
         depth = 0
         for j in range(i, len(tokens)):
-            if tokens[j] == open_:
-                depth += 1
-            elif tokens[j] == close:
-                depth -= 1
-                if not depth:
-                    return j + 1
+            depth += {"{": 1, "}": -1}.get(tokens[j], 0)
+            if not depth:
+                return j + 1
         return -1
+
+    def option_end(i: int) -> int:
+        """Index after a [...] option at tokens[i] or after white space there (LaTeX looks past white
+        space for an option), or i if there is none."""
+        j = skip_space(i)
+        if j < len(tokens) and tokens[j].startswith("["):
+            close = next((k for k in range(j, len(tokens)) if "]" in tokens[k]), -1)
+            if close >= 0 and tokens[close].endswith("]"):
+                return close + 1
+        return i
 
     for i, token in enumerate(tokens):
         if token == "\\\\":
-            ends.add(i)
-            starts.add(i + 1)
+            ends.append(i)
+            k = i + 1
+            if k < len(tokens) and tokens[k].startswith("*"):  # \\*: one token "*" or "*[2pt]..."
+                k = k + 1 if tokens[k] == "*" else k
+            after = option_end(k)
+            starts[after] = "row" if after == i + 1 else ""
         elif token == "\\end":
-            ends.add(i)
+            ends.append(i)
         elif token == "\\begin":
             j = skip_space(i + 1)
             if j >= len(tokens) or tokens[j] != "{":
                 continue
-            k = group_end(j, "{", "}")
+            k = group_end(j)
             if k < 0:
                 continue
             env = "".join(tokens[j + 1:k - 1]).strip()
+            after = option_end(k)  # \begin{aligned}[t]
             if env in _ARGUMENT_ENVS:
-                k = skip_space(k)
-                if k < len(tokens) and tokens[k].startswith("["):  # \begin{array}[t]{rl}
-                    close = next((m for m in range(k, len(tokens)) if "]" in tokens[m]), -1)
-                    k = skip_space(close + 1) if close >= 0 else k
-                if k < len(tokens) and tokens[k] == "{":
-                    k = group_end(k, "{", "}")
-                if k < 0:
+                after = skip_space(after)
+                if after < len(tokens) and tokens[after] == "{":
+                    after = group_end(after)
+                if after < 0:
                     continue
-            starts.add(k)
-    return starts, ends
+            starts[after] = "begin" if after == k else ""
+    return starts, sorted(set(ends))
 
 
 def _edge_spaces(tex: str) -> str:
     """Drop a space typed at the very start or end of the equation, or of a line of an aligned block or
     a matrix (texmath writes it "~" or "\\ "; with a thin space \\, next to it, that goes too): Word keeps
-    the space typed after the last symbol, a LaTeX author does not write it.  Spaces inside a line,
-    and a line start where the bracket that follows would read as \\\\[...], are left alone."""
+    the space typed after the last symbol, a LaTeX author does not write it.  Spaces inside a line are
+    left alone, and so is a line start where what follows would become an option: [x] after a row break
+    (\\\\[x]) or a \\begin{..} ([t]), * after a row break (\\\\*)."""
     tokens = _EDGE_TOKEN.findall(tex)
     starts, ends = _line_starts_and_ends(tokens)
+    start_list = sorted(starts)
     drop = set()
 
-    def edge_run(indices) -> None:
+    def edge_run(indices) -> List[int]:
         run = []
         for i in indices:
             if i in drop or not (tokens[i].isspace() or tokens[i] in _TYPED_SPACES or tokens[i] in _SMALL_SPACES):
                 break
             run.append(i)
-        if any(tokens[i] in _TYPED_SPACES for i in run):
-            drop.update(i for i in run if not tokens[i].isspace())
+        return [i for i in run if not tokens[i].isspace()] if any(tokens[i] in _TYPED_SPACES for i in run) else []
 
-    for start in starts:
-        stop = min([e for e in ends if e >= start] or [len(tokens)])
-        before = len(drop)
-        edge_run(range(start, stop))
-        nxt = next((i for i in range(start, stop) if i not in drop and not tokens[i].isspace()), None)
-        if (len(drop) > before and start > 0 and tokens[start - 1] == "\\\\" and nxt is not None
-                and tokens[nxt].startswith("[")):
-            drop.difference_update(range(start, stop))  # \\ [x]: the bracket would become an option
+    for start in start_list:
+        stop = ends[bisect.bisect_left(ends, start)] if start <= ends[-1] else len(tokens)
+        gone = edge_run(range(start, stop))
+        nxt = next((i for i in range(start, stop) if i not in gone and not tokens[i].isspace()), None)
+        guarded = {"row": ("[", "*"), "begin": ("[",)}.get(starts[start], ())
+        if gone and not (nxt is not None and tokens[nxt].startswith(guarded) and guarded):
+            drop.update(gone)
     for end in ends:
-        begin = max([s for s in starts if s <= end] or [0])
-        edge_run(range(end - 1, begin - 1, -1))
+        begin = start_list[bisect.bisect_right(start_list, end) - 1]
+        drop.update(edge_run(range(end - 1, begin - 1, -1)))
     out = "".join(t for i, t in enumerate(tokens) if i not in drop)
     return out if out.strip() else tex

@@ -126,7 +126,10 @@ def _cli(argv: list[str]) -> int:
                 sys.stderr.write("No equation on the clipboard (copy one in Word / PowerPoint first).\n")
                 return 2
             src, text = found
-            sys.stdout.write(convert(text, src, args.dst, args.mode, args.wrapper, tidy=args.tidy).text + "\n")
+            result = convert(text, src, args.dst, args.mode, args.wrapper, tidy=args.tidy)
+            sys.stdout.write(result.text + "\n")
+            for note in result.notes:  # e.g. several equations in the copied text
+                sys.stderr.write(note + "\n")
         elif args.cmd == "extract":
             from .documents import read_document
             doc = read_document(args.file)

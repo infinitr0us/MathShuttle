@@ -210,10 +210,10 @@ def capture_one(outdir: str, report: dict, raw: dict, label: str) -> None:
     raw[tag] = items
     found = None
     try:
-        record["app_found_mathml"] = bool(clipboard.read_equation_from_office())
         found = clipboard.read_office_equation()  # what Paste from Word/PowerPoint uses (MathML, else HTML)
     except clipboard.ClipboardError as e:
         record["app_read_error"] = str(e)
+    record["app_found_mathml"] = bool(found and found[0] == "mathml")  # from the same read
     if found:
         record["app_source"] = found[0]
         try:

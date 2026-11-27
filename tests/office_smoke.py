@@ -10,6 +10,7 @@ Office put on the clipboard -> convert back to LaTeX.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -75,12 +76,46 @@ def show_clipboard():
     return mathml
 
 
+@contextlib.contextmanager
+def hidden_word():
+    """(word, document) in a hidden Word of its own: DispatchEx always starts a new Word process, never
+    the user's, so it is quit afterwards whatever happens (one left running would stay hidden)."""
+    word = win32com.client.DispatchEx("Word.Application")
+    try:
+        word.Visible = False
+        doc = word.Documents.Add()
+        try:
+            yield word, doc
+        finally:
+            doc.Close(0)
+    finally:
+        word.Quit()
+
+
+class _PowerPoint:
+    """The one PowerPoint of the whole run.  PowerPoint runs once per user: DispatchEx attaches to the
+    user's own instance when there is one.  So it is quit at the end only if this run started it and no
+    presentation is open in it then (one the user opened meanwhile)."""
+    app = None
+    started_here = False
+
+    @classmethod
+    def get(cls):
+        if cls.app is None:
+            cls.started_here = not is_running("POWERPNT.EXE")
+            cls.app = win32com.client.DispatchEx("PowerPoint.Application")
+        return cls.app
+
+    @classmethod
+    def quit(cls):
+        if cls.app is not None and cls.started_here and not cls.app.Presentations.Count:
+            cls.app.Quit()
+        cls.app = None
+
+
 def test_word(copy, eq_array: bool, expected_back=None):
     print("== Word")
-    word = win32com.client.DispatchEx("Word.Application")
-    word.Visible = False
-    doc = word.Documents.Add()
-    try:
+    with hidden_word() as (word, doc):
         for attempt in range(2):
             # as the app copies it; the plain-text format holds the MathML too, since Word pastes from that one.
             # Right after another Office application owned the clipboard, Word occasionally pastes nothing.
@@ -115,19 +150,13 @@ def test_word(copy, eq_array: bool, expected_back=None):
             tidy_back = convert(mml_back, "mathml", "latex", wrapper="bare").text
             print("  Paste from Word (tidy):", tidy_back)
             assert tidy_back == expected_back
-    finally:
-        doc.Close(0)
-        word.Quit()  # DispatchEx: a Word process of its own, never the user's
 
 
 def test_word_sentence():
     """A sentence with an equation in it: Word copies no MathML then, only the HTML with the OMML in it,
     which Paste from Word/PowerPoint reads (clipboard.read_office_equation)."""
     print("== Word, a sentence with an inline equation")
-    word = win32com.client.DispatchEx("Word.Application")
-    word.Visible = False
-    doc = word.Documents.Add()
-    try:
+    with hidden_word() as (word, doc):
         doc.Content.Text = "Let EQ be given."
         found = doc.Content
         found.Find.Execute("EQ")
@@ -142,15 +171,11 @@ def test_word_sentence():
         tex = convert(got[1], "omml", "latex", wrapper="bare").text
         print("  Paste from Word (HTML):", tex)
         assert tex == "x^{2}"
-    finally:
-        doc.Close(0)
-        word.Quit()  # DispatchEx: a Word process of its own, never the user's
 
 
 def test_powerpoint(copy, eq_array: bool, expected_back=None):
     print("== PowerPoint")
-    ppt = win32com.client.DispatchEx("PowerPoint.Application")
-    pres = ppt.Presentations.Add(0)  # WithWindow = msoFalse
+    pres = _PowerPoint.get().Presentations.Add(0)  # WithWindow = msoFalse
     try:
         slide = pres.Slides.Add(1, 12)  # ppLayoutBlank
         shape = slide.Shapes.AddTextbox(1, 50, 50, 500, 100)
@@ -182,18 +207,9 @@ def test_powerpoint(copy, eq_array: bool, expected_back=None):
             assert tidy_back == expected_back
     finally:
         pres.Close()
-        if not POWERPOINT_WAS_RUNNING:
-            ppt.Quit()
 
 
-if __name__ == "__main__":
-    # PowerPoint runs once per user: DispatchEx attaches to the user's own instance when there is one,
-    # so it is only quit if it was not running before.  (Word's DispatchEx is always a process of its
-    # own: quit every time, otherwise one instance that is slow to exit makes every later test think
-    # the user's Word is running and leave its own hidden Word behind.)
-    POWERPOINT_WAS_RUNNING = is_running("POWERPNT.EXE")
-    for stream in (sys.stdout, sys.stderr):  # MathML holds ∂, 𝐱...; a cp936 / cp1252 console cannot print them
-        stream.reconfigure(encoding="utf-8", errors="replace")
+def main() -> None:
     for tex in (TEX, ALIGN, CONT, ALIGN4, EQNARRAY, CASES, RAGGED, NO_AMP, SYSTEM, VALUES, *ROUND_TRIP):
         print("#" * 70)
         print("LaTeX:", tex)
@@ -204,3 +220,12 @@ if __name__ == "__main__":
     print("#" * 70)
     test_word_sentence()
     print("done")
+
+
+if __name__ == "__main__":
+    for stream in (sys.stdout, sys.stderr):  # MathML holds ∂, 𝐱...; a cp936 / cp1252 console cannot print them
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    try:
+        main()
+    finally:
+        _PowerPoint.quit()

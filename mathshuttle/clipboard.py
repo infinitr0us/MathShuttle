@@ -2,8 +2,9 @@
 
 Word / PowerPoint / OneNote exchange equations as MathML: on Windows through the registered clipboard
 format ``"MathML"`` (and ``"MathML Presentation"``), see :mod:`._clipboard_win32`; on macOS through the
-general pasteboard (NSPasteboard), see :mod:`._clipboard_macos`, whose MathML types are still to be
-confirmed against Mac Word / PowerPoint.
+general pasteboard (NSPasteboard) types ``public.mathml`` (and ``public.mathml.presentation``), see
+:mod:`._clipboard_macos`.  Where Word copies no MathML, its HTML holds the equations as OMML
+(:func:`read_office_equation`, :mod:`.office_html`).
 
 This module is what the app and the CLI use.  The platform backend is loaded on first use, not on
 import: importing the GUI never fails because of the clipboard, and a backend that cannot be loaded

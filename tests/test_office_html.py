@@ -74,8 +74,7 @@ def test_aligned_lines_in_omml():
     # a line without a mark, and a mark on a run with other properties: kept, without the mark
     styled = "<m:oMath><m:r><m:rPr><m:aln/><m:sty m:val=\"p\"/></m:rPr><m:t>=e</m:t></m:r></m:oMath>"
     para = "<m:oMathPara>%s<m:oMath><m:r><m:t>f</m:t></m:r></m:oMath>%s</m:oMathPara>" % (line % ("a", "b"), styled)
-    tex = body(para)
-    assert tex.startswith("\\begin{aligned}\na & = b \\\\\nf") and tex.count("&") == 2 and "aln" not in tex
+    assert body(para) == "\\begin{aligned}\na & = b \\\\\nf \\\\\n & = \\mathrm{e}\n\\end{aligned}"  # upright kept
     # without marks, the lines are still separate equations
     plain = "<m:oMathPara><m:oMath><m:r><m:t>a=1</m:t></m:r></m:oMath><m:oMath><m:r><m:t>b=2</m:t></m:r></m:oMath></m:oMathPara>"
     assert latex(plain) == "\\[ a = 1 \\]\n\n\\[ b = 2 \\]"
@@ -118,7 +117,21 @@ def test_edge_spaces_at_row_starts_and_ends():
     assert _edge_spaces("\\begin{aligned}\na & = b~ \\\\\n~& = c~\n\\end{aligned}") == \
         "\\begin{aligned}\na & = b \\\\\n& = c\n\\end{aligned}"
     assert _edge_spaces("a\\,") == "a\\,"          # a thin space alone is the author's
-    assert _edge_spaces("a \\\\ ~[x]") == "a \\\\ ~[x]"  # \\[x] would read [x] as the row's spacing
+    # what would become an option once the space is gone stays as it is: \\[x], \\*, \begin{aligned}[t]
+    assert _edge_spaces("a \\\\ ~[x]") == "a \\\\ ~[x]"
+    assert _edge_spaces("a\\\\\\ *x") == "a\\\\\\ *x"
+    assert _edge_spaces("\\begin{aligned}\\ [t]x\\end{aligned}") == "\\begin{aligned}\\ [t]x\\end{aligned}"
+    # after a real option, the line starts behind it
+    assert _edge_spaces("a\\\\[2pt]~b") == "a\\\\[2pt]b"
+    assert _edge_spaces("a \\\\ [2pt] ~b") == "a \\\\ [2pt] b"
+    assert _edge_spaces("a\\\\*~b") == "a\\\\*b"
+    assert _edge_spaces("\\begin{aligned}[t]~a\\end{aligned}") == "\\begin{aligned}[t]a\\end{aligned}"
+    assert _edge_spaces("\\begin{array}[t]{rl}~a\\end{array}") == "\\begin{array}[t]{rl}a\\end{array}"
+    assert _edge_spaces("a \\\\ ~*x") == "a \\\\ ~*x"                 # \\* after a row break's space too
+    assert _edge_spaces("a\\") == "a\\"                              # a lone backslash is kept
+    # a row that starts with a bracket in a nested environment: each line on its own, in any order
+    tex = "\\begin{aligned}\nx + x + a & = b \\\\\n~[x] + \\begin{pmatrix} ~1 \\\\ 2 \\end{pmatrix} & = c\n\\end{aligned}"
+    assert _edge_spaces(tex) == tex.replace("pmatrix} ~1", "pmatrix} 1")
     # through the whole conversion: a row that starts with a bracket once its space is gone keeps \lbrack
     math = ('<math xmlns="http://www.w3.org/1998/Math/MathML"><mtable columnalign="left right"><mtr><mtd><mi>a</mi>'
             '</mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mo>&#xA0;</mo><mo>[</mo><mi>x</mi><mo>]</mo></mtd><mtd>'
@@ -143,9 +156,106 @@ def block(inner: str) -> str:
     ("<m:oMath><m:r><m:rPr><m:sty m:val=p /></m:rPr>sin</m:r><m:r>x</m:r></m:oMath>", "\\sin x"),
     ("<m:oMath><m:d><m:dPr><m:begChr m:val=\"&lang;\"/><m:endChr m:val='&rang;'/></m:dPr><m:e><m:r>x</m:r>"
      "</m:e></m:d></m:oMath>", "\\left\\langle x \\right\\rangle"),
+    # a run's text is one <m:t>, however the HTML split it: no letter doubled by Tidy's styled-run split
+    ('<m:oMath><m:r><m:rPr><m:sty m:val="b"/></m:rPr><m:t>A=</m:t>b</m:r></m:oMath>', "\\mathbf{A} = \\mathbf{b}"),
+    # the text across HTML formatting: one line break is one space, entities per text node
+    ('<m:oMath><m:r><m:rPr><m:nor/></m:rPr><m:t>net\r\n<span>income</span></m:t></m:r></m:oMath>', "\\text{net income}"),
+    ("<m:oMath><m:r>&amp;<span>lt;</span></m:r></m:oMath>", "\\& lt;"),
+    # a run that held only a <br>, and white space inside the run's properties: not text
+    ("<m:oMath><m:r>1</m:r><m:r> <br> </m:r><m:r>2</m:r></m:oMath>", "12"),
+    ("<m:oMath><m:r><m:rPr> <m:nor/> </m:rPr>mass</m:r></m:oMath>", "\\text{mass}"),
+    # names spelled differently, a structure where a run's end tag is missing, text outside any run
+    ("<m:oMath><m:R>1</m:R></m:oMath>", "1"),
+    ("<m:omath><m:r>1</m:r><m:f><m:num><m:r>a</m:r></m:num><m:den><m:r>b</m:r></m:den></m:f></m:omath>",
+     "1\\frac{a}{b}"),
+    ("<m:oMath><m:r>x+<m:f><m:num><m:r>1</m:r></m:num><m:den><m:r>2</m:r></m:den></m:f></m:oMath>", "x + \\frac{1}{2}"),
+    ("<m:oMath><m:sSup><m:e>x</m:e><m:sup><m:r>2</m:r></m:sup></m:sSup></m:oMath>", "x^{2}"),
+    # a line wrapped after a space the text had keeps the space; layout between a run's tags does not count
+    ("<m:oMath><m:r><m:rPr><m:nor/></m:rPr>for \r\n  </m:r><m:r>x</m:r></m:oMath>", "\\text{for }x"),
+    ("<m:oMath><m:r>1</m:r><m:r> \r\n  </m:r><m:r>2</m:r></m:oMath>", "1\\ 2"),
+    ('<m:oMath><m:r>a</m:r><m:r><m:rPr><m:sty m:val="p"/></m:rPr> <m:t>b</m:t></m:r></m:oMath>', "a\\mathrm{b}"),
+    ('<m:oMath><m:r>a</m:r><m:r><m:rPr><m:sty m:val="p"/> </m:rPr>b</m:r></m:oMath>', "a\\mathrm{b}"),
+    ("<m:oMath><m:r><m:t>max<span>\r\n</span>x</m:t></m:r></m:oMath>", "max\\ x"),  # text "max x", not "maxx"
+    # Office attributes with undeclared prefixes, duplicates, not-XML characters, comments
+    ('<m:oMath w16se:cid="1"><m:r o:foo=bar class=a class=b a:b:c=1>x</m:r></m:oMath>', "x"),
+    ('<m:oMath><m:r><m:rPr><m:sty m:val="p" m:val="b"/></m:rPr>d</m:r></m:oMath>', "\\mathrm{d}"),
+    ("<m:oMath><m:r>a\x0bb&#x0c;c\x01</m:r></m:oMath>", "a\\ b\\ c"),
+    ("<m:oMath><!-- <m:r>ghost</m:r> --><m:r>x<!-- note --></m:r></m:oMath>", "x"),
 ])
 def test_runs_and_attributes_from_html(inner, expected):
     assert body(omml_from_html(block(inner))) == expected
+
+
+def test_attribute_values_as_html_has_them():
+    quoted = '<m:begChr m:val="/"/>'
+    for begin in ("<m:begChr m:val=/></m:begChr>", "<m:begChr m:val='/'/>", quoted):  # unquoted "/" is the value
+        inner = '<m:oMath><m:d><m:dPr>%s<m:endChr m:val="/"/></m:dPr><m:e><m:r>x</m:r></m:e></m:d></m:oMath>'
+        assert 'm:begChr m:val="/"' in clean_block(inner % begin)
+        assert body(omml_from_html(block(inner % begin))) == body(omml_from_html(block(inner % quoted)))
+    assert '<m:begChr m:val=""/>' in clean_block("<m:oMath><m:d><m:dPr><m:begChr m:val/></m:dPr></m:d></m:oMath>")
+
+
+def test_cf_html_header():
+    # a long SourceURL in the header and no fragment comments: the offsets still apply
+    other, copied = block("<m:oMath><m:r>y</m:r></m:oMath>"), block("<m:oMath><m:r>x</m:r></m:oMath>")
+    fragment = "<p>%s</p>" % copied
+    page = "<html><body>%s%s</body></html>" % (other, fragment)
+    header = ("Version:0.9\r\nStartHTML:%010d\r\nEndHTML:%010d\r\nStartFragment:%010d\r\nEndFragment:%010d\r\n"
+              "SourceURL:file:///" + "u" * 560 + "\r\n")
+    size = len(header % (0, 0, 0, 0))
+    start = size + page.index(fragment)
+    raw = (header % (size, size + len(page), start, start + len(fragment)) + page).encode("utf-8")
+    assert cf_html_fragment(raw).decode("utf-8") == fragment
+    # byte offsets, not characters: text before the selection that is not ASCII
+    page = "<html><body><p>公式 é %s</p>%s</body></html>" % (other, fragment)
+    start = size + len(page[:page.index(fragment)].encode("utf-8"))
+    raw = (header % (size, size + len(page.encode("utf-8")), start, start + len(fragment)) + page).encode("utf-8")
+    assert cf_html_fragment(raw).decode("utf-8") == fragment
+    # HTML without a header that mentions the field names is not cut, nor data whose offsets are unset
+    assert cf_html_fragment(b"<p>StartFragment:1 EndFragment:3</p>") == b"<p>StartFragment:1 EndFragment:3</p>"
+    unset = b"Version:0.9\r\nStartHTML:0000000097\r\nEndHTML:0000000200\r\nStartFragment:0000000000\r\n" \
+            b"EndFragment:0000000000\r\n<html><body>x</body></html>"
+    assert cf_html_fragment(unset) == unset
+    # a start marker without its end marker: only what follows it
+    html = "<html><body>%s<!--StartFragment-->%s</body></html>" % (other, copied)
+    assert body(omml_from_html(html)) == "x"
+
+
+class _FakeBackend:
+    def __init__(self, mathml, html):
+        self.mathml, self.html = mathml, html
+
+    def read_equation_from_office(self):
+        return self.mathml
+
+    def read_office_html(self):
+        return self.html
+
+
+def test_read_office_equation(monkeypatch):
+    from mathshuttle import clipboard
+    word_html = "<html><body><!--StartFragment-->%s<!--EndFragment--></body></html>" % block(
+        "<m:oMath><m:r>x</m:r></m:oMath>")
+    mathml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>y</mi></math>'
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(mathml, word_html))
+    assert clipboard.read_office_equation() == ("mathml", mathml)  # MathML first
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(None, word_html))
+    src, omml = clipboard.read_office_equation()
+    assert src == "omml" and body(omml) == "x"
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(None, "<html><body>text</body></html>"))
+    assert clipboard.read_office_equation() is None
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(None, None))
+    assert clipboard.read_office_equation() is None
+
+
+def test_cli_paste_of_a_sentence_with_two_equations(monkeypatch, capsys):
+    from mathshuttle import clipboard
+    from mathshuttle.__main__ import main
+    two = "<p>Let %s and %s.</p>" % (block("<m:oMath><m:r>x</m:r></m:oMath>"), block("<m:oMath><m:r>y</m:r></m:oMath>"))
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(None, two))
+    assert main(["paste"]) == 0
+    out, err = capsys.readouterr()
+    assert out == "$x$\n\n$y$\n" and "2 equations" in err
 
 
 def test_only_the_copied_fragment():
@@ -183,6 +293,6 @@ def test_alignment_marks():
                      r("+", "<m:aln/>") + r("d"))) == "\\begin{aligned}\na = b & + c \\\\\n & + d\n\\end{aligned}"
     # a mark on an operator box (Word's "operator emulator"), and only the first mark of a line
     box = '<m:box><m:boxPr><m:opEmu m:val="1"/><m:aln/></m:boxPr><m:e><m:r><m:t>=</m:t></m:r></m:e></m:box>'
-    assert body(para(r("a") + box + r("b"), box + r("c"))).count("&") == 2
+    assert body(para(r("a") + box + r("b"), box + r("c"))) == "\\begin{aligned}\na & = b \\\\\n & = c\n\\end{aligned}"
     tex = body(para(r("a") + r("=", "<m:aln/>") + r("b") + r("+", "<m:aln/>") + r("c"), r("=", "<m:aln/>") + r("d")))
     assert tex == "\\begin{aligned}\na & = b + c \\\\\n & = d\n\\end{aligned}"
