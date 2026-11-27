@@ -90,7 +90,7 @@ columns read like an alignment (`\begin{array}{rl} x &= 1`, or `{rcl}` with rela
 Office pastes one equation at a time. With several equations in the input, **Copy for
 Word/PowerPoint** opens a menu of them; its first item, *Next*, is the one after the equation
 you copied last, so you can paste a paper's equations into a slide one after the other (keys: N
-or the equation's number; on the Mac, then Return). On the command line: `copy --index N`.
+or the number of one of the first nine; on the Mac, then Return). On the command line: `copy --index N`.
 
 **Office → LaTeX.** Select an equation in Word or PowerPoint, press Ctrl+C, then click
 **Paste from Word/PowerPoint** (Ctrl+Shift+V): the tool reads the MathML that Office put on the
@@ -98,8 +98,9 @@ clipboard and converts it (to LaTeX by default; any other target works too). Equ
 that Office exports as a bare `<mtable>` are recognised and come back as `aligned`, not `matrix`
 (continuation lines such as `&+ c` included). When Word copies no MathML (a sentence with
 equations in it selected, or on the Mac lines aligned at `=`), the equations are read from the
-HTML that Word copies along, where they are stored as OMML; lines aligned at `=` come back as one
-`aligned` block.
+HTML that Word copies along, where they are stored as OMML. An equation broken into lines (Shift+Enter,
+or *Insert Manual Break*, whose lines Windows Word's MathML puts on one line) comes back as one
+`aligned` block, lined up at the `=` signs when Word aligns them; so does it from a `.docx`.
 
 With **Tidy LaTeX** (on by default; `--no-tidy` on the command line), the LaTeX is what an author
 would write rather than texmath's literal rendering of Office's structure:
@@ -174,7 +175,7 @@ Everything pandoc's LaTeX reader understands is accepted, in any mix:
 
 `\label`, `\tag`, `\nonumber`, `%` comments and `\newcommand` definitions placed before the
 equation are handled; text with several equations converts each of them (output blocks are
-separated by a blank line; *Copy for Word/PowerPoint* takes the first).
+separated by a blank line; *Copy for Word/PowerPoint* lets you pick one, see above).
 
 **LaTeX that texmath does not know** is rewritten before conversion (the LaTeX output keeps what
 you wrote): plain-TeX font switches (`{\rm OOD}`, `\rm{OOD}`, `\bf`, `\it`, `\cal`, `\sf`, `\tt`,

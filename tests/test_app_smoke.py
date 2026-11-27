@@ -131,6 +131,27 @@ def test_copy_for_office_lets_you_pick_the_equation(app, monkeypatch):
     assert len(popups) == count and "<mi>x</mi>" in copied[-1] and "of the" not in app.status_var.get()
 
 
+def test_equation_menu_copies_what_it_shows(app, monkeypatch):
+    import tkinter as tk
+    import mathshuttle.convert as convert_module
+    copied, popups, reads = [], [], []
+    monkeypatch.setattr(clipboard, "copy_mathml_for_office", lambda mathml, *a, **k: copied.append(mathml))
+    monkeypatch.setattr(tk.Menu, "tk_popup", lambda menu, x, y, entry=None: popups.append(menu))
+    real_read = convert_module._read
+    monkeypatch.setattr(convert_module, "_read", lambda *a, **k: (reads.append(1), real_read(*a, **k))[1])
+    app.src_var.set("latex")
+    set_input(app, "$a$ and $\\frac{b}{2}$")
+    app.copy_for_office()
+    first = popups[-1]
+    reads.clear()
+    app.src_var.set("mathml")  # changed after the menu opened: the menu still copies what it showed
+    first.invoke(3)
+    assert "<mfrac>" in copied[-1] and not reads  # and without reading the input again
+    app.src_var.set("latex")
+    app.copy_for_office()
+    assert not first.winfo_exists() and popups[-1].winfo_exists()  # one menu at a time
+
+
 def test_paste_from_office_takes_omml_from_the_html(app, monkeypatch):
     # what Word copies for a sentence with an equation in it: no MathML, the OMML in its HTML
     omml = '<m:oMath><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath>'

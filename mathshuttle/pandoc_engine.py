@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -494,7 +495,9 @@ def _mark_equation_array_alignment(math: ET.Element) -> bool:
     if len(node) != 1 or not tables:
         return False
     table = tables[0]
-    if table.get("columnalign"):
+    # a table that says how it looks (its alignment, a frame, ruled lines) is laid out as it says
+    ruled = any(set((table.get(a) or "none").split()) - {"none"} for a in ("frame", "columnlines", "rowlines"))
+    if ruled or table.get("columnalign") or any(r.get("columnalign") for r in table if r.tag == ns + "mtr"):
         return False
     rows = [[c for c in r if c.tag == ns + "mtd"] for r in table if r.tag == ns + "mtr"]
     if not rows:
@@ -608,7 +611,7 @@ def _drop_annotations(math: ET.Element) -> Optional[str]:
             if child.tag == "semantics":
                 shown = [c for c in child if c.tag not in ("annotation", "annotation-xml")]
                 if parent is math and tex is None:
-                    for ann in child.iter("annotation"):
+                    for ann in child.findall("annotation"):  # the whole equation's, not a part's
                         if (ann.get("encoding") or "").lower() in ("application/x-tex", "tex", "latex") and ann.text:
                             tex = ann.text
                             break
@@ -674,42 +677,123 @@ def _alignment_mark(math: ET.Element) -> "Optional[tuple[ET.Element, ET.Element]
     return None
 
 
-def _aligned_lines(el: ET.Element, maths: List[ET.Element]) -> ET.Element:
-    """A math paragraph of lines aligned at m:aln marks (Word: "Align at =") as one m:oMathPara with an
-    m:eqArr whose rows have a run "&" before the marked element: texmath reads that as an aligned block."""
-    q = lambda n: "{%s}%s" % (OMML_NS, n)  # noqa: E731
-    out = ET.Element(q("oMathPara"))
-    out.extend(copy.deepcopy(c) for c in el if c.tag == q("oMathParaPr"))
-    arr = ET.SubElement(ET.SubElement(out, q("oMath")), q("eqArr"))
-    for m in maths:
-        line = copy.deepcopy(m)
-        found = _alignment_mark(line)
-        if found is not None:
-            marked, mark = found
-            props = next(p for p in marked if mark in list(p))
-            props.remove(mark)
+def _q(name: str) -> str:
+    return "{%s}%s" % (OMML_NS, name)
+
+
+def _separator() -> ET.Element:
+    """A run "&" of its own: outside \\text, whatever the style of the run it goes before."""
+    run = ET.Element(_q("r"))
+    ET.SubElement(run, _q("t")).text = "&"
+    return run
+
+
+def _is_line_break_run(el: ET.Element) -> bool:
+    """A run that only holds Word's line break (<m:r><w:br/></m:r>, ending a line of a math paragraph)."""
+    return el.tag == _q("r") and el.find("{%s}br" % WML_NS) is not None and \
+        not "".join(t.text or "" for t in el.iter(_q("t"))).strip()
+
+
+def _manual_breaks(math: ET.Element) -> "tuple[List[List[ET.Element]], Optional[int]]":
+    """The lines of one m:oMath split at its manual line breaks (a run whose m:rPr holds m:brk: Word's
+    "Insert Manual Break"; the run starts the new line), copies with the m:brk removed; and the m:alnAt
+    of the first break (the operator of the line before that the next lines align to), if any."""
+    lines: List[List[ET.Element]] = [[]]
+    aln_at = None
+    for child in math:
+        child = copy.deepcopy(child)
+        brk = child.find("%s/%s" % (_q("rPr"), _q("brk"))) if child.tag == _q("r") else None
+        if brk is not None:
+            props = child.find(_q("rPr"))
+            if aln_at is None and len(lines) == 1:
+                try:
+                    aln_at = int(brk.get(_q("alnAt"), "")) or None
+                except ValueError:
+                    pass
+            props.remove(brk)
             if not len(props) and not props.attrib:
-                marked.remove(props)
-            separator = ET.Element(q("r"))
-            ET.SubElement(separator, q("t")).text = "&"  # a run of its own: outside \text, whatever the style
-            line.insert(list(line).index(marked), separator)
-        ET.SubElement(arr, q("e")).extend(list(line))
+                child.remove(props)
+            lines.append([])
+        lines[-1].append(child)
+    return lines, aln_at
+
+
+def _is_operator(ch: str) -> bool:
+    return unicodedata.category(ch) == "Sm" or ch in "-/*!"
+
+
+def _before_operator(line: List[ET.Element], n: int) -> bool:
+    """Put "&" before the n-th operator character of the line's own runs (splitting a run "a=b" at it)."""
+    count = 0
+    for index, child in enumerate(line):
+        text = child.find(_q("t")) if child.tag == _q("r") else None
+        for pos, ch in enumerate(text.text or "" if text is not None else ""):
+            if not _is_operator(ch):
+                continue
+            count += 1
+            if count == n:
+                if pos:
+                    rest = copy.deepcopy(child)
+                    rest.find(_q("t")).text = text.text[pos:]
+                    text.text = text.text[:pos]
+                    index += 1
+                    line.insert(index, rest)
+                line.insert(index, _separator())
+                return True
+    return False
+
+
+def _aligned_lines(el: ET.Element, lines: List[List[ET.Element]], aln_at: Optional[int]) -> ET.Element:
+    """Lines (lists of elements, copies) as one m:oMathPara with an m:eqArr whose rows have a run "&" at
+    the alignment point: texmath reads that as an aligned block.  The point is the line's m:aln mark
+    (Word: "Align at ="); without marks, after manual breaks, the aln_at-th operator of the first line
+    and the start of the others (no aln_at: the start of every line)."""
+    out = ET.Element(_q("oMathPara"))
+    out.extend(copy.deepcopy(c) for c in el if c.tag == _q("oMathParaPr"))
+    arr = ET.SubElement(ET.SubElement(out, _q("oMath")), _q("eqArr"))
+    marked = any(_alignment_mark(line) is not None for line in lines)
+    for number, line in enumerate(lines):
+        line = [c for c in line if not _is_line_break_run(c)]
+        if marked:
+            found = _alignment_mark(line)
+            if found is not None:
+                element, mark = found
+                props = next(p for p in element if mark in list(p))
+                props.remove(mark)
+                if not len(props) and not props.attrib:
+                    element.remove(props)
+                line.insert(line.index(element), _separator())
+        elif not (number == 0 and aln_at and _before_operator(line, aln_at)):
+            if number or not aln_at:
+                line.insert(0, _separator())
+        ET.SubElement(arr, _q("e")).extend(line)
     return out
 
 
 def split_math_paragraph(el: ET.Element) -> List[ET.Element]:
-    """An m:oMathPara holding several m:oMath (Word: a math paragraph with one equation per line) as one
-    m:oMathPara per equation - texmath would read them as one product (x y) - or, when the lines are
-    aligned at marks (m:aln), as one aligned block; anything else as it is.  Lines with an "&" of their
-    own stay separate: in an equation array texmath would take it for an alignment point."""
+    """An m:oMathPara holding several m:oMath (Word: a math paragraph with one equation per line, the
+    lines of Shift+Enter) as one m:oMathPara per equation - texmath would read them as one product
+    (x y) - or, when the lines are aligned at marks (m:aln), as one aligned block; an equation with
+    manual line breaks (m:brk) as an aligned block too; anything else as it is.  Lines with an "&" of
+    their own stay as they are: in an equation array texmath would take it for an alignment point."""
     para, math, props = ("{%s}%s" % (OMML_NS, t) for t in ("oMathPara", "oMath", "oMathParaPr"))
-    maths = [c for c in el if c.tag == math] if el.tag == para else []
-    if len(maths) <= 1:
-        return [el]
+    maths = [c for c in el if c.tag == math] if el.tag == para else ([el] if el.tag == math else [])
     text = "{%s}t" % OMML_NS
-    if any(_alignment_mark(m) is not None for m in maths) and \
-            not any("&" in (t.text or "") for m in maths for t in m.iter(text)):
-        return [_aligned_lines(el, maths)]
+    literal_amp = any("&" in (t.text or "") for m in maths for t in m.iter(text))
+    lines: List[List[ET.Element]] = []
+    aln_at = None
+    broken = False
+    for m in maths:
+        parts, at = _manual_breaks(m)
+        broken |= len(parts) > 1
+        aln_at = aln_at if aln_at is not None else at
+        lines += parts
+    if broken and not literal_amp:
+        return [_aligned_lines(el if el.tag == para else ET.Element(para), lines, aln_at)]
+    if len(maths) <= 1 or el.tag != para:
+        return [el]
+    if any(_alignment_mark(m) is not None for m in maths) and not literal_amp:
+        return [_aligned_lines(el, [[copy.deepcopy(c) for c in m] for m in maths], None)]
     out = []
     for m in maths:
         piece = ET.Element(para)
@@ -977,6 +1061,33 @@ def write_mathml(eq: Equation, annotate: bool = False, for_office: bool = False,
     if for_office:
         _office_equation_arrays(root, _array_tables(eq, root))
     return _pretty(root)
+
+
+def mathml_elements(eqs: List[Equation]) -> List[Optional[ET.Element]]:
+    """Each equation as a parsed <math> (texmath's MathML, namespaces stripped), in one pandoc run; None
+    for an equation texmath cannot write.  For comparing renderings (convert.annotation_notes)."""
+    def parse(markup: str) -> ET.Element:
+        root = ET.fromstring(markup)
+        _strip_namespaces(root)
+        _drop_annotations(root)
+        return root
+
+    if not eqs:
+        return []
+    doc = {"pandoc-api-version": _api(), "meta": {},
+           "blocks": [{"t": "Para", "c": [{"t": "Math", "c": [{"t": "DisplayMath" if e.display else "InlineMath"},
+                                                             e.tex]}]} for e in eqs]}
+    out, _ = _run(["-f", "json", "-t", "html", _LF, *_mathml_flags()], json.dumps(doc).encode("utf-8"))
+    found = _MATH_RE.findall(out.decode("utf-8"))
+    if len(found) == len(eqs):
+        return [parse(m) for m in found]
+    results: List[Optional[ET.Element]] = []  # one of them failed (pandoc wrote its TeX as text): one by one
+    for e in eqs:
+        try:
+            results.append(parse(write_mathml(e)))
+        except (ConversionError, ET.ParseError):
+            results.append(None)
+    return results
 
 
 def write_omml(eq: Equation) -> str:

@@ -427,6 +427,15 @@ def test_office_equation_arrays_with_several_alignment_pairs():
                    ["<mi>e</mi>", "<mo>=</mo><mi>f</mi>"])
     for m in (values, odd, ragged):
         assert convert(m, "mathml", "latex", wrapper="bare").text.startswith("\\begin{matrix}")
+    # a table that says how it looks (ruled, or aligned by row) is not read as an aligned block
+    thresholds = table(["<mi>Na</mi>", "<mo>&lt;</mo><mn>135</mn>", "<mi>K</mi>", "<mo>&lt;</mo><mn>3.5</mn>"],
+                       ["<mi>Na</mi>", "<mo>&gt;</mo><mn>145</mn>", "<mi>K</mi>", "<mo>&gt;</mo><mn>5</mn>"])
+    ruled = thresholds.replace('<mtable columnspacing="0em">', '<mtable frame="solid" columnlines="solid">')
+    by_row = thresholds.replace("<mtr>", '<mtr columnalign="center center center center">')
+    for m in (ruled, by_row):
+        assert not convert(m, "mathml", "latex", wrapper="bare").text.startswith("\\begin{aligned}")
+    unruled = thresholds.replace('<mtable columnspacing="0em">', '<mtable frame="none" columnlines="none none">')
+    assert convert(unruled, "mathml", "latex", wrapper="bare").text.startswith("\\begin{aligned}")
 
 
 # ---- errors ------------------------------------------------------------------------------------
@@ -506,6 +515,51 @@ def test_stale_tex_annotation(shown, tex, stale):
     assert bool(annotation_notes(math)) == stale
     result = convert(math, "mathml", "latex")
     assert any("may be out of date" in n for n in result.notes) == stale
+
+
+@pytest.mark.parametrize("shown, tex, stale", [
+    # structure: a subscript is not a superscript, a fraction not a product, a root not its radicand
+    ("<msub><mi>x</mi><mn>2</mn></msub>", "x^2", True),
+    ("<mfrac><mi>a</mi><mi>b</mi></mfrac>", "ab", True),
+    ("<msqrt><mi>x</mi></msqrt>", "x", True),
+    ("<munder><mo>&#x2211;</mo><mo>-</mo></munder><mi>x</mi>", "\\sum_{+}x", True),  # a limit, not an accent
+    # what renderers write differently for the same TeX: KaTeX's norm, \dots between +, \leqslant,
+    # MathType's <mfenced> with its fences in attributes
+    ("<mo>&#x2016;</mo><mi>x</mi><mo>&#x2016;</mo>", "\\lVert x\\rVert", False),
+    ("<mi>a</mi><mo>+</mo><mo>&#x22EF;</mo><mo>+</mo><mi>b</mi>", "a+\\dots+b", False),
+    ("<mi>a</mi><mo>&#x2A7D;</mo><mi>b</mi>", "a\\leqslant b", False),
+    ("<mfenced open='&lt;' close='&gt;'><mi>x</mi></mfenced>", "\\langle x\\rangle", False),
+    ("<mfenced><mi>a</mi><mi>b</mi></mfenced>", "(a,b)", False),
+])
+def test_stale_tex_annotation_structure_and_renderers(shown, tex, stale):
+    from mathshuttle.convert import annotation_notes
+    assert bool(annotation_notes(ANNOTATED % ("<mrow>%s</mrow>" % shown, tex))) == stale
+
+
+def test_annotation_notes_not_for_what_the_annotation_gives():
+    from mathshuttle.convert import annotation_notes
+    # MathShuttle's own inline equation read back: compared in its own (inline) mode
+    assert annotation_notes(convert("$\\sum_{\\pm}x$", "latex", "mathml", annotate=True).text) == []
+    # Content MathML: its LaTeX comes from the annotation
+    content = ('<math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><apply><plus/><ci>x</ci><ci>y</ci>'
+               '</apply><annotation encoding="application/x-tex">x+y</annotation></semantics></math>')
+    result = convert(content, "mathml", "latex")
+    assert result.text == "$x+y$" and result.notes == []  # the annotation, as it is
+    # the annotation of a part is not the whole equation's
+    nested = ('<math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><semantics><mi>x</mi>'
+              '<annotation encoding="application/x-tex">q</annotation></semantics><mo>+</mo><mi>y</mi></mrow>'
+              '<annotation encoding="application/x-tex">x+y</annotation></semantics></math>')
+    assert annotation_notes(nested) == []
+
+
+def test_annotation_notes_draw_all_annotations_in_one_pandoc_run(monkeypatch):
+    from mathshuttle import pandoc_engine
+    from mathshuttle.convert import annotation_notes
+    runs = []
+    real = pandoc_engine._run
+    monkeypatch.setattr(pandoc_engine, "_run", lambda *a, **k: (runs.append(1), real(*a, **k))[1])
+    many = "".join(ANNOTATED % ("<msub><mi>x</mi><mn>%d</mn></msub>" % i, "x_%d" % i) for i in range(30))
+    assert annotation_notes(many) == [] and len(runs) == 1
 
 
 def test_stale_annotation_conversion_follows_the_mathml():

@@ -12,6 +12,7 @@ is a ClipboardError where the clipboard is used, which the callers report.
 """
 from __future__ import annotations
 
+import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
@@ -108,9 +109,15 @@ def read_office_equation() -> Optional[Tuple[str, str]]:
     """What "Paste from Word/PowerPoint" converts: ("mathml", MathML) of an equation copied in Office;
     failing that ("omml", OMML) of the equations in the HTML that Word copies along (a selection of text
     with equations in it, or lines that Mac Word copies without MathML); None if neither is there."""
+    from .office_html import omml_from_html
     mathml = read_equation_from_office()
     if mathml:
+        if "mtable" not in mathml:
+            # Word's MathML puts the lines of an equation with manual line breaks (Insert Manual Break)
+            # on one line; its HTML keeps them (m:brk)
+            omml = omml_from_html(_backend().read_office_html())
+            if omml and re.search(r"<m:brk\b", omml):
+                return "omml", omml
         return "mathml", mathml
-    from .office_html import omml_from_html
     omml = omml_from_html(_backend().read_office_html())
     return ("omml", omml) if omml else None

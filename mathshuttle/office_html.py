@@ -27,7 +27,8 @@ _FRAGMENT = re.compile(r"<!--\s*StartFragment\s*-->(.*?)<!--\s*EndFragment\s*-->
 # a comment (no content, but a boundary between text nodes), or a start, end or empty tag; quoted
 # attribute values may hold ">"
 _TAG = re.compile(r"<!--.*?-->|<(/?)([A-Za-z][\w:.-]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", re.S)
-_OMML_ATTRIBUTES = {"val": "val", "alnat": "alnAt"}  # as OMML spells them (m:val, m:alnAt of m:brk)
+# as OMML spells them: m:val, m:alnAt of m:brk (which Word's HTML writes m:alignAt)
+_OMML_ATTRIBUTES = {"val": "val", "alnat": "alnAt", "alignat": "alnAt"}
 # an HTML attribute: name, then a double-quoted, single-quoted or unquoted value (which may hold "/")
 _ATTR = re.compile(r"([A-Za-z_][\w:.-]*)(\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'=<>`]+)))?", re.S)
 # the OMML element names (ECMA-376 part 1, 22.1), to spell an element as OMML does whatever the HTML did

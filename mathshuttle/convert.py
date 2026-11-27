@@ -8,8 +8,8 @@ from typing import List, Optional
 
 from . import compat, latex_wrap, tidy as _tidy
 from .pandoc_engine import (READ_FORMATS, WRITE_FORMATS, ConversionError, Equation,  # noqa: F401
-                            drop_annotations, parse_mathml, read_equations, strip_tex, write_equation,
-                            write_mathml)
+                            drop_annotations, mathml_elements, parse_mathml, read_equations, strip_tex,
+                            write_equation, write_mathml)
 
 FORMAT_LABELS = {
     "latex": "LaTeX",
@@ -136,24 +136,70 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
     return Result(eqs, outputs, notes)
 
 
-# characters that differ between renderers but not in meaning (NFKC takes care of 𝑥 / x, ϕ / φ, … / ...)
-_SAME_SYMBOL = str.maketrans({"⋅": "·", "∙": "·", "−": "-", "∗": "*", "∣": "|", "⁡": None, "⁢": None,
-                              "⁣": None, "⁤": None, "​": None})
+# ---- a TeX annotation that does not show what its MathML shows -----------------------------------
+# characters that renderers use for the same thing (NFKC also folds 𝑥 / x, ϕ / φ, … / ...); invisible
+# operators and zero-width spaces go
+# (applied after NFKC, which has made "…" "...": "⋯" too; MathType writes angle brackets as < >)
+_SAME_SYMBOL = {ord(a): b for a, b in (("⋅", "·"), ("∙", "·"), ("−", "-"), ("∗", "*"), ("∣", "|"), ("∥", "‖"),
+                                        ("⋯", "..."), ("⩽", "≤"), ("⩾", "≥"), ("⟨", "<"), ("〈", "<"),
+                                        ("〈", "<"), ("⟩", ">"), ("〉", ">"), ("〉", ">"))}
+_SAME_SYMBOL.update({cp: None for cp in (0x2061, 0x2062, 0x2063, 0x2064, 0x200B)})
+# what renderers put over or under a symbol as an accent, each in its own way (\hat: ^ ˆ U+0302, ...)
+_ACCENTS = frozenset("^ˆ~˜¯‾ˉ_˘ˇ˙¨´`°˚→←↔‿⁀⏞⏟⏜⏝⎴⎵︷︸" + "".join(map(chr, range(0x0300, 0x0370)))
+                     + "".join(map(chr, range(0x20D0, 0x20F0))))
+_SCRIPTS = {"msub": "_", "munder": "_", "msup": "^", "mover": "^", "msubsup": "_^", "munderover": "_^"}
+_CONTENT_MATHML = frozenset("apply ci cn csymbol bind bvar lambda share cerror cs".split())
+
+
+def _local(el) -> str:
+    return el.tag.rsplit("}", 1)[-1] if isinstance(el.tag, str) else ""
+
+
+def _is_accent(parent, child) -> bool:
+    if (parent.get("accent") or parent.get("accentunder") or child.get("accent") or "").lower() == "true":
+        return True
+    text = "".join(child.itertext()).strip()
+    return _local(child) == "mo" and bool(text) and all(ch in _ACCENTS for ch in text)
 
 
 def _symbols(math) -> str:
-    """The symbols a <math> shows, in order, for comparing two renderings of an equation: no spacing,
-    no invisible operators, font variants folded (NFKC), and no accent marks (an <mo> over or under
-    something: renderers write \\hat, \\bar, \\vec with different characters)."""
+    """What a <math> shows, for comparing two renderings of an equation: its symbols in order, with a
+    mark for each script (_ ^), fraction (/) and root (√), fences of <mfenced> written out; no spacing,
+    no invisible operators, font variants folded (NFKC), accents left out (renderers write them with
+    different characters).  Sub- and superscripts and limits under or over an operator are marked
+    alike: renderers choose between them by display mode."""
     out: List[str] = []
 
     def walk(el) -> None:
-        tag = el.tag.rsplit("}", 1)[-1]
-        out.append(el.text or "")
-        for k, child in enumerate(el):
-            if not (tag in ("mover", "munder", "munderover") and k > 0 and child.tag.rsplit("}", 1)[-1] == "mo"):
+        tag = _local(el)
+        kids = list(el)
+        if tag == "mfenced":
+            seps = [ch for ch in el.get("separators", ",") if not ch.isspace()]
+            out.append(el.get("open", "("))
+            for k, child in enumerate(kids):
+                if k and seps:
+                    out.append(seps[min(k - 1, len(seps) - 1)])
                 walk(child)
-            out.append(child.tail or "")
+            out.append(el.get("close", ")"))
+            return
+        out.append(el.text or "")
+        if tag in _SCRIPTS and kids:
+            walk(kids[0])
+            for mark, child in zip(_SCRIPTS[tag], kids[1:]):
+                if not (tag in ("mover", "munder", "munderover") and _is_accent(el, child)):
+                    out.append(mark)
+                    walk(child)
+            return
+        if tag == "mfrac" and len(kids) == 2:
+            walk(kids[0])
+            out.append("/")
+            walk(kids[1])
+            return
+        if tag in ("msqrt", "mroot"):
+            out.append("√")
+        for child in kids:
+            walk(child)
+
     walk(math)
     text = unicodedata.normalize("NFKC", "".join(out)).translate(_SAME_SYMBOL)
     return "".join(ch for ch in text if not ch.isspace())
@@ -161,29 +207,40 @@ def _symbols(math) -> str:
 
 def annotation_notes(text: str, macros: Optional[compat.Macros] = None) -> List[str]:
     """MathML that carries its TeX source as an annotation (MathType, KaTeX / MathJax pages, the "TeX
-    annotation" option): a note for each <math> whose annotation shows other symbols than the MathML
-    itself, which the conversion follows - it was edited after the TeX was written.  An annotation
-    that cannot be read (macros not given) is not compared."""
+    annotation" option): a note for each <math> whose annotation shows something else than the MathML
+    itself, which the conversion follows - it was edited after the TeX was written.  Not compared: an
+    annotation that cannot be read (macros not given), and Content MathML, whose LaTeX comes from the
+    annotation.  The annotations are drawn by texmath in one pandoc run, in each equation's mode."""
     try:
         maths = parse_mathml(text)
     except ConversionError:
         return []
-    notes: List[str] = []
+    todo = []  # (number, math, annotation, the annotation as texmath gets it)
     for i, math in enumerate(maths, 1):
+        content = any(_local(el) in _CONTENT_MATHML for el in math.iter())
         tex = drop_annotations(math)
-        if not tex or not tex.strip():
+        if content or not tex or not tex.strip():
             continue
         try:
-            prepared, _ = for_texmath(Equation(strip_tex(tex), True), "latex", macros)
-            annotated = parse_mathml(write_equation(prepared, "mathml"))[0]
+            prepared, _ = for_texmath(Equation(strip_tex(tex), math.get("display") == "block"), "latex", macros)
         except ConversionError:
             continue
-        if _symbols(math) != _symbols(annotated):
-            short = " ".join(tex.split())
-            short = short if len(short) <= 60 else short[:57] + "..."
-            which = "" if len(maths) == 1 else " of equation %d" % i
-            notes.append("The TeX annotation%s (%s) does not show what the MathML shows: it may be out of date. "
-                         "The LaTeX here is what the MathML shows." % (which, short))
+        todo.append((i, math, tex, prepared))
+    if not todo:
+        return []
+    try:
+        drawn = mathml_elements([t[3] for t in todo])
+    except ConversionError:
+        return []
+    notes: List[str] = []
+    for (i, math, tex, _), annotated in zip(todo, drawn):
+        if annotated is None or _symbols(math) == _symbols(annotated):
+            continue
+        short = " ".join(tex.split())
+        short = short if len(short) <= 60 else short[:57] + "..."
+        which = "" if len(maths) == 1 else " of equation %d" % i
+        notes.append("The TeX annotation%s (%s) does not show what the MathML shows: it may be out of date. "
+                     "The LaTeX here is what the MathML shows." % (which, short))
     return notes
 
 
@@ -211,10 +268,12 @@ def input_equations(text: str, src: str, mode: str = "auto", tidy: bool = True) 
 
 
 def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat.Macros] = None,
-                tidy: bool = True, index: int = 0) -> OfficeCopy:
+                tidy: bool = True, index: int = 0, eqs: Optional[List[Equation]] = None) -> OfficeCopy:
     """What "Copy for Word/PowerPoint" puts on the clipboard: equation `index` (0: the first) of the
-    input; Word and PowerPoint paste one equation at a time."""
-    eqs = _read(text, src, mode, tidy)
+    input; Word and PowerPoint paste one equation at a time.  `eqs`: the input's equations, when the
+    caller read them already (:func:`input_equations` with the same arguments)."""
+    if eqs is None:
+        eqs = _read(text, src, mode, tidy)
     if not 0 <= index < len(eqs):
         raise ConversionError("There is no equation %d: the input has %d." % (index + 1, len(eqs)))
     notes: List[str] = []

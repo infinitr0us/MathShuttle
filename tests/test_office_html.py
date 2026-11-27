@@ -294,6 +294,38 @@ def test_only_the_copied_fragment():
     assert cf_html_fragment(b"StartFragment:9999\r\nEndFragment:99999\r\n<p>") == b"StartFragment:9999\r\nEndFragment:99999\r\n<p>"
 
 
+def test_line_breaks_in_word_equations():
+    r = lambda text, props="": "<m:r>%s<m:t>%s</m:t></m:r>" % ("<m:rPr>%s</m:rPr>" % props if props else "", text)  # noqa: E731
+    # Shift+Enter, then "Align at =" (Mac Word 16.115's .docx): equations of one math paragraph, the first
+    # ending with a line break run, the = marked
+    shift_enter = ("<m:oMathPara><m:oMath>%s%s<m:r><w:br/></m:r></m:oMath><m:oMath>%s</m:oMath></m:oMathPara>"
+                   % (r("a"), r("=c+b", "<m:aln/>"), r("=b+c", "<m:aln/>")))
+    assert body(shift_enter) == "\\begin{aligned}\na & = c + b \\\\\n & = b + c\n\\end{aligned}"
+    # Insert Manual Break (Windows Word): one equation, a run with m:brk starting the new line; m:alnAt=1:
+    # the next line aligns at the first operator of the line before
+    manual = "<m:oMathPara><m:oMath>%s%s</m:oMath></m:oMathPara>" % (r("a=b"), r("+c=c+b", '<m:brk m:alnAt="1"/>'))
+    assert body(manual) == "\\begin{aligned}\na & = b \\\\\n & + c = c + b\n\\end{aligned}"
+    plain = "<m:oMathPara><m:oMath>%s%s</m:oMath></m:oMathPara>" % (r("a=b+c"), r("+d", "<m:brk/>"))
+    assert body(plain) == "\\begin{aligned}\n & a = b + c \\\\\n & + d\n\\end{aligned}"
+    # Word's HTML writes the attribute m:alignAt
+    html = block('<m:oMathPara><m:oMath><m:r>a</m:r><m:r>=</m:r><m:r>b</m:r><m:r><m:rPr><m:brk\r\n m:alignAt="1"/>'
+                 '</m:rPr>=</m:r><m:r>c</m:r></m:oMath></m:oMathPara>')
+    assert body(omml_from_html(html)) == "\\begin{aligned}\na & = b \\\\\n & = c\n\\end{aligned}"
+
+
+def test_manual_breaks_win_over_flat_mathml(monkeypatch):
+    # Windows Word's MathML of an equation with a manual break has it all on one line; its HTML keeps it
+    from mathshuttle import clipboard
+    flat = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>a</mi><mo>=</mo><mi>b</mi><mo>=</mo><mi>c</mi></math>'
+    broken = block('<m:oMathPara><m:oMath><m:r>a=b</m:r><m:r><m:rPr><m:brk m:alignAt="1"/></m:rPr>=c</m:r>'
+                   '</m:oMath></m:oMathPara>')
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(flat, broken))
+    src, omml = clipboard.read_office_equation()
+    assert src == "omml" and body(omml) == "\\begin{aligned}\na & = b \\\\\n & = c\n\\end{aligned}"
+    monkeypatch.setattr(clipboard, "_backend_module", _FakeBackend(flat, block("<m:oMath><m:r>a=b=c</m:r></m:oMath>")))
+    assert clipboard.read_office_equation() == ("mathml", flat)  # no break: the MathML, as before
+
+
 def test_alignment_marks():
     def r(text, props=""):
         return "<m:r>%s<m:t>%s</m:t></m:r>" % ("<m:rPr>%s</m:rPr>" % props if props else "", text)

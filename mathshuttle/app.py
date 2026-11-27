@@ -148,7 +148,8 @@ class App(tk.Tk):
         self._polling = False
         self._running = 0  # conversion threads whose result has not been collected yet
         self._shown_args: Optional[tuple] = None  # conversion arguments of the result in the output pane
-        self._last_copy: "tuple[Optional[str], int]" = (None, -1)  # (input, index) of the equation copied last
+        self._last_copy: "tuple[Optional[tuple], int]" = (None, -1)  # (_copy_key, index) of the one copied last
+        self._copy_menu: Optional[tk.Menu] = None
         self.settings = self._load_settings()
         # Tk's native macOS windowing, which has the Command modifier and the tk::mac:: hooks
         self.aqua = self.tk.call("tk", "windowingsystem") == "aqua"
@@ -566,44 +567,58 @@ class App(tk.Tk):
         if not text.strip():
             self._set_status("Nothing to copy", error=True)
             return
+        # what the menu shows is what its items copy: input, settings and macros as they are now
+        key = self._copy_key(text)
+        macros = self._macros()
         try:
-            eqs = input_equations(text, self.src_var.get(), self.mode_var.get(), self.tidy_var.get())
+            eqs = input_equations(text, key[1], key[2], key[3])
         except (ConversionError, PandocNotFound) as e:
             self._set_output(str(e), error=True)
             self._set_status("Could not copy the equation", error=True)
             return
         if len(eqs) <= 1:
-            self.copy_equation(0, text)
+            self.copy_equation(0, key, eqs, macros)
             return
         labels = []
         for i, eq in enumerate(eqs):
             label = " ".join(eq.tex.split())
             labels.append("%d   %s" % (i + 1, label if len(label) <= 70 else label[:67] + "..."))
-        last = self._last_copy[1] if self._last_copy[0] == text else -1
+        last = self._last_copy[1] if self._last_copy[0] == key else -1
         nxt = (last + 1) % len(eqs)
+        if self._copy_menu is not None:
+            self._copy_menu.destroy()  # the menu of the copy before (and the commands it holds)
         menu = tk.Menu(self, tearoff=False)
+
+        def item(i: int):
+            return lambda: self.copy_equation(i, key, eqs, macros)
         # native menus highlight nothing when they open: the next equation is an item of its own, first
-        menu.add_command(label="Next:   " + labels[nxt], underline=0, command=lambda: self.copy_equation(nxt, text))
+        menu.add_command(label="Next:   " + labels[nxt], underline=0, command=item(nxt))
         menu.add_separator()
         for i, label in enumerate(labels):
-            menu.add_command(label=label, underline=0 if i < 9 else -1, command=lambda i=i: self.copy_equation(i, text))
+            menu.add_command(label=label, underline=0 if i < 9 else -1, command=item(i))
         self._copy_menu = menu
         button = self.copy_button
         menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
 
-    def copy_equation(self, index: int, text: Optional[str] = None) -> None:
-        """Copy equation `index` (0: the first) of the input for Word / PowerPoint."""
-        if text is None:
-            text = self.input.get("1.0", "end-1c")
+    def _copy_key(self, text: str) -> tuple:
+        """What decides the equations of the input: the text, the source format, the mode, Tidy, the macros."""
+        return (text, self.src_var.get(), self.mode_var.get(), self.tidy_var.get(), tuple(self.macro_files),
+                self.macro_text)
+
+    def copy_equation(self, index: int, key: Optional[tuple] = None, eqs=None, macros=None) -> None:
+        """Copy equation `index` (0: the first) of the input for Word / PowerPoint; with `key`, `eqs` and
+        `macros` as the menu took them (else the input and settings as they are now)."""
+        if key is None:
+            key, eqs, macros = self._copy_key(self.input.get("1.0", "end-1c")), None, self._macros()
+        text, src, mode, tidy = key[:4]
         try:
-            copy = office_copy(text, self.src_var.get(), self.mode_var.get(), self._macros(), self.tidy_var.get(),
-                               index=index)
+            copy = office_copy(text, src, mode, macros, tidy, index=index, eqs=eqs)
             clipboard.copy_mathml_for_office(copy.mathml)  # the plain text must be the MathML too (see there)
         except (ConversionError, PandocNotFound, clipboard.ClipboardError) as e:
             self._set_output(str(e), error=True)
             self._set_status("Could not copy the equation", error=True)
             return
-        self._last_copy = (text, index)
+        self._last_copy = (key, index)
         msg = "Equation copied  -  press %s+V in Word / PowerPoint / OneNote to insert it as a native equation" % KEY
         self._set_status("   ".join([msg] + copy.notes))
 
