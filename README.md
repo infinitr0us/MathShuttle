@@ -71,7 +71,8 @@ of text with equations in it, and for lines aligned at `=`, Mac Word copies no M
 Word/PowerPoint* then reads the equations from the HTML it copies along. macOS may ask once before the
 app reads what another app copied (paste privacy).
 
-Not there yet: **the hotkey** is Windows only for now (its checkbox says so). Cmd+Shift+C / Cmd+Shift+V
+**The hotkey** on the Mac is Control+Option+Shift+M (see *Without the window* below), registered with
+Carbon's `RegisterEventHotKey`, which needs no Accessibility permission; Cmd+Shift+C / Cmd+Shift+V
 work while the MathShuttle window is in front.
 
 ## Word / PowerPoint workflow
@@ -136,7 +137,9 @@ and LaTeX text becomes an equation to paste with Ctrl+V. So: copy LaTeX in your 
 hotkey, paste in PowerPoint; or copy an equation in Word, press the hotkey, paste in Overleaf. A
 small note at the bottom right of the screen says what happened (it does not take the focus). The
 key is the `hotkey` entry of `%APPDATA%\MathShuttle\settings.json`; the checkbox in the window turns
-it off. Ctrl+Alt+Shift keeps clear of Word's own Ctrl+Alt shortcuts.
+it off. Ctrl+Alt+Shift keeps clear of Word's own Ctrl+Alt shortcuts. On the Mac the same entry (in
+`~/Library/Application Support/MathShuttle/settings.json`) gives Control+Option+Shift+M: Alt there
+is Option, Cmd is Command.
 
 **Whole documents.** **Open file…** lists every equation of a `.docx`, `.pptx`, `.tex` or `.md` file
 with where it is (the heading above it, the slide and its title, the `\label`) and the sentence
@@ -285,7 +288,7 @@ to `probe-out/` (not tracked).
 The Office smoke test pastes into hidden Word/PowerPoint instances, copies the equation back,
 converts it to LaTeX and closes everything without saving. These overwrite the clipboard, and so do
 the clipboard tests in pytest (deselect them with `-k "not copy_for_office and not clipboard"`).
-On macOS the Windows-only tests (the hotkey) are skipped, and the pasteboard tests
+On macOS the Windows-only tests (the Win32 hotkey) are skipped, and the pasteboard tests
 (`tests/test_clipboard_macos.py`) read back only what they wrote themselves.
 `tests\fixtures\word` holds what Word 16.0.20527 really writes (MathML and OMML) for typical
 equations typed into it; the tidy tests run on those. `tests/fixtures/mac_word` holds what Mac Word
@@ -309,7 +312,8 @@ mathshuttle/
   tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
   documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are
-  hotkeys.py         the system-wide hotkey (RegisterHotKey in a thread of its own; Windows only for now)
+  hotkeys.py         the system-wide hotkey (Windows: RegisterHotKey in a thread of its own)
+  _hotkeys_macos.py  the hotkey on macOS (Carbon RegisterEventHotKey via ctypes)
   preview.py         the LaTeX preview (latex + dvipng)
   clipboard.py       the clipboard the app uses; loads the platform's backend on first use
   office_html.py     the OMML of the equations in the HTML that Word copies (when it copies no MathML)

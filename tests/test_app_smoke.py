@@ -365,18 +365,19 @@ def test_shuttle_clipboard_without_the_hotkey(app):
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS")
 def test_macos_window(app, tmp_path, monkeypatch):
-    """The hotkey box says why it is off and keeps the user's choice; Command keys; the settings
-    file under Application Support; a monospace font that exists; no Windows key names in the help."""
+    """The hotkey box names the keys the Mac way and saves the user's choice; Command keys; the
+    settings file under Application Support; a monospace font that exists; no Windows key names in
+    the help."""
     import json
     from tkinter import font as tkfont
     import mathshuttle.app as app_module
-    assert str(app.hotkey_chk.cget("state")) == "disabled"
-    assert app.hotkey_chk.cget("text") == "Hotkey (not on macOS yet)" and not app.hotkey_var.get()
+    assert str(app.hotkey_chk.cget("state")) != "disabled"
+    assert app.hotkey_chk.cget("text") == "Hotkey Control+Option+Shift+M"
     monkeypatch.setattr(app_module, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setitem(app.settings, "hotkey_enabled", True)
+    app.hotkey_var.set(False)
     app._save_settings()
     with open(app_module.SETTINGS_PATH, encoding="utf-8") as f:
-        assert json.load(f)["hotkey_enabled"] is True
+        assert json.load(f)["hotkey_enabled"] is False
 
     assert app_module.APP_DATA == os.path.expanduser("~/Library/Application Support")
     assert app_module.KEY == "Cmd" and "Ctrl" not in app_module.HELP and "APPDATA" not in app_module.HELP

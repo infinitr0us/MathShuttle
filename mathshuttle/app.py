@@ -36,7 +36,13 @@ DEFAULT_GEOMETRY = "1200x720"
 DEBOUNCE_MS = 450
 MAX_SAVED_INPUT = 200_000  # characters of input kept for the next start
 
-_HOTKEY_HELP = """  Hotkey: not on macOS yet.""" if MAC else """\
+_HOTKEY_HELP = """\
+  Hotkey (Control+Option+Shift+M, works in any program while MathShuttle runs, even minimised):
+          an equation copied in Word / PowerPoint becomes LaTeX text on the clipboard;
+          LaTeX text on the clipboard becomes an equation - then Cmd+V in Office.  The key
+          is "hotkey" in the settings file (~/Library/Application Support/MathShuttle/
+          settings.json), written with Windows' names: Alt there is Option, Cmd Command.
+          macOS may ask once whether MathShuttle may paste from Word (paste privacy).""" if MAC else """\
   Hotkey (Ctrl+Alt+Shift+M, works in any program while MathShuttle runs, even minimised):
           an equation copied in Word / PowerPoint becomes LaTeX text on the clipboard;
           LaTeX text on the clipboard becomes an equation - then Ctrl+V in Office.  The key
@@ -369,7 +375,7 @@ class App(tk.Tk):
                 self.hotkey = s["hotkey"]
             except ValueError:
                 pass  # keep the default; the settings file was edited by hand
-        self.hotkey_chk.configure(text="Hotkey %s" % self.hotkey)
+        self.hotkey_chk.configure(text="Hotkey %s" % hotkeys.display(self.hotkey))
         if hotkeys.UNAVAILABLE:
             self.hotkey_var.set(False)
             self.hotkey_chk.configure(text="Hotkey (%s)" % hotkeys.UNAVAILABLE, state="disabled")
