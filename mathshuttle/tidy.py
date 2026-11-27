@@ -573,12 +573,16 @@ def tidy_tex(tex: str, display: bool) -> str:
     return out
 
 
-# TeX tokens for _edge_spaces: a control word, a control symbol (\\, "\ ", \~ ...), ~, white space, a
-# brace, a run of other characters
-_EDGE_TOKEN = re.compile(r"\\[a-zA-Z@]+|\\.?|~|\s+|[{}]|[^\\~\s{}]+", re.S)  # \.? : a lone \ at the end too
+# TeX tokens for _edge_spaces: a control word, a control symbol (\\, "\ ", \~ ...; \.? : a lone \ at
+# the end too), ~, white space, a brace, a bracket, a star, a run of other characters
+_EDGE_TOKEN = re.compile(r"\\[a-zA-Z@]+|\\.?|~|\s+|[{}\[\]*]|[^\\~\s{}\[\]*]+", re.S)
 _TYPED_SPACES = frozenset(["~", "\\ "])                  # how texmath writes a space typed in Word
 _SMALL_SPACES = frozenset(["\\,", "\\:", "\\;", "\\>"])  # removed with a typed space next to them
 _ARGUMENT_ENVS = frozenset("array subarray alignat alignat* alignedat".split())  # \begin{array}{rl}
+# environments that read a [...] right after \begin{env} as their option: amsmath's position option,
+# array's, mathtools' starred matrices and multlined
+_OPTION_ENVS = frozenset("aligned alignedat gathered array multlined matrix* pmatrix* bmatrix* Bmatrix* "
+                         "vmatrix* Vmatrix* smallmatrix* psmallmatrix* bsmallmatrix* tabular".split())
 
 
 def _line_starts_and_ends(tokens: List[str]) -> "tuple[dict, list]":
@@ -606,9 +610,9 @@ def _line_starts_and_ends(tokens: List[str]) -> "tuple[dict, list]":
         """Index after a [...] option at tokens[i] or after white space there (LaTeX looks past white
         space for an option), or i if there is none."""
         j = skip_space(i)
-        if j < len(tokens) and tokens[j].startswith("["):
-            close = next((k for k in range(j, len(tokens)) if "]" in tokens[k]), -1)
-            if close >= 0 and tokens[close].endswith("]"):
+        if j < len(tokens) and tokens[j] == "[":
+            close = next((k for k in range(j, len(tokens)) if tokens[k] == "]"), -1)
+            if close >= 0:
                 return close + 1
         return i
 
@@ -616,10 +620,12 @@ def _line_starts_and_ends(tokens: List[str]) -> "tuple[dict, list]":
         if token == "\\\\":
             ends.append(i)
             k = i + 1
-            if k < len(tokens) and tokens[k].startswith("*"):  # \\*: one token "*" or "*[2pt]..."
-                k = k + 1 if tokens[k] == "*" else k
+            star = skip_space(k)
+            if star < len(tokens) and tokens[star] == "*":  # \\* (LaTeX looks past white space for it)
+                k = star + 1
             after = option_end(k)
-            starts[after] = "row" if after == i + 1 else ""
+            # after a bare \\ a "[" or "*" would be read as its option or star; after \\* a "["
+            starts[after] = "" if after != k else ("row" if k == i + 1 else "row*")
         elif token == "\\end":
             ends.append(i)
         elif token == "\\begin":
@@ -630,14 +636,14 @@ def _line_starts_and_ends(tokens: List[str]) -> "tuple[dict, list]":
             if k < 0:
                 continue
             env = "".join(tokens[j + 1:k - 1]).strip()
-            after = option_end(k)  # \begin{aligned}[t]
+            after = option_end(k) if env in _OPTION_ENVS else k  # \begin{aligned}[t]; matrix has none
             if env in _ARGUMENT_ENVS:
                 after = skip_space(after)
                 if after < len(tokens) and tokens[after] == "{":
                     after = group_end(after)
                 if after < 0:
                     continue
-            starts[after] = "begin" if after == k else ""
+            starts[after] = "begin" if after == k and env in _OPTION_ENVS else ""
     return starts, sorted(set(ends))
 
 
@@ -664,7 +670,7 @@ def _edge_spaces(tex: str) -> str:
         stop = ends[bisect.bisect_left(ends, start)] if start <= ends[-1] else len(tokens)
         gone = edge_run(range(start, stop))
         nxt = next((i for i in range(start, stop) if i not in gone and not tokens[i].isspace()), None)
-        guarded = {"row": ("[", "*"), "begin": ("[",)}.get(starts[start], ())
+        guarded = {"row": ("[", "*"), "row*": ("[",), "begin": ("[",)}.get(starts[start], ())
         if gone and not (nxt is not None and tokens[nxt].startswith(guarded) and guarded):
             drop.update(gone)
     for end in ends:

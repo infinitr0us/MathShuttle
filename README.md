@@ -257,8 +257,9 @@ PYTHON=/path/to/python3 ./build_app.sh  # build with that Python (it needs tkint
 ```
 
 The app is signed ad hoc (no developer certificate), as every Apple silicon program must be.
-For a release, `tools/make_release.py windows` (after `build_exe.ps1`, with `.venv\Scripts\python`) and
-`tools/make_release.py macos` zip the app with `LICENSE.txt`, `README.md` and a `THIRD-PARTY-NOTICES.txt`
+For a release, `.venv\Scripts\python tools\make_release.py windows` (after `build_exe.ps1`) and
+`.venv-build/bin/python tools/make_release.py macos` (or `./build_app.sh --zip`) zip the app with
+`LICENSE.txt`, `README.md` and a `THIRD-PARTY-NOTICES.txt`
 made from the licences of the Python, Tcl/Tk and PyInstaller the build used (`tools/licenses` holds the
 Tcl and Tk terms for Pythons that ship none, such as uv's).
 

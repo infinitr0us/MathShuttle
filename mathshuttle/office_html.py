@@ -24,8 +24,10 @@ from typing import List, Optional
 
 _BLOCK = re.compile(r"<!--\[if gte msEquation 12\]>(.*?)<!\[endif\]-->", re.S | re.I)
 _FRAGMENT = re.compile(r"<!--\s*StartFragment\s*-->(.*?)<!--\s*EndFragment\s*-->", re.S | re.I)
-# a start, end or empty tag; quoted attribute values may hold ">"
-_TAG = re.compile(r"<(/?)([A-Za-z][\w:.-]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", re.S)
+# a comment (no content, but a boundary between text nodes), or a start, end or empty tag; quoted
+# attribute values may hold ">"
+_TAG = re.compile(r"<!--.*?-->|<(/?)([A-Za-z][\w:.-]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", re.S)
+_OMML_ATTRIBUTES = {"val": "val", "alnat": "alnAt"}  # as OMML spells them (m:val, m:alnAt of m:brk)
 # an HTML attribute: name, then a double-quoted, single-quoted or unquoted value (which may hold "/")
 _ATTR = re.compile(r"([A-Za-z_][\w:.-]*)(\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'=<>`]+)))?", re.S)
 # the OMML element names (ECMA-376 part 1, 22.1), to spell an element as OMML does whatever the HTML did
@@ -55,14 +57,13 @@ def cf_html_fragment(raw: bytes) -> bytes:
     starts after it."""
     fields = {}
     pos = 0
-    while pos < min(len(raw), 65536):
-        end = raw.find(b"\n", pos)
-        line = raw[pos:end if end >= 0 else len(raw)].rstrip(b"\r")
-        m = re.match(rb"([A-Za-z]+):(.*)$", line)
-        if not m or (not fields and m.group(1) != b"Version"):
+    # lines end with CR LF, LF or (archaic, but allowed) CR alone
+    for line in re.finditer(rb"([^\r\n]*)(\r\n|\r|\n|$)", raw[:65536]):
+        m = re.match(rb"([A-Za-z]+):(.*)$", line.group(1))
+        if not m or (not fields and m.group(1) != b"Version") or not line.group(2):
             break
         fields[m.group(1).decode("ascii")] = m.group(2).strip()
-        pos = end + 1 if end >= 0 else len(raw)
+        pos = line.end()
     try:
         a, b = int(fields["StartFragment"]), int(fields["EndFragment"])
     except (KeyError, ValueError):
@@ -83,20 +84,25 @@ def _attributes(raw: str) -> "tuple[str, bool]":
     """The OMML attributes (m:val...) of an HTML tag as XML attributes: values decoded, quoted and
     escaped (an attribute without a value gets an empty one), each name once; other attributes (HTML's
     class, Office's o: / w16se: ...) go, their prefixes would not be declared.  And whether the tag
-    closes itself (a "/" after the last attribute; an unquoted value may be "/")."""
+    closes itself: a "/" after the last attribute, or ending its unquoted value when the rest is a word
+    (m:val=b/, XML's habit; HTML would read "b/"); an unquoted "/" alone is the value (m:val=/)."""
     out, seen = [], set()
     last = 0
+    empty = False
     for m in _ATTR.finditer(raw):
         if raw[last:m.start()].strip():
             break  # not attribute syntax: what follows is not an attribute either
         last = m.end()
+        value = next((v for v in m.group(3, 4, 5) if v is not None), "")
+        if m.group(5) and not raw[last:].strip() and re.match(r"[A-Za-z0-9]+/$", value):
+            value, empty = value[:-1], True
         prefix, _, local = m.group(1).partition(":")
         if prefix.lower() != "m" or not re.match(r"[A-Za-z]+$", local) or local.lower() in seen:
             continue
         seen.add(local.lower())
-        value = next((v for v in m.group(3, 4, 5) if v is not None), "")
-        out.append(' m:%s="%s"' % (local.lower(), html.escape(_xml_text(html.unescape(value)), quote=True)))
-    return "".join(out), raw[last:].strip() == "/"
+        name = _OMML_ATTRIBUTES.get(local.lower(), local)
+        out.append(' m:%s="%s"' % (name, html.escape(_xml_text(html.unescape(value)), quote=True)))
+    return "".join(out), empty or raw[last:].strip() == "/"
 
 
 def _collapse(text: str) -> str:
@@ -139,7 +145,6 @@ class _Run:
 
 def clean_block(block: str) -> str:
     """One conditional-comment block of Word's HTML -> OMML (``m:`` prefixes, namespace undeclared)."""
-    block = re.sub(r"<!--.*?-->", "", block, flags=re.S)  # comments are not content
     out: List[str] = []
     stack: List[str] = []      # the OMML elements open, as spelled in the output (m:oMath ...)
     run: Optional[_Run] = None  # the <m:r> being read; its content goes into it, not into `out`
@@ -173,9 +178,12 @@ def clean_block(block: str) -> str:
         text(block[pos:m.start()])
         pos = m.end()
         closing, raw_name, raw_attrs = m.group(1), m.group(2), m.group(3)
+        if raw_name is None:
+            continue  # a comment: the text on either side stays two text nodes
         if not raw_name.lower().startswith("m:"):
-            if raw_name.lower() == "br" and run is not None:
+            if raw_name.lower() == "br" and run is not None and stack[-1] in ("m:r", "m:t"):
                 run.line_break = True
+                run.text.append((stack[-1] == "m:t", "\n"))  # a space between words, nothing at an end
             continue  # HTML formatting
         name = _omml_name(raw_name)
         if closing:

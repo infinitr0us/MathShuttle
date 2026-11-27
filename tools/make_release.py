@@ -15,9 +15,9 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
-import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import zipfile
 from importlib import metadata
@@ -40,9 +40,28 @@ def _first_file(paths) -> str:
 def _python_licence() -> str:
     base = sys.base_prefix
     ver = "python%d.%d" % sys.version_info[:2]
+    stdlib = sysconfig.get_path("stdlib", vars={"installed_base": base, "base": base})  # python3.13t too
     return _first_file([os.path.join(base, "LICENSE.txt"), os.path.join(base, "LICENSE_PYTHON.txt"),
-                        os.path.join(base, "lib", ver, "LICENSE.txt"), os.path.join(base, "Lib", "LICENSE.txt"),
-                        os.path.join(base, "share", "doc", ver, "LICENSE.txt")])
+                        os.path.join(stdlib, "LICENSE.txt"), os.path.join(base, "lib", ver, "LICENSE.txt"),
+                        os.path.join(base, "Lib", "LICENSE.txt"), os.path.join(base, "share", "doc", ver, "LICENSE.txt")])
+
+
+def _arch(target: str) -> str:
+    """The architecture of the build (the app has the build Python's): x64 / arm64 / x86 on Windows,
+    the machine on macOS."""
+    if target == "windows":
+        plat = sysconfig.get_platform()  # win-amd64, win-arm64, win32
+        return {"win-amd64": "x64", "win-arm64": "arm64", "win32": "x86"}.get(plat, plat.replace("win-", ""))
+    return platform.machine() or "arm64"
+
+
+def _replace_atomically(out: str, write) -> None:
+    """write(path) makes the zip under a temporary name; it replaces `out` only once it is complete."""
+    part = out + ".part"
+    if os.path.exists(part):
+        os.remove(part)
+    write(part)
+    os.replace(part, out)
 
 
 def _tcl_tk_licences() -> "tuple[str, str, str]":
@@ -100,10 +119,13 @@ def _extras(folder: str, target: str) -> None:
     newline = "\r\n" if target == "windows" else "\n"
     with open(os.path.join(ROOT, "LICENSE"), encoding="utf-8") as f:
         licence = f.read()
+    with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
+        readme = f.read().replace("](LICENSE)", "](LICENSE.txt)")  # the licence's name in the zip
     for name, text in (("LICENSE.txt", licence), ("THIRD-PARTY-NOTICES.txt", notices(target))):
         with open(os.path.join(folder, name), "w", encoding="utf-8", newline=newline) as f:
             f.write(text)
-    shutil.copyfile(os.path.join(ROOT, "README.md"), os.path.join(folder, "README.md"))
+    with open(os.path.join(folder, "README.md"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(readme)
 
 
 def _sha256(path: str) -> str:
@@ -120,34 +142,41 @@ def main(argv) -> int:
         return 2
     target = argv[0]
     dist = os.path.join(ROOT, "dist")
+    app = os.path.join(dist, "MathShuttle" if target == "windows" else "MathShuttle.app")
+    bundled_pandoc = os.path.join(app, "pandoc.exe") if target == "windows" else \
+        os.path.join(app, "Contents", "MacOS", "pandoc")
+    if os.path.exists(bundled_pandoc):
+        # the notices say pandoc is not included, and a zip with pandoc (GPL) in it needs its source
+        # offered with it: release zips are built without it
+        raise SystemExit("%s holds pandoc: build the release without it (build_exe.ps1 without -BundlePandoc)"
+                         % app)
+    out = os.path.join(dist, "MathShuttle-%s-%s-%s.zip" % (__version__, target, _arch(target)))
     if target == "windows":
-        app = os.path.join(dist, "MathShuttle")
         if not os.path.isfile(os.path.join(app, "MathShuttle.exe")):
             raise SystemExit("build it first: .\\build_exe.ps1")
-        out = os.path.join(dist, "MathShuttle-%s-windows-x64.zip" % __version__)
-        with tempfile.TemporaryDirectory() as tmp:
-            _extras(tmp, target)
-            with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-                for folder, _, files in os.walk(app):
-                    for name in files:
-                        path = os.path.join(folder, name)
-                        z.write(path, os.path.join("MathShuttle", os.path.relpath(path, app)))
-                for name in sorted(os.listdir(tmp)):
-                    z.write(os.path.join(tmp, name), os.path.join("MathShuttle", name))
+
+        def write(path: str) -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                _extras(tmp, target)
+                with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+                    for folder, _, files in os.walk(app):
+                        for name in files:
+                            full = os.path.join(folder, name)
+                            z.write(full, os.path.join("MathShuttle", os.path.relpath(full, app)))
+                    for name in sorted(os.listdir(tmp)):
+                        z.write(os.path.join(tmp, name), os.path.join("MathShuttle", name))
     else:
-        app = os.path.join(dist, "MathShuttle.app")
         if not os.path.isdir(app):
             raise SystemExit("build it first: ./build_app.sh")
-        arch = platform.machine() or "arm64"
-        out = os.path.join(dist, "MathShuttle-%s-macos-%s.zip" % (__version__, arch))
-        with tempfile.TemporaryDirectory() as tmp:
-            folder = os.path.join(tmp, "MathShuttle")
-            os.mkdir(folder)
-            subprocess.run(["ditto", app, os.path.join(folder, "MathShuttle.app")], check=True)
-            _extras(folder, target)
-            if os.path.exists(out):
-                os.remove(out)
-            subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", folder, out], check=True)
+
+        def write(path: str) -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                folder = os.path.join(tmp, "MathShuttle")
+                os.mkdir(folder)
+                subprocess.run(["ditto", app, os.path.join(folder, "MathShuttle.app")], check=True)
+                _extras(folder, target)
+                subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", folder, path], check=True)
+    _replace_atomically(out, write)
     print("%s\nSHA-256 %s" % (out, _sha256(out)))
     return 0
 

@@ -3,7 +3,8 @@
 #
 #     ./build_app.sh                          # build (creates .venv-build on first run)
 #     ./build_app.sh --zip                    # also dist/MathShuttle-<version>-macos-<arch>.zip for a release
-#     PYTHON=/path/to/python3 ./build_app.sh  # build with that Python (default: python3)
+#     PYTHON=/path/to/python3 ./build_app.sh  # build with that Python (default: python3; a build venv
+#                                             # made from another Python is made again)
 #
 # The Python needs tkinter with Tk 8.6 or later (python.org, Homebrew's python-tk, or uv's builds;
 # not Apple's /usr/bin/python3).  The app is not code-signed by a developer, only ad hoc: a copy
@@ -13,6 +14,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+REQUESTED="${PYTHON:-}"
 PYTHON="${PYTHON:-python3}"
 ZIP=0
 for arg in "$@"; do
@@ -22,6 +24,15 @@ for arg in "$@"; do
     esac
 done
 
+if [ -n "$REQUESTED" ] && [ -x .venv-build/bin/python ]; then
+    # PYTHON names the Python to build with: a build venv made from another one is made again
+    want="$("$PYTHON" -c 'import sys; print(sys.base_prefix)')"
+    have="$(.venv-build/bin/python -c 'import sys; print(sys.base_prefix)' 2>/dev/null || true)"
+    if [ "$want" != "$have" ]; then
+        echo "The build venv was made from ${have:-another Python}: making it again from $PYTHON..."
+        rm -rf -- ./.venv-build
+    fi
+fi
 if [ ! -x .venv-build/bin/python ]; then
     echo "Creating build venv from $PYTHON..."
     "$PYTHON" -m venv .venv-build

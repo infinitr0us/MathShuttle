@@ -128,6 +128,12 @@ def test_edge_spaces_at_row_starts_and_ends():
     assert _edge_spaces("\\begin{aligned}[t]~a\\end{aligned}") == "\\begin{aligned}[t]a\\end{aligned}"
     assert _edge_spaces("\\begin{array}[t]{rl}~a\\end{array}") == "\\begin{array}[t]{rl}a\\end{array}"
     assert _edge_spaces("a \\\\ ~*x") == "a \\\\ ~*x"                 # \\* after a row break's space too
+    # after \\* a "[" would still be its option; [x] in a matrix is content (a matrix takes no option)
+    assert _edge_spaces("a\\\\*~[2pt]x") == "a\\\\*~[2pt]x"
+    assert _edge_spaces("a\\\\*[2pt]~b") == "a\\\\*[2pt]b"
+    assert _edge_spaces("\\begin{matrix}[x]~y\\end{matrix}") == "\\begin{matrix}[x]~y\\end{matrix}"
+    assert _edge_spaces("\\begin{matrix}~[x]\\end{matrix}") == "\\begin{matrix}[x]\\end{matrix}"
+    assert _edge_spaces("\\begin{gathered}~[t]x\\end{gathered}") == "\\begin{gathered}~[t]x\\end{gathered}"
     assert _edge_spaces("a\\") == "a\\"                              # a lone backslash is kept
     # a row that starts with a bracket in a nested environment: each line on its own, in any order
     tex = "\\begin{aligned}\nx + x + a & = b \\\\\n~[x] + \\begin{pmatrix} ~1 \\\\ 2 \\end{pmatrix} & = c\n\\end{aligned}"
@@ -181,6 +187,11 @@ def block(inner: str) -> str:
     ('<m:oMath><m:r><m:rPr><m:sty m:val="p" m:val="b"/></m:rPr>d</m:r></m:oMath>', "\\mathrm{d}"),
     ("<m:oMath><m:r>a\x0bb&#x0c;c\x01</m:r></m:oMath>", "a\\ b\\ c"),
     ("<m:oMath><!-- <m:r>ghost</m:r> --><m:r>x<!-- note --></m:r></m:oMath>", "x"),
+    ("<m:oMath><m:r><m:rPr><m:nor/></m:rPr>&amp;<!-- note -->lt;</m:r></m:oMath>", "\\text{\\&lt;}"),  # 2 nodes
+    # XML's empty-tag habit on an unquoted value: m:val=b/ is "b", the tag closes itself
+    ("<m:oMath><m:r><m:rPr><m:sty m:val=b/></m:rPr>x</m:r></m:oMath>", "\\mathbf{x}"),
+    # a <br> between two words in one run is a space between them
+    ("<m:oMath><m:r><m:rPr><m:nor/></m:rPr>net<br>income</m:r></m:oMath>", "\\text{net income}"),
 ])
 def test_runs_and_attributes_from_html(inner, expected):
     assert body(omml_from_html(block(inner))) == expected
@@ -193,6 +204,8 @@ def test_attribute_values_as_html_has_them():
         assert 'm:begChr m:val="/"' in clean_block(inner % begin)
         assert body(omml_from_html(block(inner % begin))) == body(omml_from_html(block(inner % quoted)))
     assert '<m:begChr m:val=""/>' in clean_block("<m:oMath><m:d><m:dPr><m:begChr m:val/></m:dPr></m:d></m:oMath>")
+    # OMML's attribute names keep their spelling: m:alnAt of a manual line break
+    assert '<m:brk m:alnAt="2"/>' in clean_block('<m:oMath><m:r><m:rPr><m:brk m:alnat="2"/></m:rPr>x</m:r></m:oMath>')
 
 
 def test_cf_html_header():
@@ -210,6 +223,13 @@ def test_cf_html_header():
     page = "<html><body><p>公式 é %s</p>%s</body></html>" % (other, fragment)
     start = size + len(page[:page.index(fragment)].encode("utf-8"))
     raw = (header % (size, size + len(page.encode("utf-8")), start, start + len(fragment)) + page).encode("utf-8")
+    assert cf_html_fragment(raw).decode("utf-8") == fragment
+    # a header whose lines end with CR alone (allowed, if archaic)
+    cr = header.replace("\r\n", "\r")
+    size_cr = len(cr % (0, 0, 0, 0))
+    page = "<html><body>%s%s</body></html>" % (other, fragment)
+    start = size_cr + page.index(fragment)
+    raw = (cr % (size_cr, size_cr + len(page), start, start + len(fragment)) + page).encode("utf-8")
     assert cf_html_fragment(raw).decode("utf-8") == fragment
     # HTML without a header that mentions the field names is not cut, nor data whose offsets are unset
     assert cf_html_fragment(b"<p>StartFragment:1 EndFragment:3</p>") == b"<p>StartFragment:1 EndFragment:3</p>"
