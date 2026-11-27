@@ -46,6 +46,15 @@ _RENAMES = {"\\notag": "\\nonumber", "\\mathbbm": "\\mathbb", "\\mathbbmss": "\\
 # One pass: \backslash -> \setminus is not renamed again.
 _SYMBOLS = {"\\|": "\\Vert", "\\setminus": "\\smallsetminus", "\\backslash": "\\setminus",
             "\\varnothing": "\\emptyset"}
+# texmath reads these Unicode operators correctly but emits different glyphs for their commands.
+_OFFICE_SYMBOLS = {
+    "\\leqslant": "⩽", "\\geqslant": "⩾", "\\amalg": "⨿",
+    "\\longleftarrow": "⟵", "\\longrightarrow": "⟶", "\\longleftrightarrow": "⟷",
+    "\\Longleftarrow": "⟸", "\\Longrightarrow": "⟹", "\\Longleftrightarrow": "⟺",
+    "\\longmapsto": "⟼", "\\iff": "⟺",
+    # Unsized norm bars also need the right character, with their original opening / closing class.
+    "\\lVert": "\\mathopen{\\Vert}", "\\rVert": "\\mathclose{\\Vert}",
+}
 # same maths, different size: renamed, with a note
 _RESIZED = {"\\tbinom": "\\binom", "\\dbinom": "\\binom", "\\nicefrac": "\\tfrac"}
 # commands that only adjust the layout: \cmd[opt]{x} -> {x}; value: how many [options] the command takes
@@ -277,7 +286,7 @@ _SIZED_NORM = re.compile(r"(\\(?:left|right|middle|[bB]igg?[lrm]?)" + _CS + _GAP
 
 def _sized_norms(tex: str) -> str:
     """texmath 0.13 writes a sized \\lVert / \\rVert (\\left\\lVert, \\middle\\lVert, \\bigr\\rVert...) as
-    U+2225 PARALLEL TO, not the norm bar U+2016 that it writes for \\Vert there (and for \\lVert alone).
+    U+2225 PARALLEL TO, not the norm bar U+2016 that it writes for \\Vert there.
     With \\bigl and the like, texmath then writes the bars as plain symbols rather than a delimiter pair,
     as it already did for \\bigl\\| (the size is fixed there anyway)."""
     pos = 0
@@ -419,7 +428,8 @@ def _environments(tex: str, hits: List[str]) -> str:
 # ---- definitions ----------------------------------------------------------------------------------
 _DEF_START = re.compile(
     r"\\(?P<cmd>(?:re)?newcommand\*?|providecommand\*?|DeclareRobustCommand\*?|DeclareMathOperator\*?"
-    r"|[gex]?def|let|DeclarePairedDelimiter)%s" % _CS)
+    r"|[gex]?def|let|DeclarePairedDelimiterX|DeclarePairedDelimiter"
+    r"|(?:New|Renew|Provide|Declare)DocumentCommand)%s" % _CS)
 
 
 @dataclass
@@ -429,6 +439,7 @@ class Definition:
     uses: frozenset                         # control words in it
     paired: Optional[Tuple[str, str]] = None  # \DeclarePairedDelimiter: the left and right delimiter
     span: Tuple[int, int] = (0, 0)          # where it is in the text it was read from
+    paired_x: Optional[Tuple[int, str]] = None  # \DeclarePairedDelimiterX: its arguments and body
 
 
 def _control_words(tex: str) -> set:
@@ -467,6 +478,41 @@ def _parse_definition(text: str, m) -> Optional[Definition]:
         left, right = _unbrace(text[l0:l1]), _unbrace(text[r0:r1])
         return Definition(name, text[m.start():r1], frozenset(_control_words(left + right)), (left, right),
                           (m.start(), r1))
+    elif cmd == "DeclarePairedDelimiterX":  # \DeclarePairedDelimiterX{\set}[1]{\{}{\}}{#1}
+        count = 0
+        cm = re.compile(_GAP.pattern + r"\[\s*(\d)\s*\]").match(text, pos)
+        if cm:
+            count, pos = int(cm.group(1)), cm.end()
+        l0, l1 = _argument(text, pos)
+        r0, r1 = _argument(text, l1)
+        b0 = _GAP.match(text, r1).end()
+        if text[b0:b0 + 1] != "{" or _group_end(text, b0) < 0 or r1 <= r0:
+            return None
+        end = _group_end(text, b0)
+        left, right, body = _unbrace(text[l0:l1]), _unbrace(text[r0:r1]), text[b0 + 1:end - 1]
+        return Definition(name, text[m.start():end], frozenset(_control_words(left + right + body) - {name}),
+                          (left, right), (m.start(), end), paired_x=(count, body))
+    elif cmd.endswith("DocumentCommand"):  # xparse: \NewDocumentCommand{\foo}{O{1} m m}{body}
+        s0 = _GAP.match(text, pos).end()
+        if text[s0:s0 + 1] != "{" or _group_end(text, s0) < 0:
+            return None
+        s1 = _group_end(text, s0)
+        b0 = _GAP.match(text, s1).end()
+        if text[b0:b0 + 1] != "{" or _group_end(text, b0) < 0:
+            return None
+        end = _group_end(text, b0)
+        spec = text[s0 + 1:s1 - 1]
+        count, default = 0, None
+        for i, t in enumerate(re.finditer(r"\s*(?:([mo])|O\s*(\{(?:[^{}]|\{[^{}]*\})*\})|(\S))", spec)):
+            if t.group(3) or (t.group(1) == "o" or t.group(2)) and i:  # only a first optional argument
+                return None
+            if t.group(1) == "o" or t.group(2):
+                default = t.group(2)[1:-1] if t.group(2) else ""
+            count += 1
+        body = text[b0 + 1:end - 1]
+        source = "\\newcommand{%s}%s%s{%s}" % (name, "[%d]" % count if count else "",
+                                               "[%s]" % default if default is not None else "", body)
+        return Definition(name, source, frozenset(_control_words(body) - {name}), span=(m.start(), end))
     else:  # \newcommand{\foo}[n][default]{body}, \DeclareMathOperator*{\foo}{text}
         if not cmd.startswith("DeclareMathOperator"):
             pos = _optional(text, pos, 2)
@@ -486,17 +532,72 @@ def _parse_definition(text: str, m) -> Optional[Definition]:
     return Definition(name, source, uses, span=(m.start(), end))
 
 
-def parse_definitions(text: str) -> "Tuple[List[Definition], List[str]]":
-    """The macro definitions in LaTeX source (a preamble, a macro file, an equation), and the names
-    of those that cannot be used (malformed, never closed)."""
+_LOOP = re.compile(r"\\foreach\s*(\\[a-zA-Z]+)\s*in\s*\{([^{}]*)\}|\\@for\s*(\\[a-zA-Z]+)\s*:=\s*([^{}\\]*?)\s*\\do")
+_LOOP_DEF = r"\\csname\s*([A-Za-z]*)\s*%s\s*\\endcsname"
+
+
+def _letters(items: str) -> List[str]:
+    """A pgffor / \\@for list of letters: "A,B,...,Z,a,b,...,z" -> A..Z a..z."""
+    parts = [p.strip() for p in items.split(",") if p.strip()]
+    out: List[str] = []
+    for i, p in enumerate(parts):
+        if p == "..." and out and i + 1 < len(parts) and len(parts[i + 1]) == 1:
+            out += [chr(c) for c in range(ord(out[-1]) + 1, ord(parts[i + 1]))]
+        elif len(p) == 1 and p.isalpha():
+            out.append(p)
+        else:
+            return []  # not a list of letters
+    return out
+
+
+def _letter_loops(text: str) -> "Tuple[List[Definition], List[Tuple[int, int]]]":
+    """The alphabet idiom: ``\\foreach \\x in {A,...,Z}{\\expandafter\\xdef\\csname cal\\x\\endcsname
+    {\\noexpand\\mathcal{\\x}}}`` (also with \\@for and \\newcommand) defines \\calA ... \\calZ; pandoc
+    cannot run the loop.  Returns the definitions and the spans of the loops."""
     defs: List[Definition] = []
+    spans: List[Tuple[int, int]] = []
+    for m in _LOOP.finditer(text):
+        if _in_comment(text, m.start()):
+            continue
+        var, items = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        b0 = _GAP.match(text, m.end()).end()
+        if text[b0:b0 + 1] != "{" or _group_end(text, b0) < 0:
+            continue
+        end = _group_end(text, b0)
+        letters = _letters(items)
+        body = text[b0 + 1:end - 1]
+        found = False
+        for d in re.finditer(_LOOP_DEF % re.escape(var) + r"(?![a-zA-Z@])", body):
+            g0 = _GAP.match(body, d.end()).end()
+            if body[g0:g0 + 1] != "{" or _group_end(body, g0) < 0:
+                continue
+            template = body[g0 + 1:_group_end(body, g0) - 1].replace("\\noexpand", "")
+            for letter in letters:
+                value = re.sub(re.escape(var) + r"(?![a-zA-Z@])", lambda _m: letter, template)
+                name = "\\" + d.group(1) + letter
+                defs.append(Definition(name, "\\newcommand{%s}{%s}" % (name, value),
+                                       frozenset(_control_words(value) - {name}), span=(m.start(), end)))
+                found = True
+        if found:
+            spans.append((m.start(), end))
+    return defs, spans
+
+
+def parse_definitions(text: str, document: bool = False) -> "Tuple[List[Definition], List[str]]":
+    """The macro definitions in LaTeX source (a preamble, a macro file, an equation), and the names
+    of those that cannot be used (malformed, never closed).  `document`: a whole document or a style
+    file, whose internal definitions (names or bodies with @) are left out."""
+    defs, loops = _letter_loops(text) if "\\foreach" in text or "\\@for" in text else ([], [])
     skipped: List[str] = []
     pos = 0
     while True:
         m = _DEF_START.search(text, pos)
         if not m:
+            if document:
+                defs = [d for d in defs if "@" not in d.name and "@" not in d.source]
+            defs.sort(key=lambda d: d.span[0])  # the loops' definitions where the loops are (stable)
             return defs, skipped
-        if _in_comment(text, m.start()):
+        if _in_comment(text, m.start()) or _in(loops, m.start()):
             pos = m.end()
             continue
         d = _parse_definition(text, m)
@@ -509,16 +610,35 @@ def parse_definitions(text: str) -> "Tuple[List[Definition], List[str]]":
         pos = d.span[1]
 
 
-class Macros:
-    """Macro definitions from the user's files and text, applied to every LaTeX input."""
+_USEPACKAGE = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}")
 
-    def __init__(self, files: Sequence[str] = (), text: str = ""):
+
+def packages_in(text: str) -> set:
+    """The packages that LaTeX source loads (\\usepackage{a,b})."""
+    names: set = set()
+    for m in _USEPACKAGE.finditer(text):
+        if not _in_comment(text, m.start()):
+            names.update(p.strip() for p in m.group(1).split(",") if p.strip())
+    return names
+
+
+class Macros:
+    """Macro definitions from the user's files and text, applied to every LaTeX input.  A document's own
+    definitions (its preamble, files it \\input s: :func:`documents.read_text_document`) come as
+    `document`, after the user's files and text, so that they win; `labels` then maps its \\label s to
+    the numbers LaTeX gave them (from the .aux file), for \\eqref."""
+
+    def __init__(self, files: Sequence[str] = (), text: str = "", document: str = "",
+                 labels: Optional[Dict[str, str]] = None):
         self.files = list(files)
         self.text = text
+        self.document = document
         self.definitions: Dict[str, Definition] = {}
         self.order: List[Definition] = []  # every definition, in file order (\let takes a snapshot)
         self.skipped: List[str] = []
         self.errors: List[str] = []
+        self.packages: set = set()
+        self.labels: Dict[str, str] = dict(labels or {})
         for path in self.files:
             try:
                 with open(path, "rb") as f:
@@ -528,13 +648,17 @@ class Macros:
                 continue
             self._add(data.decode("utf-8-sig", "replace"))
         self._add(text)
+        if document:
+            self._add(document, document=True)
 
-    def _add(self, text: str) -> None:
-        defs, skipped = parse_definitions(text)
+    def _add(self, text: str, document: bool = False) -> None:
+        defs, skipped = parse_definitions(text, document)
         for d in defs:
             self.definitions[d.name] = d  # a later definition wins, as in LaTeX with \renewcommand
             self.order.append(d)
-        self.skipped += skipped
+        if not document:  # (a document's own skipped definitions are pandoc's business)
+            self.skipped += skipped
+        self.packages |= packages_in(text)
 
     def __len__(self) -> int:
         return len(self.definitions)
@@ -570,17 +694,27 @@ def file_stamps(files: Sequence[str]) -> tuple:
     return tuple(stamps)
 
 
-def load_macros(files: Sequence[str] = (), text: str = "") -> Optional[Macros]:
-    """A Macros object for these files and text (None for neither), re-read only when a file changes."""
+def load_macros(files: Sequence[str] = (), text: str = "", document: str = "",
+                labels: Optional[Dict[str, str]] = None) -> Optional[Macros]:
+    """A Macros object for these files and text (None for neither), re-read only when a file changes;
+    `document` and `labels`: a document's own definitions and label numbers (see :class:`Macros`)."""
     files = [f for f in files if f]
-    if not files and not text.strip():
+    if not files and not text.strip() and not document.strip() and not labels:
         return None
-    key = (file_stamps(files), text)
+    key = (file_stamps(files), text, document, tuple(sorted((labels or {}).items())))
     if key not in _MACRO_CACHE:
         if len(_MACRO_CACHE) > 16:
             _MACRO_CACHE.clear()
-        _MACRO_CACHE[key] = Macros(files, text)
+        _MACRO_CACHE[key] = Macros(files, text, document, labels)
     return _MACRO_CACHE[key]
+
+
+def with_document(macros: Optional[Macros], document: str, labels: Optional[Dict[str, str]] = None) -> Optional[Macros]:
+    """The user's macros plus a document's own definitions and label numbers (which win)."""
+    if not document.strip() and not labels:
+        return macros
+    return load_macros(macros.files if macros is not None else (), macros.text if macros is not None else "",
+                       document, labels)
 
 
 # ---- expansion ----------------------------------------------------------------------------------------
@@ -595,24 +729,35 @@ def _paired(tex: str, paired: Dict[str, Tuple[str, str]]) -> str:
         m = _find(tex, pattern, pos)
         if not m:
             return tex
-        left, right = paired[m.group(1)]
+        left, right, x = paired[m.group(1)]
         i = _GAP.match(tex, m.end()).end()
         size = ""
         if tex[i:i + 1] == "*":
-            opening, closing, i = "\\left", "\\right", i + 1
+            opening, closing, middle, i = "\\left", "\\right", "\\middle", i + 1
         else:
             j = _optional(tex, i, 1)
             if j > i:
                 size = tex[i:j].strip()[1:-1].strip()
                 i = j
             opening, closing = (size + "l", size + "r") if size else ("", "")
-        a0, a1 = _argument(tex, i)
-        if a1 <= a0:
-            from .pandoc_engine import ConversionError
-            raise ConversionError("%s needs an argument (it was declared with \\DeclarePairedDelimiter)" % m.group(1))
+            middle = size
+        count, body = x if x else (1, "#1")
+        args = []
+        for _ in range(count):
+            a0, a1 = _argument(tex, i)
+            if a1 <= a0:
+                from .pandoc_engine import ConversionError
+                raise ConversionError("%s needs an argument (it was declared with \\DeclarePairedDelimiter)"
+                                      % m.group(1))
+            args.append(_unbrace(tex[a0:a1]))
+            i = a1
+        inner = re.sub(r"#(\d)", lambda d: "{%s}" % args[int(d.group(1)) - 1] if 0 < int(d.group(1)) <= count
+                       else d.group(), body)
+        # \delimsize (in an X body: \delimsize\vert) takes the size of the pair, or \middle for *
+        inner = re.sub(r"\\delimsize" + _CS + r"\s*", lambda _d: middle + " " if middle else "", inner)
         # one group: \abs{x}^2 puts the whole |x| under the exponent; the argument keeps its own scope
-        new = "{%s%s {%s}%s%s}" % (opening, left, _unbrace(tex[a0:a1]), closing, right)
-        tex = tex[:m.start()] + new + tex[a1:]
+        new = "{%s%s {%s}%s%s}" % (opening, left, inner if x else "%s" % args[0], closing, right)
+        tex = tex[:m.start()] + new + tex[i:]
         pos = m.start()  # nested uses inside the argument
 
 
@@ -650,6 +795,206 @@ def _without(text: str, spans: List[Tuple[int, int]]) -> str:
     return "".join(out) + text[last:]
 
 
+# ---- standard LaTeX that texmath 0.13 rejects ------------------------------------------------------------
+# amsmath / LaTeX commands written with what texmath has (renamed in place, no note)
+_STANDARD = {"\\varlimsup": "\\overline{\\lim}", "\\varliminf": "\\underline{\\lim}",
+             "\\varinjlim": "\\underset{\\rightarrow}{\\lim}", "\\varprojlim": "\\underset{\\leftarrow}{\\lim}",
+             "\\injlim": "\\operatorname*{inj\\,lim}", "\\projlim": "\\operatorname*{proj\\,lim}",
+             "\\idotsint": "\\int\\cdots\\int", "\\operatornamewithlimits": "\\operatorname*",
+             "\\bigm": "\\big", "\\Bigm": "\\Big", "\\biggm": "\\bigg", "\\Biggm": "\\Bigg",
+             "\\cfrac": "\\dfrac"}
+# no-ops in maths: font sizes, page-break hints, \qedhere
+_SIZES = ("\\tiny", "\\scriptsize", "\\footnotesize", "\\small", "\\normalsize", "\\large", "\\Large", "\\LARGE",
+          "\\huge", "\\Huge")
+_NO_OPS = _SIZES + ("\\qedhere", "\\nobreak", "\\allowdisplaybreaks", "\\hfill", "\\hfil", "\\hss")
+_COUNTERS = {"\\addtocounter": 2, "\\setcounter": 2, "\\stepcounter": 1, "\\refstepcounter": 1,
+             "\\@namedef": 2}  # (what a document's redefined \label leaves: \global\@namedef{..}{..})
+_GROUPING = {"\\begingroup": "{", "\\endgroup": "}", "\\bgroup": "{", "\\egroup": "}"}
+_RULES = re.compile(r"\\(?:toprule|midrule|bottomrule)(?:\s*\[[^\]]*\])?|\\cmidrule\s*(?:\([^)]*\))?\s*\{[^{}]*\}")
+# text commands: texmath reads none of them inside another (\text{a \textbf{b}})
+_TEXT_STYLES = ("\\text", "\\textrm", "\\textit", "\\textbf", "\\textsf", "\\texttt", "\\textup", "\\textsl",
+                "\\textmd", "\\emph", "\\mbox")
+# lengths texmath takes in \hspace: pt, em, cm, in; the rest in those
+_LENGTHS = {"mm": (0.1, "cm"), "bp": (1.00375, "pt"), "pc": (12.0, "pt"), "dd": (1.07, "pt"), "cc": (12.84, "pt"),
+            "sp": (1 / 65536, "pt"), "ex": (0.43, "em"), "mu": (1 / 18, "em"), "pt": (1, "pt"), "em": (1, "em"),
+            "cm": (1, "cm"), "in": (1, "in")}
+_DIMEN = r"(-?\s*(?:\d+\.?\d*|\.\d+))\s*(mm|cm|in|pt|bp|pc|dd|cc|sp|em|ex|mu)"
+_GLUE = r"(?:\s*plus\s*-?[\d.]+\s*(?:fil+|[a-z]{2}))?(?:\s*minus\s*-?[\d.]+\s*(?:fil+|[a-z]{2}))?"
+_SPACING = re.compile(r"\\hspace\*?\s*\{\s*%s\s*\}|\\(?:kern|hskip)\s*%s%s|\\m(?:kern|skip)\s*%s%s"
+                      % (_DIMEN, _DIMEN, _GLUE, _DIMEN, _GLUE))
+_FILL = re.compile(r"\\hspace\*?\s*\{\s*\\(?:h?fill|stretch\s*\{[^{}]*\})\s*\}")
+_REFS = re.compile(r"\\(eqref|ref|cref|Cref|autoref|pageref|nameref|cite|citep|citet|Citep|Citet)\*?" + _CS)
+_ACCENT_FONT = re.compile(
+    r"(\\(?:hat|tilde|widehat|widetilde|bar|overline|underline|vec|dot|ddot|check|breve|acute|grave|mathring|"
+    r"overrightarrow|overleftarrow))\s*(\\(?:mathcal|mathbf|mathbb|mathrm|mathit|mathsf|mathtt|mathfrak|mathscr|"
+    r"boldsymbol|bm))" + _CS)
+_ENV_POSITION = re.compile(r"(\\begin\s*\{(?:aligned|alignedat|gathered|array|split|subarray)\})\s*\[\s*[tbc]\s*\]")
+
+
+def _refs(tex: str, labels: Dict[str, str]) -> str:
+    """\\eqref{eq:x} -> (2.1) with the number from the document's .aux file (or the label itself),
+    \\ref -> 2.1, \\cite{key} -> [key]: as text in maths, as letters inside text."""
+    pos = 0
+    while True:
+        m = _REFS.search(tex, pos)
+        if not m:
+            return tex
+        if _in_comment(tex, m.start()):
+            pos = m.end()
+            continue
+        i = _optional(tex, m.end(), 2)
+        a0, a1 = _argument(tex, i)
+        if a1 <= a0 or tex[a0] != "{":
+            pos = m.end()
+            continue
+        keys = [k.strip() for k in _unbrace(tex[a0:a1]).split(",") if k.strip()]
+        if m.group(1).lower().startswith("cite"):
+            shown = "[%s]" % ", ".join(keys)
+        else:
+            shown = ", ".join(labels.get(k, k) for k in keys)
+            shown = "(%s)" % shown if m.group(1) == "eqref" else shown
+        in_text = _in(_text_spans(tex), m.start())
+        new = shown if in_text else "\\text{%s}" % shown.replace("_", "\\_")
+        tex = tex[:m.start()] + new + tex[a1:]
+        pos = m.start() + len(new)
+
+
+def _intertext(tex: str, layout: List[str]) -> str:
+    """\\intertext{and so} in an align: a row of its own with the text (texmath has no \\intertext)."""
+    pattern = re.compile(r"\\(?:short)?intertext" + _CS)
+    while True:
+        m = _find(tex, pattern)
+        if not m:
+            return tex
+        a0, a1 = _argument(tex, m.end())
+        layout.append("intertext")
+        tex = tex[:m.start()] + "\\text{%s}\\\\" % _unbrace(tex[a0:a1]) + tex[a1:]
+
+
+def _nested_text(tex: str) -> str:
+    """\\text{a \\textbf{b} c} -> \\text{a }\\textbf{b}\\text{ c}; size switches inside text dropped."""
+    names = "|".join(re.escape(n) for n in _TEXT_STYLES)
+    outer = re.compile(r"(%s)%s" % (names, _CS))
+    inner = re.compile(r"(%s|%s)%s" % (names, "|".join(re.escape(n) for n in _SIZES), _CS))
+    pos = 0
+    while True:
+        m = outer.search(tex, pos)
+        if not m:
+            return tex
+        a0, a1 = _argument(tex, m.end())
+        if a1 <= a0 or tex[a0] != "{" or _in_comment(tex, m.start()):
+            pos = m.end()
+            continue
+        body = tex[a0 + 1:a1 - 1]
+        pieces, last, depth, changed, maths = [], 0, 0, False, False
+        for t in _TOKEN.finditer(body):
+            tok = t.group()
+            if tok == "{":
+                depth += 1
+            elif tok == "}":
+                depth -= 1
+            elif tok == "$" and not depth:
+                maths = not maths  # maths in the text ($\textbf{x}$ there is maths): not split
+            elif not depth and not maths and inner.fullmatch(tok):
+                changed = True
+                if tok in _SIZES:  # dropped (with the space after it)
+                    pieces.append("%s{%s}" % (m.group(1), body[last:t.start()]))
+                    last = t.end() + (1 if body[t.end():t.end() + 1] == " " else 0)
+                    continue
+                b0, b1 = _argument(body, t.end())
+                pieces.append("%s{%s}" % (m.group(1), body[last:t.start()]))
+                pieces.append("%s{%s}" % (tok, _unbrace(body[b0:b1])))
+                last = b1
+        if not changed:
+            pos = m.end()
+            continue
+        pieces.append("%s{%s}" % (m.group(1), body[last:]))
+        new = "".join(p for p in pieces if not p.endswith("{}"))
+        tex = tex[:m.start()] + new + tex[a1:]
+        pos = m.start()  # the pieces may hold more nesting
+
+
+def _spacing(tex: str) -> str:
+    """\\hspace{10mm}, \\kern3pt, \\hskip 1em plus 1fil, \\mkern3mu: in units texmath reads (it takes pt,
+    em, cm and in, and \\mspace); \\hspace{\\fill} and its kind are left out."""
+    tex = _FILL.sub("{}", tex)
+
+    def length(value: str, unit: str) -> str:
+        factor, base = _LENGTHS[unit]
+        number = float(value.replace(" ", "")) * factor
+        return "%s%s" % (("%.3f" % number).rstrip("0").rstrip(".") or "0", base)
+
+    def sub(m):
+        if m.group(1):  # \hspace
+            return "\\hspace{%s}" % length(m.group(1), m.group(2))
+        if m.group(3):  # \kern / \hskip
+            return "\\hspace{%s}" % length(m.group(3), m.group(4))
+        if m.group(6) == "mu":  # \mkern 3mu
+            return "\\mspace{%smu}" % m.group(5).replace(" ", "")
+        return "\\hspace{%s}" % length(m.group(5), m.group(6))
+    return _SPACING.sub(sub, tex)
+
+
+def _drop_arguments(tex: str, names: Dict[str, int]) -> str:
+    """\\addtocounter{equation}{1} and its kind: left out with their arguments."""
+    pattern = re.compile(r"(%s)%s" % ("|".join(re.escape(n) for n in names), _CS))
+    while True:
+        m = _find(tex, pattern)
+        if not m:
+            return tex
+        end = m.end()
+        for _ in range(names[m.group(1)]):
+            end = _argument(tex, end)[1]
+        tex = tex[:m.start()] + "{}" + tex[end:]
+
+
+def _sideset(tex: str) -> str:
+    """\\sideset{_a^b}{_c^d}\\sum -> {}_a^b\\sum_c^d (the scripts beside the operator)."""
+    pattern = re.compile(r"\\sideset" + _CS)
+    while True:
+        m = _find(tex, pattern)
+        if not m:
+            return tex
+        l0, l1 = _argument(tex, m.end())
+        r0, r1 = _argument(tex, l1)
+        o0, o1 = _argument(tex, r1)
+        left, right = _unbrace(tex[l0:l1]), _unbrace(tex[r0:r1])
+        tex = tex[:m.start()] + "{}%s{%s}%s" % (left, tex[o0:o1], right) + tex[o1:]
+
+
+def _accent_fonts(tex: str) -> str:
+    """\\widetilde\\mathcal K -> \\widetilde{\\mathcal{K}}: LaTeX takes it, texmath wants the group."""
+    pos = 0
+    while True:
+        m = _find(tex, _ACCENT_FONT, pos)
+        if not m:
+            return tex
+        a0, a1 = _argument(tex, m.end())
+        new = "%s{%s{%s}}" % (m.group(1), m.group(2), _unbrace(tex[a0:a1]))
+        tex = tex[:m.start()] + new + tex[a1:]
+        pos = m.start() + len(m.group(1))
+
+
+def _standard(tex: str, layout: List[str]) -> str:
+    """Standard LaTeX that texmath 0.13 rejects, written with what it has."""
+    tex = _ENV_POSITION.sub(r"\1", tex)  # \begin{aligned}[t]: texmath would show the [t]
+    tex = re.sub(r"\\cfrac\s*\[\s*[lcr]\s*\]", r"\\cfrac", tex)
+    tex = re.sub(r"\\textnormal" + _CS, lambda _m: "\\textrm", tex)  # also inside text
+    tex = _rename(tex, _STANDARD, [])
+    tex = _intertext(tex, layout)
+    tex = _nested_text(tex)
+    tex = _commands(tex, {"\\mathnormal": 0}, "unwrap", [])
+    tex = re.sub(r"\\displaybreak(?:\s*\[\s*\d\s*\])?", "{}", tex)
+    tex = _RULES.sub(lambda _m: "\\hline", tex)  # booktabs rules in an array
+    tex = _rename(tex, _GROUPING, [])
+    tex = re.sub(r"\\global" + _CS + r"\s*", "", tex)
+    tex = _commands(tex, _NO_OPS, "drop", [])
+    tex = _drop_arguments(tex, _COUNTERS)
+    tex = _spacing(tex)
+    tex = _sideset(tex)
+    return _accent_fonts(tex)
+
+
 # ---- the whole rewrite -------------------------------------------------------------------------------
 _NOTES = {
     "colour": "colours were dropped (texmath has no colour)",
@@ -657,6 +1002,8 @@ _NOTES = {
     "layout": "%s: layout-only commands were left out",
     "unexpanded": "the macros could not be expanded together with this equation; texmath was given the "
                   "definitions instead",
+    "packs": "written as their packages define them (built in): %s",
+    "intertext": "\\intertext: written as a row of text in the equation",
 }
 
 
@@ -673,13 +1020,21 @@ def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml
                                   "expanded here - define it at the start of the equation or in Macros..." % d.name)
     used = macros.needed(tex) if macros else []
     definitions = used + own
-    paired = {d.name: d.paired for d in definitions if d.paired}
+    # a name defined twice (two macro files, a file and the equation) has its last definition: a
+    # \newcommand{\abs} after a \DeclarePairedDelimiter{\abs} (or before it) is not both
+    last = {d.name: d for d in definitions}
+    paired = {name: d.paired + (d.paired_x,) for name, d in last.items() if d.paired}
     # paired delimiters first, in the equation and in the definitions that use them: then pandoc expands
     # the macros their delimiters may be made of (\DeclarePairedDelimiter{\abs}{\ld}{\rangle})
-    plain = [_paired(d.source, paired) for d in definitions if not d.paired]
+    plain = [_paired(d.source, paired) for d in definitions if not d.paired and not last[d.name].paired]
     out = _paired(_without(tex, [d.span for d in own]) if own else tex, paired)
     if plain:
         expanded = _expand(out, plain)
+        if expanded is None:
+            # a style file's machinery (\let to internals, \expandafter, \csname...) can stop pandoc:
+            # once more with the plain definitions alone
+            simple = [s for s in plain if not re.search(r"\\(?:let|expandafter|csname|if[a-z]*|@)" + _CS + "|@", s)]
+            expanded = _expand(out, simple) if simple and len(simple) < len(plain) else None
         if expanded is None:
             notes.append(_NOTES["unexpanded"])
             out = "\n".join(plain) + "\n" + out
@@ -689,12 +1044,24 @@ def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml
     hits: List[str] = []
     resized: List[str] = []
     layout: List[str] = []
+    # (a Macros with no definitions is falsy: it may still hold packages and labels)
+    out = _refs(out, macros.labels if macros is not None else {})
+    from . import packs
+    defined = set(macros.definitions if macros is not None else ()) | {d.name for d in own}
+    packages = (macros.packages if macros is not None else set()) | packages_in(tex)
+    pack_hits: List[str] = []
+    out = packs.apply(out, defined, packages, pack_hits)
+    rows: List[str] = []
+    out = _standard(out, rows)
+    if rows:
+        notes.append(_NOTES["intertext"])
     out = _environments(out, hits)
     out = _font_switches(out)
     out = _rename(out, _RENAMES, hits)
     out = _rename(out, _SYMBOLS, [])
     out = _sized_norms(out)
     if target in ("mathml", "omml"):
+        out = _rename(out, _OFFICE_SYMBOLS, [])
         out = _bold_upright(out)
     out = _rename(out, _RESIZED, resized)
     out = _textcolor(out, hits)
@@ -707,4 +1074,12 @@ def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml
         notes.append(_NOTES["resized"] % ", ".join(sorted(set(resized))))
     if layout:
         notes.append(_NOTES["layout"] % ", ".join(sorted(set(layout))))
+    if pack_hits:
+        by_package: Dict[str, List[str]] = {}
+        for hit in pack_hits:
+            package, name = hit.split(": ", 1)
+            if name not in by_package.setdefault(package, []):
+                by_package[package].append(name)
+        notes.append(_NOTES["packs"] % "; ".join("%s (%s)" % (", ".join(names), package)
+                                                for package, names in by_package.items()))
     return out, notes

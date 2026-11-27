@@ -38,6 +38,20 @@ _GREEK = {
     "ς": "varsigma", "τ": "tau", "υ": "upsilon", "φ": "varphi", "ϕ": "phi", "χ": "chi", "ψ": "psi",
     "ω": "omega", "Γ": "Gamma", "Δ": "Delta", "Θ": "Theta", "Λ": "Lambda", "Ξ": "Xi", "Π": "Pi",
     "Σ": "Sigma", "Υ": "Upsilon", "Φ": "Phi", "Ψ": "Psi", "Ω": "Omega", "∇": "nabla", "∂": "partial"}
+# Symbols texmath leaves as literal characters.
+_RAW_SYMBOLS = {
+    **_GREEK, "ϝ": "digamma", "▫": "square", "▴": "blacktriangle", "▾": "blacktriangledown",
+    "⊏": "sqsubset", "⊐": "sqsupset", "≔": "coloneqq", "≕": "eqqcolon", "⤳": "leadsto",
+    "⌜": "ulcorner", "⌝": "urcorner", "⌞": "llcorner", "⌟": "lrcorner", "℧": "mho",
+    "✓": "checkmark", "✠": "maltese",
+}
+# Choose the conventional name for shared glyphs. texmath reads □ as \square, but its
+# writer needs \Box to keep □ distinct from ▫ (\square). Apply these before _RAW_SYMBOLS.
+_COMMAND_ALIASES = {
+    r"\hslash": r"\hbar", r"\preccurlyeq": r"\preceq", r"\succcurlyeq": r"\succeq",
+    r"\bigtriangleup": r"\triangle", r"\land": r"\wedge", r"\lor": r"\vee", r"\square": r"\Box",
+    r"\backslash": r"\setminus", r"\smallsetminus": r"\setminus", r"\varnothing": r"\emptyset",
+}
 # Placeholder identifiers: letters only (texmath keeps a multi-letter <mi> as one run of letters), with
 # an index alphabet that cannot form the delimiters, so that adjacent placeholders split unambiguously.
 _PLACEHOLDER = "QQXJ%sJXQQ"
@@ -124,6 +138,36 @@ def _is_mo(el: Optional[ET.Element], *texts: str) -> bool:
     return el is not None and el.tag == "mo" and (el.text or "").strip() in texts
 
 
+def _infix_operators(row: ET.Element) -> None:
+    """Arrows and bars in a row can inherit stretchy=true from the operator dictionary. texmath
+    then invents invisible fences. A delimiter, a middle in a fenced row and a label base keep
+    their stretchiness."""
+    if row.tag not in ("math", "mrow", "mtd", "mstyle", "mpadded", "msqrt") or len(row) < 3:
+        return
+    fenced = any(edge.get("stretchy") != "false" and _is_mo(edge, *chars)
+                 for edge, chars in ((row[0], "([{⟨⌊⌈|‖"), (row[-1], ")]}⟩⌋⌉|‖")))
+    for i in range(1, len(row) - 1):
+        mo = row[i]
+        if mo.tag != "mo" or mo.get("stretchy") == "false" or mo.get("fence") == "true":
+            continue
+        ch = (mo.text or "").strip()
+        name = unicodedata.name(ch, "") if len(ch) == 1 else ""
+        if ch not in ("|", "‖", "∣", "∥") and "ARROW" not in name and "HARPOON" not in name:
+            continue
+        if mo.get("form") in ("prefix", "postfix"):
+            continue
+        if fenced and (ch in ("|", "‖") or mo.get("stretchy") == "true"):
+            continue
+        # With invisible outer fences, a declared \middle| can still stretch to a fraction or script.
+        if ch in ("|", "‖") and mo.get("form") == "infix" and mo.get("stretchy") == "true" and any(map(len, row)):
+            continue
+        # A bar next to another operator can open or close an absolute value (a + |x|).
+        if ch in ("|", "‖") and ((row[i - 1].tag == "mo" and row[i - 1].get("form") != "postfix")
+                                  or (row[i + 1].tag == "mo" and row[i + 1].get("form") != "prefix")):
+            continue
+        mo.set("stretchy", "false")
+
+
 def mark_identifiers(math: ET.Element, mapping: Dict[str, str], start: int = 0) -> None:
     """Replace the <mi>s texmath would misread by placeholder names (recorded in `mapping`, numbered
     from `start` so that the keys of several equations differ), and fix two readings of texmath's:
@@ -131,6 +175,7 @@ def mark_identifiers(math: ET.Element, mapping: Dict[str, str], start: int = 0) 
     U+2225 with form prefix / postfix is a norm bar (texmath writes \\| so; a relation has no form).
     The element must have no namespace (tags ``mi``, ``mo``...)."""
     for parent in math.iter():
+        _infix_operators(parent)
         children = list(parent)
         for i, child in enumerate(children):
             if child.tag == "mfrac":
@@ -153,6 +198,13 @@ def mark_identifiers(math: ET.Element, mapping: Dict[str, str], start: int = 0) 
             elif child.tag == "mo" and (child.text or "").strip() == "\u2225" and (
                     child.get("form") in ("prefix", "postfix") or child.get("fence") == "true"):
                 child.text = "\u2016"  # a norm bar, not the relation "parallel to"
+            elif i == 0 and parent.tag in ("mover", "munder", "munderover") and _is_mo(child, "→", "←") \
+                    and child.get("stretchy") == "false":
+                # This label sits on a fixed arrow; keep it distinct from an extensible xarrow.
+                key = _PLACEHOLDER % _letters(start + len(mapping))
+                arrow = "rightarrow" if child.text.strip() == "→" else "leftarrow"
+                mapping[key] = "\\mathrel{\\%s}" % arrow
+                child.tag, child.text = "mi", key
             elif child.tag == "mi":
                 nxt = children[i + 1] if i + 1 < len(children) else None
                 tex = _identifier_tex(child, _is_mo(nxt, "\u2061"))
@@ -217,6 +269,10 @@ def mark_omml(fragment: ET.Element, mapping: Dict[str, str], ns: str, start: int
     m = "{%s}" % ns
     _split_styled_runs(fragment, m)
     names = {id(r) for f in fragment.iter(m + "fName") for r in f.iter(m + "r")}
+    # The OMML reader turns a limLow on max into \max_x even inline. A marked base keeps
+    # limLow/limUpp as an explicit underset/overset until the output style is known.
+    limits = {base[0] for tag in ("limLow", "limUpp") for lim in fragment.iter(m + tag)
+              for base in lim.findall(m + "e") if len(base) == 1}
     for run in fragment.iter(m + "r"):
         t = run.find(m + "t")
         if t is None or not (t.text or "").strip():
@@ -225,7 +281,12 @@ def mark_omml(fragment: ET.Element, mapping: Dict[str, str], ns: str, start: int
         if rpr is not None and (rpr.find(m + "nor") is not None or rpr.find(m + "scr") is not None):
             continue  # normal text (\text{...}); script / fraktur / double-struck, which texmath reads itself
         sty = rpr.find(m + "sty") if rpr is not None else None
-        tex = _run_tex(t.text.strip(), sty.get(m + "val") if sty is not None else None, id(run) in names)
+        word = t.text.strip()
+        style = sty.get(m + "val") if sty is not None else None
+        if run in limits and style in (None, "p") and (word in _NAMED_LIMITS or word == "arg"):
+            tex = "\\" + word
+        else:
+            tex = _run_tex(word, style, id(run) in names)
         if tex is None:
             continue
         key = _PLACEHOLDER % _letters(start + len(mapping))
@@ -418,9 +479,50 @@ def _rows(body: str) -> List[str]:
     return rows
 
 
-_BIG_OPS = "sum prod coprod bigcup bigcap bigoplus bigotimes bigodot biguplus bigsqcup bigvee bigwedge".split()
+_NAMED_LIMITS = frozenset("max min lim sup inf liminf limsup det gcd Pr".split())
+_DISPLAY_LIMITS = {"\\" + name for name in _NAMED_LIMITS.union(
+    "sum prod coprod bigcup bigcap bigoplus bigotimes bigodot biguplus bigsqcup bigvee bigwedge".split())}
+
+
+def _labelled_operators(tex: str) -> str:
+    """Recognise the two braced arguments that texmath writes for an over/underset. Work from
+    the inside out, so a second label on an arrow can become its optional argument."""
+    from .compat import _argument
+
+    placements = [m for m in _TOKEN.finditer(tex) if m.group() in (r"\overset", r"\underset")]
+    for m in reversed(placements):
+        a, b = _argument(tex, m.end())
+        c, d = _argument(tex, b)
+        if tex[a:a + 1] != "{" or tex[c:c + 1] != "{":
+            continue
+        label, base = tex[a:b], tex[c + 1:d - 1]
+        under = m.group() == r"\underset"
+        script = "_" if under else "^"
+        brace = r"\underbrace" if under else r"\overbrace"
+        if base.startswith(brace + "{") and _group_end(base, len(brace)) == len(base):
+            new = base + script + label
+        elif not under and base in (r"\rightarrow", r"\leftarrow"):
+            new = r"\x" + base[1:] + label
+        elif under and (arrow := re.match(r"\\x(?:right|left)arrow(?=\{)", base)) \
+                and _group_end(base, arrow.end()) == len(base):
+            lower = label[1:-1]
+            new = arrow.group() + "[" + (label if "]" in lower else lower) + "]" + base[arrow.end():]
+        elif base in _DISPLAY_LIMITS or base == r"\arg":
+            new = base + r"\limits" + script + label
+        elif (arg := re.fullmatch(r"\\mathrm\{arg(max|min)\}|\\?arg\\,\\?(max|min)", base)):
+            name = "arg" + (arg[1] or r"\," + arg[2])
+            new = r"\operatorname*{" + name + r"}\limits" + script + label
+        else:
+            continue
+        if tex[d:].lstrip().startswith(("_", "^", "'")):
+            new = "{" + new + "}"  # the following script belongs to the entire annotated object
+        tex = tex[:m.start()] + new + tex[d:]
+    return tex
+
+
 # commands whose arguments are set in a smaller style (\limits matters there)
-_SMALL_ARGS = {"\\frac": 2, "\\tfrac": 2, "\\cfrac": 2, "\\binom": 2, "\\tbinom": 2, "\\genfrac": 6,
+_SMALL_ARGS = {"\\frac": 2, "\\tfrac": 2, "\\dfrac": 2, "\\cfrac": 2, "\\binom": 2, "\\dbinom": 2,
+               "\\tbinom": 2, "\\genfrac": 6,
                "\\stackrel": 2, "\\overset": 2, "\\underset": 2}
 # commands whose arguments keep the style
 _SAME_STYLE_ARGS = {"\\sqrt": 1, "\\overline": 1, "\\underline": 1, "\\mathbf": 1, "\\mathrm": 1, "\\mathit": 1,
@@ -434,21 +536,25 @@ _DISPLAY_ENVS = frozenset("aligned gathered split align align* gather gather* eq
 def _drop_display_limits(tex: str) -> str:
     """``\\sum\\limits_{i}`` -> ``\\sum_{i}`` where the sum is in display style (its limits go
     above and below anyway); kept inside fractions, scripts, matrices and unknown arguments."""
-    big = {"\\" + op for op in _BIG_OPS}
+    from .compat import _optional, _argument
+
     out = []
     last = 0
-    stack: List[bool] = []  # per open group / environment: display style inside it?
+    stack = [True]  # display style at the top and inside each open group / environment
     pending: Dict[int, List[bool]] = {}  # per group level: styles of the next arguments of a command there
     prev = ""
+    starred_ends = set()  # \operatorname* has display limits; \operatorname and \arg do not
+    prev_end = 0
+    skip_to = 0
     for m in _TOKEN.finditer(tex):
         tok = m.group()
-        if tok.startswith("%"):
+        if m.start() < skip_to or tok.startswith("%"):
             continue
         level = len(stack)
         if m.group("be") == "begin":
             stack.append(m.group("env") in _DISPLAY_ENVS)
         elif m.group("be") == "end":
-            if stack:
+            if len(stack) > 1:
                 pending.pop(len(stack), None)
                 stack.pop()
         elif tok == "{":
@@ -459,23 +565,32 @@ def _drop_display_limits(tex: str) -> str:
             else:
                 stack.append(True)
         elif tok == "}":
-            if stack:
+            if len(stack) > 1:
                 pending.pop(len(stack), None)  # arguments pending inside the group that closes
                 stack.pop()
+        elif tok in (r"\xleftarrow", r"\xrightarrow"):
+            # Both labels are in script style, including the optional lower one.
+            _, skip_to = _argument(tex, _optional(tex, m.end()))
         elif tok in _SMALL_ARGS:
             pending[level] = [False] * _SMALL_ARGS[tok]
         elif tok in _SAME_STYLE_ARGS:
             pending[level] = [True] * _SAME_STYLE_ARGS[tok]
-        elif tok == "\\limits" and prev in big and all(stack):
+            if tok == r"\sqrt":
+                skip_to = _optional(tex, m.end())  # the root index is in script style
+            elif tok == "\\operatorname" and (star := re.match(r"\s*\*\s*\{", tex[m.end():])):
+                starred_ends.add(_group_end(tex, m.end() + star.end() - 1))
+        elif tok in (r"\textstyle", r"\scriptstyle", r"\scriptscriptstyle"):
+            stack[-1] = False
+        elif tok == "\\limits" and (prev in _DISPLAY_LIMITS or prev_end in starred_ends) and all(stack):
             out.append(tex[last:m.start()])
             last = m.end()
-        prev = tok
+        prev, prev_end = tok, m.end()
     out.append(tex[last:])
     return "".join(out)
 
 
-def _raw_greek(tex: str) -> str:
-    """Raw Greek letters (texmath leaves them inside \\mathbf) as control words; a bold
+def _symbol_commands(tex: str) -> str:
+    """Raw symbols (including Greek inside \\mathbf) as control words; a bold
     lowercase Greek letter becomes \\boldsymbol, since \\mathbf does not embolden it."""
     from .compat import _text_spans  # text arguments keep their characters
 
@@ -489,9 +604,13 @@ def _raw_greek(tex: str) -> str:
         spans = _text_spans(s)
         return re.sub(pattern, lambda m: m.group(0) if any(a <= m.start() < b for a, b in spans) else repl(m), s)
 
+    tex = outside_text(r"\\[a-zA-Z@]+|\\.", lambda m: _COMMAND_ALIASES.get(m[0], m[0]), tex)
+    # The MathML reader joins a fixed infix arrow to its left operand (a\rightarrow b).
+    tex = outside_text(r"(?<=[a-zA-Z0-9)}\]])\\(?:[a-zA-Z]*(?:arrow|harpoon)[a-zA-Z]*|(?:long)?mapsto|leadsto)"
+                       r"(?= )", lambda m: " " + m[0], tex)
     tex = outside_text(r"\\mathbf\{(%s)\}" % letters, bold, tex)
-    tex = outside_text(letters, lambda m: "\\" + _GREEK[m.group()] +
-                       (" " if m.string[m.end():m.end() + 1].isalpha() else ""), tex)
+    tex = outside_text("[" + "".join(_RAW_SYMBOLS) + "]", lambda m: "\\" + _RAW_SYMBOLS[m.group()] +
+                       (" " if re.match("[a-zA-Z@]", m.string[m.end():m.end() + 1]) else ""), tex)
     # \mathbf leaves lowercase Greek (and \nabla, \partial) as it is
     lower = "|".join(n for ch, n in _GREEK.items() if not ch.isupper())
     tex = re.sub(r"\\mathbf\{\\(%s)\}" % lower, r"\\boldsymbol{\\\1}", tex)
@@ -555,21 +674,15 @@ def tidy_tex(tex: str, display: bool) -> str:
     """Clean up the TeX that texmath wrote for an equation read from MathML / OMML."""
     out = _unwrap_cells(tex)
     out = _cases(out)
-    if display:
-        out = _drop_display_limits(out)
     out = re.sub(r"(?<!\\)[_^]\{\s*\}", "", out)  # x_{i}^{} -> x_{i}
     out = _edge_spaces(out)  # before \lbrack -> [ below: a row may start with the bracket once its space is gone
-    # \lbrack -> [, except where [ would start an option: after a row break (\\[2pt]), \begin{..} or a
-    # command (\sqrt[3])
-    out = re.sub(r"\\lbrack(?![a-zA-Z@]) ?", lambda m: m.group(0) if re.search(
-        r"(?:\\\\|\\cr|\\begin\s*\{[^{}]*\}|\\[a-zA-Z@]+)\s*$", m.string[:m.start()]) else "[", out)
-    out = re.sub(r"\\rbrack(?![a-zA-Z@]) ?", "]", out)
-    # set minus: Word and texmath's own MathML give a backslash or U+2216 (\smallsetminus)
-    out = re.sub(r"\\(?:backslash|smallsetminus)(?![a-zA-Z@])", r"\\setminus", out)
-    out = re.sub(r"\\varnothing(?![a-zA-Z@])", r"\\emptyset", out)  # U+2205 EMPTY SET
+    out = _plain_brackets(out)
+    out = _labelled_operators(out)
+    if display:
+        out = _drop_display_limits(out)
     out = _norm_bars(out)
     out = _bold_numbers(out)
-    out = _raw_greek(out)
+    out = _symbol_commands(out)
     return out
 
 
@@ -583,6 +696,31 @@ _ARGUMENT_ENVS = frozenset("array subarray alignat alignat* alignedat".split()) 
 # array's, mathtools' starred matrices and multlined
 _OPTION_ENVS = frozenset("aligned alignedat gathered array multlined matrix* pmatrix* bmatrix* Bmatrix* "
                          "vmatrix* Vmatrix* smallmatrix* psmallmatrix* bsmallmatrix* tabular".split())
+
+
+def _plain_brackets(tex: str) -> str:
+    r"""A bracket after a symbol such as \in or \left is safe. Guard the commands and line starts
+    where LaTeX would consume it as an option."""
+    if r"\lbrack" not in tex and r"\rbrack" not in tex:
+        return tex
+    tokens = _EDGE_TOKEN.findall(tex)
+    starts, _ = _line_starts_and_ends(tokens)
+    guarded = set()
+    for i, kind in starts.items():
+        if kind:
+            while i < len(tokens) and tokens[i].isspace():
+                i += 1
+            guarded.add(i)
+    options = {r"\sqrt", r"\cfrac", r"\xleftarrow", r"\xrightarrow", r"\smash", r"\cr"}
+    prev = ""
+    for i, token in enumerate(tokens):
+        if token == r"\rbrack" or (token == r"\lbrack" and i not in guarded and prev not in options):
+            tokens[i] = "[" if token == r"\lbrack" else "]"
+            if i + 1 < len(tokens):
+                tokens[i + 1] = tokens[i + 1].removeprefix(" ")  # texmath's control-word terminator
+        if token.strip():
+            prev = token
+    return "".join(tokens)
 
 
 def _line_starts_and_ends(tokens: List[str]) -> "tuple[dict, list]":

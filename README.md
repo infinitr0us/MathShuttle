@@ -32,13 +32,25 @@ the tool converts all 784, and 764 of them come back from Word as the same symbo
 
 ## Quick start
 
-* `dist\MathShuttle\MathShuttle.exe`: the standalone app (no Python needed).
-  Build it with `.\build_exe.ps1` (see below); add `-Shortcut` for a Start-menu entry.
-* `MathShuttle.pyw`: double-click to run from source with any Python ≥ 3.9 (tkinter only).
-* `python -m mathshuttle`: the same GUI; with arguments it becomes a CLI (see below).
+1. Install **pandoc**, the conversion engine: `winget install JohnMacFarlane.Pandoc` (Windows) or
+   `brew install pandoc` (macOS).
+2. Download the app from the [Releases page](https://github.com/infinitr0us/MathShuttle/releases):
+   `MathShuttle-<version>-windows-x64.zip` (unzip it anywhere, run `MathShuttle\MathShuttle.exe`) or
+   `MathShuttle-<version>-macos-arm64.zip` (drag `MathShuttle.app` into Applications; see *macOS*
+   below for the first start). No Python needed.
+3. Type or paste LaTeX, click **Copy for Word/PowerPoint**, and press Ctrl+V (Cmd+V) in Word or
+   PowerPoint: the equation arrives as a native, editable equation. For the other way, copy an
+   equation in Word and click **Paste from Word/PowerPoint**.
+
+Other ways to run it:
+
 * `pip install git+https://github.com/infinitr0us/MathShuttle` (or `pipx install ...`): the commands
   `mathshuttle` (the window without arguments, the CLI with them) and `mathshuttle-gui` (the window
   without a console window on Windows). No other Python packages are needed.
+* From a clone: `MathShuttle.pyw` (double-click; any Python ≥ 3.9 with tkinter) or
+  `python -m mathshuttle` (the same window; with arguments it becomes a CLI, see below).
+* Build the app yourself: `.\build_exe.ps1` gives `dist\MathShuttle\MathShuttle.exe` (add `-Shortcut`
+  for a Start-menu entry); `./build_app.sh` gives `dist/MathShuttle.app` on the Mac.
 
 Requirement: **pandoc** (`winget install JohnMacFarlane.Pandoc`). The app looks for
 `pandoc.exe` next to itself, on `PATH`, then in `%LOCALAPPDATA%\Pandoc`; set
@@ -117,10 +129,12 @@ would write rather than texmath's literal rendering of Office's structure:
 | a binomial | `\left( \frac{n}{k} \right)` | `\binom{n}{k}` |
 | an aligned block | `a & {= b}` (the `=` loses its spacing) | `a & = b` |
 | cases | `\left\{ \begin{matrix} … \right.` | `\begin{cases} … \end{cases}` |
+| an arrow labelled above and below | `\underset{a}{\overset{b}{\rightarrow}}` | `\xrightarrow[a]{b}` |
+| symbols such as ≔, ✓ and ℏ | `≔`, `✓`, `\hslash` | `\coloneqq`, `\checkmark`, `\hbar` |
 | ℓ, set minus, ∅, bold numbers | `\mathcal{l}`, `\backslash`, `\varnothing`, `\mathbf{2}\mathbf{5}.\mathbf{2}` | `\ell`, `\setminus`, `\emptyset`, `\mathbf{25.2}` |
 
-Also: no `\limits` on sums in display maths, no empty scripts (`x_{i}^{}`), no `~` for the space typed
-after the last symbol of an equation (Word keeps it). Each result is checked to
+Tidy drops redundant `\limits` on display operators such as `\sum`, `\max` and `\lim`, empty scripts
+(`x_{i}^{}`), and the `~` for a space typed after the last symbol in Word. Each result is checked to
 convert again; if a clean-up would break an equation, texmath's own LaTeX is kept.
 
 What Word itself loses (checked with Word / PowerPoint 16.0.20527, so no tool can bring it back from
@@ -152,8 +166,15 @@ around it. From the list, use one as input, copy it for Word / PowerPoint or as 
 them all to a `.tex` file, or to a Word document (`.docx`) holding each as a native equation under
 the line that says where it was, for a collaborator who edits them in Word; on the command line,
 `python -m mathshuttle extract FILE [-t FORMAT] [--docx OUT]`.
-Office equations go through the same Tidy LaTeX as a pasted one; a `.tex` file's `\input` files
-and macros are read. Equations made with the old Equation Editor 3.0 or MathType (objects
+Office equations go through the same Tidy LaTeX as a pasted one. A `.tex` file is read with its
+`\input` / `\include` files, and its own definitions apply to its equations without a macro file:
+those pandoc expands itself and those it does not (`\DeclarePairedDelimiter`, xparse's
+`\NewDocumentCommand`, the `\foreach \x in {A,...,Z}` loop that defines `\calA`...`\calZ`), also from
+a `.sty` next to it. With the `.aux` file LaTeX wrote next to it, `\eqref{eq:loss}` inside an equation
+shows its number, (2.1). When pandoc cannot read the preamble at all (a conference style file it trips
+over), the body is read alone, with the preamble's definitions, and a note says so. An equation that
+still cannot be converted is listed with its reason; in the Word export it is kept as LaTeX text
+under its line, with the reason. Equations made with the old Equation Editor 3.0 or MathType (objects
 without Office Math inside) cannot be read; their number is reported.
 
 MathML input may also come from elsewhere: prefixed elements (`<mml:math>`, as written by
@@ -198,8 +219,27 @@ Markdown, with environments written into the text; there `\(…\)` and `\[…\]`
 you wrote): plain-TeX font switches (`{\rm OOD}`, `\rm{OOD}`, `\bf`, `\it`, `\cal`, `\sf`, `\tt`,
 scoped like TeX does), `\notag`, `\def` / `\let`, `\mathbbm`, `\Bbb`, `\frak`, `dcases`, `rcases`,
 `cases*` / `dcases*` (text column), `matrix*` (and `pmatrix*`…), `\tbinom` / `\dbinom` /
-`\nicefrac` (plain size), `\textcolor`, `\smash`, `\vphantom`, `\mathclap`. Rewrites that lose something (a colour, a strut,
-the size of a fraction) are noted in the status bar. Also corrected: texmath 0.13 writes `\mathbf{x}`
+`\nicefrac` (plain size), `\textcolor`, `\smash`, `\vphantom`, `\mathclap`, and standard LaTeX that
+texmath 0.13 rejects: `\hspace` in mm or ex, `\kern`, `\mkern`, `\text{a \textbf{b}}`, `\textnormal`,
+`\cfrac`, `\intertext` (a row of text), `\sideset`, `\varlimsup` / `\varliminf` / `\varinjlim`,
+`\operatornamewithlimits`, `\bigm|`, `\widetilde\mathcal K`, `aligned[t]`, booktabs rules in an
+`array`, `\qedhere`, `\eqref` / `\ref` / `\cite` (as text). Rewrites that lose something (a colour, a
+strut, the size of a fraction) are noted in the status bar.
+
+**Built-in packs.** Commands of packages that papers load and texmath does not know are written out as
+the package defines them, unless your macros or the paper define them: **physics** (`\ket`, `\bra`,
+`\braket`, `\mel`, `\expval`, `\dv`, `\pdv`, `\comm`, `\qty(...)`, `\abs`, `\norm`, `\vb`, `\vu`,
+`\order`, `\eval`, `\grad`, `\curl`, `\laplacian`, `\mqty`, `\Tr`...; its `\div` only when the paper
+loads physics, since `\div` is ÷ in LaTeX), **braket** (`\Bra`, `\Ket`, `\Braket`, `\set`, `\Set`),
+**slashed**, **tensor** (`\tensor{T}{^a_b}`), AASTeX's `\farcs`, and siunitx quantities whose unit is
+written as letters (`\qty{12}{kHz}`, set upright as LaTeX does). A note names the commands written so.
+
+**Errors in plain words.** When an equation still cannot be converted, the first line says why:
+which command texmath does not know (with a "did you mean `\alpha`?" for a typo, and where to define
+your own macro), a `{` that is never closed, a `tikzcd` diagram (which is no equation); with several
+equations in the input, which one. texmath's own message follows below it.
+
+Also corrected: texmath 0.13 writes `\mathbf{x}`
 as bold *italic*, `\|` and a sized `\lVert` / `\rVert` (`\left\lVert`, so also a `\norm{x}` from
 `\DeclarePairedDelimiter`) as "parallel to" (U+2225, not the norm bar U+2016), `\setminus` as a
 backslash and `\varnothing` as a diameter sign.
@@ -210,7 +250,10 @@ backslash and `\varnothing` as a diameter sign.
 (`math_commands.tex`, a preamble) plus definitions typed in the dialog. Read from them:
 `\newcommand` / `\renewcommand` / `\providecommand` (with arguments and an optional default),
 `\def` (also with delimited parameters), `\let`, `\DeclareMathOperator(*)`,
-`\DeclarePairedDelimiter` (with `\abs*{x}` and `\abs[\big]{x}`); anything else in the file
+`\DeclarePairedDelimiter` (with `\abs*{x}` and `\abs[\big]{x}`) and `\DeclarePairedDelimiterX`,
+xparse's `\NewDocumentCommand` (mandatory arguments and a first optional one), and the `\foreach`
+alphabet loop (`\csname cal\x\endcsname`); when one name is defined twice, the later definition
+holds; anything else in the file
 (`\usepackage`, text) is ignored, and a definition that is never closed is reported. The macros an
 equation uses (and those they use) are expanded by pandoc's LaTeX reader, which follows TeX
 (`\let` copies the definition it sees, a font switch in a macro acts where the macro is used),
@@ -241,17 +284,39 @@ LaTeX → LaTeX never re-renders the equation; only the delimiters change.
 
 ## Command line
 
+`mathshuttle` opens the window when run without arguments. Use `mathshuttle --help` for commands
+and examples, or `mathshuttle extract --help` for the options of one command. From a source
+checkout, use `python -m mathshuttle` in place of `mathshuttle`.
+
 ```
-python -m mathshuttle convert -f latex -t omml [--mode display|inline] [--wrapper align]
-                                [--macros FILE ...] [--no-tidy] [FILE]
-python -m mathshuttle copy  [-f latex] [--macros FILE ...] [--index N] [FILE]   # → clipboard, ready to paste into Office
-python -m mathshuttle paste [-t latex] [--wrapper W] [--no-tidy]    # equation copied in Office → stdout
-python -m mathshuttle extract FILE [-t latex] [--wrapper W] [--docx OUT]  # every equation of a .docx/.pptx/.tex/.md
-python -m mathshuttle version                                       # pandoc + embedded texmath version
+mathshuttle convert -e 'x^2' -t mathml
+mathshuttle copy -e 'x^2'
+mathshuttle paste --wrapper bare
+mathshuttle extract paper.tex -t typst
+mathshuttle --version
 ```
-`FILE` defaults to stdin. Input and output are UTF-8 (also through pipes and redirection); an input
-file may also be UTF-16 with a BOM (what `>` writes in Windows PowerShell 5.1).
-Errors (e.g. texmath parse errors, with the caret diagram) go to stderr with exit code 1.
+
+* `convert` writes equations to standard output. The default input is LaTeX (`-f latex`).
+  The default output is OMML text (`-t omml`) for working with Office XML. Use `copy` for pasting
+  into Word or PowerPoint. Use `--annotate` to include the TeX source in MathML output.
+  Conversion errors go to standard error and set exit code 1.
+* `convert` and `copy` take a file name or a literal expression with `-e TEXT` (`--expr TEXT`).
+  Omit both to read standard input. When typing at the keyboard, finish on a new line with
+  Ctrl+Z then Enter on Windows or Ctrl+D on macOS and Linux. Input and output use UTF-8,
+  including in pipes. Input files may also use UTF-16 with a BOM.
+* `copy --index N` puts equation N on the clipboard. The default is the first equation.
+  `paste` reads an equation copied in Office and writes it to standard output as LaTeX by default.
+  Use `--mode inline` or `--mode display` with `convert`, `copy` or `paste` to override the detected mode.
+* `extract FILE` writes the equations from a `.docx`, `.pptx`, `.tex` or `.md` document in order,
+  each with a location comment. The default output is LaTeX. With `-t mathml`, `omml`, `typst`
+  or `eqn`, a failed equation gets a comment explaining the failure, and extraction continues.
+  Standard error lists the failed equations by number and location and reports the count.
+  The exit code is 1 if any equation failed or 0 on success. Use `--docx OUT` to also write
+  the equations to a Word document.
+* `--macros FILE` loads LaTeX definitions for `convert`, `copy` and `extract` and can be repeated.
+  `--wrapper` sets the delimiters or environment for LaTeX output. With `convert` or `paste`,
+  `--no-tidy` keeps texmath's original LaTeX from MathML or OMML.
+* `--version` and `version` both show the MathShuttle, pandoc and texmath versions and the pandoc path.
 
 ## Keeping texmath up to date
 
@@ -328,6 +393,8 @@ mathshuttle/
   pandoc_engine.py   find/run pandoc; read latex|mathml|omml → Equation(tex, display); write mathml|omml|eqn|typst
   latex_wrap.py      delimiter / environment detection and re-wrapping for LaTeX output
   compat.py          LaTeX texmath does not take → LaTeX it does; macro files
+  packs.py           built-in packs: physics, braket, slashed, tensor, siunitx literal units, AASTeX
+  diagnose.py        texmath's parse errors in plain words (unknown command, unclosed brace...)
   tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
   documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are; a .docx of them

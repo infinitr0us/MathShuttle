@@ -18,7 +18,7 @@ import time
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import compat
 from .pandoc_engine import (MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _api, _collect_math, _run,
@@ -58,6 +58,17 @@ class DocumentEquations:
     source: str  # "latex" when the equations are the document's own LaTeX, else "office"
     found: List[Found] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    # a .tex file: its own source and that of the local files it reads, for the definitions pandoc does
+    # not apply (\DeclarePairedDelimiter, the \foreach alphabet idiom...); its \label numbers (.aux)
+    definitions: str = ""
+    labels: Dict[str, str] = field(default_factory=dict)
+
+    def macros(self, user: Optional[compat.Macros]) -> Optional[compat.Macros]:
+        """The macros for this document's equations: the user's files apply to a document's own LaTeX
+        (with its own definitions, which win), not to equations read from Office."""
+        if self.source != "latex":
+            return None
+        return compat.with_document(user, self.definitions, self.labels)
 
 
 def _q(ns: str, tag: str) -> str:
@@ -158,12 +169,18 @@ class _Collector:
             self.display.append(display or piece.tag == _q(OMML_NS, "oMathPara"))
 
     def result(self, path: str) -> DocumentEquations:
+        from .convert import tidied, _UNICODE_NOTE
+
         result = DocumentEquations(path, "office")
         for eq, (where, context), display in zip(_read_fragments(self.fragments), self.places, self.display):
             if eq is None:
                 result.notes.append("an equation in %s could not be read" % where)
                 continue
-            result.found.append(Found(Equation(eq.tex, eq.display or display), where, context))
+            # A standalone equation on a slide is display maths even in a bare m:oMath.
+            eq = tidied(Equation(eq.tex, eq.display or display))
+            result.found.append(Found(eq, where, context))
+            if not eq.tex.isascii() and _UNICODE_NOTE not in result.notes:
+                result.notes.append(_UNICODE_NOTE)
         if self.legacy:
             result.notes.append("%d Equation Editor 3.0 / MathType object(s) cannot be read (no OMML inside)"
                                 % self.legacy)
@@ -171,9 +188,8 @@ class _Collector:
 
 
 def _read_fragments(fragments: List[ET.Element]) -> List[Optional[Equation]]:
-    """The equations of OMML fragments, one per fragment, cleaned up as when pasted: all in one pandoc
+    """The equations of OMML fragments, one per fragment: all in one pandoc
     run, or one by one if the counts do not match (a fragment texmath skips: None)."""
-    from .convert import tidied
     if not fragments:
         return []
     xml = "".join(ET.tostring(f, encoding="unicode") for f in fragments)
@@ -188,7 +204,7 @@ def _read_fragments(fragments: List[ET.Element]) -> List[Optional[Equation]]:
                 eqs.append(read_omml(ET.tostring(f, encoding="unicode"))[0])
             except ConversionError:
                 eqs.append(None)
-    return [tidied(eq) if eq is not None else None for eq in eqs]
+    return eqs
 
 
 # ---- Word ----------------------------------------------------------------------------------------
@@ -349,22 +365,105 @@ def _inline_text(node, words: List[str]) -> None:
             _inline_text(n, words)
 
 
+_READS = re.compile(r"\\(input|include|subfile|usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]+)\}")
+_NEWLABEL = re.compile(r"\\newlabel\{([^{}]+)\}\{\{((?:[^{}]|\{[^{}]*\})*)\}")
+_AUX_INPUT = re.compile(r"\\@input\{([^{}]+)\}")
+
+
+def _local_sources(path: str, text: str) -> str:
+    """The document's text and that of the local files it reads (\\input, \\include, \\subfile, and a
+    \\usepackage'd .sty next to it), for their definitions.  At most 300 files of up to 4 MB."""
+    folder = os.path.dirname(os.path.abspath(path))
+    seen = {os.path.normcase(os.path.abspath(path))}
+    parts, queue = [text], [text]
+    while queue and len(seen) < 300:
+        current = queue.pop(0)
+        for m in _READS.finditer(current):
+            if compat._in_comment(current, m.start()):
+                continue
+            package = m.group(1) in ("usepackage", "RequirePackage")
+            for name in m.group(2).split(","):
+                name = name.strip()
+                if not name:
+                    continue
+                for candidate in ([name + ".sty"] if package else [name, name + ".tex"]):
+                    full = os.path.normcase(os.path.abspath(os.path.join(folder, candidate)))
+                    if full in seen or not os.path.isfile(full):
+                        continue
+                    seen.add(full)
+                    try:
+                        if os.path.getsize(full) > 4 << 20:
+                            continue
+                        with open(full, "rb") as f:
+                            data = decode_text(f.read())
+                    except OSError:
+                        continue
+                    parts.append(data)
+                    queue.append(data)
+                    break
+    return "\n".join(parts)
+
+
+def _aux_labels(path: str) -> Dict[str, str]:
+    """\\label -> number from the .aux file LaTeX wrote next to the document (and the .aux files of its
+    \\include s); empty without one."""
+    labels: Dict[str, str] = {}
+    folder = os.path.dirname(os.path.abspath(path))
+    todo, seen = [os.path.splitext(os.path.abspath(path))[0] + ".aux"], set()
+    while todo and len(seen) < 300:
+        aux = todo.pop(0)
+        if aux in seen or not os.path.isfile(aux):
+            continue
+        seen.add(aux)
+        try:
+            with open(aux, "rb") as f:
+                data = f.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        for m in _NEWLABEL.finditer(data):
+            key, number = m.group(1), m.group(2).strip()
+            if "@cref" not in key and number and not number.startswith("\\"):
+                labels.setdefault(key, number)
+        todo += [os.path.join(folder, n) for n in _AUX_INPUT.findall(data)]
+    return labels
+
+
+def _read_latex_blocks(text: str, folder: str, notes: List[str]) -> Tuple[list, str]:
+    """pandoc's reading of a .tex file; if pandoc cannot read the file (a style file it trips over:
+    "unexpected \\@ ... \\maketitle"), the body alone, whose macros then come from the preamble."""
+    try:
+        out, err = _run(["-f", "latex", "-t", "json"], text.encode("utf-8"), cwd=folder)
+    except ConversionError as e:
+        begin = re.search(r"\\begin\s*\{document\}", text)
+        end = re.search(r"\\end\s*\{document\}", text)
+        if not begin:
+            raise
+        body = text[begin.end():end.start() if end and end.start() > begin.end() else len(text)]
+        out, err = _run(["-f", "latex", "-t", "json"], body.encode("utf-8"), cwd=folder)
+        reason = next((line.strip() for line in str(e).splitlines() if line.strip() and "WARNING" not in line), "")
+        notes.append("pandoc could not read the preamble (%s): the body was read alone, with the preamble's "
+                     "definitions." % _shorten(reason, 120))
+    return json.loads(out)["blocks"], err
+
+
 def read_text_document(path: str, fmt: str) -> DocumentEquations:
     """A .tex file (\\input and \\include found next to it) or a .md file, read by pandoc: each
     equation as LaTeX, with the heading above it and its \\label; pandoc's warnings (a file that
-    \\input names but that is not there) become notes."""
+    \\input names but that is not there) become notes.  A .tex file also gets its own definitions and
+    \\label numbers (see :class:`DocumentEquations`)."""
     folder = os.path.dirname(os.path.abspath(path))
     with open(path, "rb") as f:
         text = decode_text(f.read())
+    result = DocumentEquations(path, "latex")
     # a .md file: pandoc's Markdown, where \[1\] is an escaped bracket (pandoc writes [1] so), not maths
     # as in pasted chat text (MARKDOWN); raw TeX environments in it are read all the same
     markdown = fmt == "markdown"
     if markdown:  # (with money before maths read right: "$5.00 ($p$ after tax)")
         blocks, err = markdown_blocks(text, "markdown", folder)
     else:
-        out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
-        blocks = json.loads(out)["blocks"]
-    result = DocumentEquations(path, "latex")
+        blocks, err = _read_latex_blocks(text, folder, result.notes)
+        result.definitions = _local_sources(path, text)
+        result.labels = _aux_labels(path)
     result.notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
                      if line.startswith("[WARNING]")]
     definitions: List[str] = []  # the raw TeX definitions so far (a .md file)
@@ -418,19 +517,41 @@ def _inlines(text: str) -> list:
     return out
 
 
+# the TeX keeps its line breaks (continuation lines indented by two spaces), then texmath's message
+_UNCONVERTED = re.compile(r"\[WARNING\] Could not convert TeX math ([\s\S]*?), rendering as TeX:\n((?:  .*\n?)*)")
+
+
+def _unconverted(err: str, prepared: List[str]) -> Dict[int, str]:
+    """Which equations (1-based) pandoc wrote as TeX text, with texmath's reason, from its warnings
+    ("[WARNING] Could not convert TeX math <tex>, rendering as TeX:" then texmath's message)."""
+    by_text: Dict[str, str] = {}
+    for m in _UNCONVERTED.finditer(err.replace("\r\n", "\n")):
+        lines = [ln.strip() for ln in m.group(2).split("\n") if ln.strip()]
+        reason = next((b for a, b in zip(lines, lines[1:]) if a.startswith("^") and not b.startswith("^")), "")
+        by_text.setdefault(" ".join(m.group(1).split()), reason)
+    out: Dict[int, str] = {}
+    for i, tex in enumerate(prepared, 1):
+        key = " ".join(tex.split())
+        if key in by_text:
+            out[i] = by_text[key] or "texmath could not read it"
+    return out
+
+
 def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros] = None) -> List[str]:
     """The document's equations as a Word document (`path`), each a native equation under a line that
     says where it was ("[3] Method"), in one pandoc run; for a collaborator who edits them in Word.
     Macros apply to a document's own LaTeX.  Returns notes: equations that texmath cannot write are in
     the file as LaTeX text.  The file is written next to `path` first and then put in its place, so a
-    failed export leaves an older file as it was."""
-    blocks: list = [{"t": "Header", "c": [1, ["", [], []], _inlines("Equations of " + os.path.basename(doc.path))]}]
+    failed export leaves an older file as it was.  An equation that texmath cannot write is in the file
+    as LaTeX text, under its line with the reason."""
     own = doc.source == "latex"
+    used = doc.macros(macros)
     notes: List[str] = []
     tags = False
-    for i, found in enumerate(doc.found, 1):
+    prepared: List[str] = []
+    for found in doc.found:
         try:
-            tex, new = compat.for_texmath(found.equation.tex, macros if own else None, "omml")
+            tex, new = compat.for_texmath(found.equation.tex, used, "omml")
         except ConversionError:  # (a definition compat cannot use): as it is, pandoc writes it as text
             tex, new = found.equation.tex, []
         if own:  # what was approximated (a colour, a resized fraction...); LaTeX from Office has none
@@ -438,10 +559,21 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
             # (a % after an even number of backslashes starts a comment: \\% \tag{old} is one)
             active = re.sub(r"(?<!\\)((?:\\\\)*)%[^\n]*", r"\1", tex)
             tags |= bool(re.search(r"\\tag(?![a-zA-Z@])", active))
-        kind = "DisplayMath" if found.equation.display else "InlineMath"
-        blocks.append({"t": "Para", "c": [{"t": "Emph", "c": _inlines("[%d] %s" % (i, found.where))}]})
-        blocks.append({"t": "Para", "c": [{"t": "Math", "c": [{"t": kind}, tex]}]})
-    source = json.dumps({"pandoc-api-version": _api(), "meta": {}, "blocks": blocks}).encode("utf-8")
+        prepared.append(tex)
+
+    def source(reasons: Dict[int, str]) -> bytes:
+        blocks: list = [{"t": "Header", "c": [1, ["", [], []],
+                                              _inlines("Equations of " + os.path.basename(doc.path))]}]
+        for i, (found, tex) in enumerate(zip(doc.found, prepared), 1):
+            kind = "DisplayMath" if found.equation.display else "InlineMath"
+            line = [{"t": "Emph", "c": _inlines("[%d] %s" % (i, found.where))}]
+            if i in reasons:
+                line += [{"t": "Space"}, {"t": "Strong", "c": _inlines(
+                    "(not converted: %s; it is here as LaTeX text)" % reasons[i])}]
+            blocks.append({"t": "Para", "c": line})
+            blocks.append({"t": "Para", "c": [{"t": "Math", "c": [{"t": kind}, tex]}]})
+        return json.dumps({"pandoc-api-version": _api(), "meta": {}, "blocks": blocks}).encode("utf-8")
+
     target = os.path.abspath(path)
     try:  # a name of its own next to the target (two exports at once do not meet)
         handle, part = tempfile.mkstemp(dir=os.path.dirname(target), prefix="." + os.path.basename(target) + ".",
@@ -450,7 +582,14 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
     except OSError as e:
         raise ConversionError("Could not write %s: %s" % (path, e.strerror or e))
     try:
-        _, err = _run(["-f", "json", "-t", "docx", "-o", part], source)
+        _, err = _run(["-f", "json", "-t", "docx", "-o", part], source({}))
+        reasons = _unconverted(err, prepared)
+        from . import diagnose
+        for i in sorted(reasons)[:50]:  # in plain words (a probe each: not for hundreds of them)
+            words = diagnose.explain(doc.found[i - 1].equation.tex, prepared[i - 1], reasons[i], short=True)
+            reasons[i] = words[0] if words else reasons[i]
+        if reasons:  # once more, with the reason above each equation that stays LaTeX text
+            _, err = _run(["-f", "json", "-t", "docx", "-o", part], source(reasons))
         for attempt in range(5):
             try:
                 os.replace(part, target)
@@ -468,10 +607,12 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
             pass  # moved into place, or held for a moment by a virus scanner
     failed = len(re.findall(r"^\[WARNING\] Could not convert TeX math", err, re.M))
     if failed:
-        notes.append("%d equation%s could not be converted; %s in the file as LaTeX text.%s"
+        notes.append("%d equation%s could not be converted; %s in the file as LaTeX text, under %s line with "
+                     "the reason.%s"
                      % (failed, "" if failed == 1 else "s", "it is" if failed == 1 else "they are",
-                        " A definition of the document's that pandoc does not apply (\\DeclarePairedDelimiter "
-                        "in the preamble) can be given as a macro file (Macros..., --macros)." if own else ""))
+                        "its" if failed == 1 else "their",
+                        " Definitions from a file that the document does not read itself can be given as a "
+                        "macro file (Macros..., --macros)." if own else ""))
     if tags:
         notes.append("\\tag numbers are not carried over: number the equations in Word if they need numbers.")
     return notes

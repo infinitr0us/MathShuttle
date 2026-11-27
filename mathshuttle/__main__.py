@@ -1,20 +1,18 @@
-"""Entry point.
-
-    python -m mathshuttle                       start the GUI
-    python -m mathshuttle convert -f latex -t omml [FILE]     convert FILE (or stdin) to stdout
-    python -m mathshuttle copy [-f latex] [FILE]              put the equation on the clipboard for Word/PowerPoint
-    python -m mathshuttle paste [-t latex] [--wrapper W]      convert the equation copied in Word/PowerPoint
-    python -m mathshuttle extract FILE [-t latex] [--docx OUT]  every equation of a .docx / .pptx / .tex / .md
-    python -m mathshuttle version                             pandoc + embedded texmath version
-"""
+"""Open the MathShuttle window without arguments, or run a command."""
 from __future__ import annotations
 
 import argparse
 import os
+import re
+import shlex
 import sys
 
+from . import __version__
 from .compat import load_macros
 from .convert import MODES, convert, convert_equation, macro_notes, office_copy
+from .documents import READABLE, read_document
+from .latex_wrap import WRAPPER_KEYS
+from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, _mathy, engine_report
 
 # how a line of comment (the equation's place in the document) is written in each output format
 _COMMENT = {"latex": "%% %s", "mathml": "<!-- %s -->", "omml": "<!-- %s -->", "typst": "// %s", "eqn": '.\\" %s'}
@@ -28,24 +26,50 @@ def _comment(fmt: str, text: str) -> str:
             text = text.replace("--", "- -")
         text = text + " " if text.endswith("-") else text
     return _COMMENT[fmt] % text
-from .latex_wrap import WRAPPER_KEYS
-from .pandoc_engine import READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_report
+
+
+def _failure_reason(error: ConversionError) -> str:
+    """In a texmath parse error the diagnosis follows the source line and its caret."""
+    if getattr(error, "short", ""):  # the explanation in plain words (diagnose.explained), on one line
+        return error.short
+    lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+    for marker, reason in zip(lines, lines[1:]):
+        if marker == "^" and reason != "^":
+            return reason
+    return lines[0].rstrip(":") if lines else "Unknown conversion error"
 
 
 class InputError(ValueError):
     """The input file cannot be read; the message is meant for the user."""
 
 
-def _read_source(path: str | None) -> str:
+def _quote_arg(value: str) -> str:
+    """Quote one argument for PowerShell on Windows or a POSIX shell elsewhere."""
+    if sys.platform == "win32":
+        return value if re.fullmatch(r"[\w./:\\-]+", value) else "'" + value.replace("'", "''") + "'"
+    return shlex.quote(value)
+
+
+def _read_source(path: str | None, expr: str | None, command: str) -> str:
     """The input text: UTF-8 (with or without a BOM), or UTF-16 with a BOM - what `>` writes in
     Windows PowerShell 5.1."""
-    if not path or path == "-":
+    if expr is not None:
+        return expr
+    if path is None or path == "-":
+        if sys.stdin.isatty():
+            eof = "Ctrl+Z then Enter" if sys.platform == "win32" else "Ctrl+D"
+            print(f"Reading input from the keyboard. Press {eof} to finish.", file=sys.stderr, flush=True)
         return sys.stdin.read()
     try:
         with open(path, "rb") as f:
             data = f.read()
     except OSError as e:
-        raise InputError("cannot read %s: %s" % (path, e.strerror or e))
+        message = f"cannot read {path}: {e.strerror or e}"
+        if not os.path.exists(path) and (re.search(r"[\s\\^_{}=+*()$]", path) or _mathy(path)):
+            expr_arg = "-e=" if path.startswith("-") else "-e "
+            message += ("\nThe argument was taken as a file name. For an equation, "
+                        f"try mathshuttle {command} {expr_arg}{_quote_arg(path)}")
+        raise InputError(message) from e
     try:
         text = data.decode("utf-16") if data[:2] in (b"\xff\xfe", b"\xfe\xff") else data.decode("utf-8-sig")
     except UnicodeDecodeError as e:
@@ -61,71 +85,101 @@ def _utf8_stdio() -> None:
             stream.reconfigure(encoding=encoding)
 
 
+class _CommandParser(argparse.ArgumentParser):
+    def error(self, message):
+        super().error(message + "\nsee mathshuttle --help")
+
+
 def _cli(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="mathshuttle", description="LaTeX / MathML / OMML equation converter (texmath via pandoc)")
-    sub = parser.add_subparsers(dest="cmd")
-
-    p = sub.add_parser("convert", help="convert between formats")
-    p.add_argument("-f", "--from", dest="src", choices=READ_FORMATS, default="latex")
-    p.add_argument("-t", "--to", dest="dst", choices=WRITE_FORMATS, default="omml")
-    p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto")
-    p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto", help="delimiters for LaTeX output")
-    p.add_argument("--annotate", action="store_true", help="keep the TeX source inside MathML output")
-    p.add_argument("--macros", action="append", default=[], metavar="FILE",
-                   help="macro definitions for LaTeX input (repeatable): math_commands.tex, a preamble...")
-    p.add_argument("--no-tidy", dest="tidy", action="store_false",
-                   help="LaTeX from MathML / OMML exactly as texmath writes it")
-    p.add_argument("file", nargs="?", help="input file (default: stdin)")
-
-    p = sub.add_parser("copy", help="convert and place on the clipboard for Word/PowerPoint")
-    p.add_argument("-f", "--from", dest="src", choices=READ_FORMATS, default="latex")
-    p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto")
-    p.add_argument("--macros", action="append", default=[], metavar="FILE")
-    p.add_argument("--index", type=int, default=1, metavar="N",
-                   help="which equation of the input to copy (1: the first; Office pastes one at a time)")
-    p.add_argument("file", nargs="?")
-
-    p = sub.add_parser("paste", help="convert the equation copied in Word/PowerPoint")
-    p.add_argument("-t", "--to", dest="dst", choices=WRITE_FORMATS, default="latex")
-    p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto")
-    p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto")
-    p.add_argument("--no-tidy", dest="tidy", action="store_false")
-
-    p = sub.add_parser("extract", help="every equation of a .docx, .pptx, .tex or .md file, with where it is")
-    p.add_argument("file")
-    p.add_argument("-t", "--to", dest="dst", choices=WRITE_FORMATS, default="latex")
-    p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto")
-    p.add_argument("--macros", action="append", default=[], metavar="FILE")
-    p.add_argument("--docx", metavar="OUT", help="also write them all as native equations to the Word file OUT")
-
-    sub.add_parser("version", help="show the pandoc / texmath versions in use")
-
-    args = parser.parse_args(argv)
     _utf8_stdio()
+    parser = _CommandParser(
+        prog="mathshuttle",
+        description="Convert equations between LaTeX, MathML and OMML or exchange them with Office.\n"
+                    "Running mathshuttle without arguments opens the window.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  mathshuttle convert -e 'x^2' -t mathml
+  mathshuttle copy -e 'x^2'
+  mathshuttle paste --wrapper bare
+  mathshuttle extract paper.tex -t typst
+  mathshuttle --version""",
+    )
+    version_help = "Show the MathShuttle, pandoc and texmath versions."
+    parser.add_argument("--version", action="store_true", help=version_help)
+    sub = parser.add_subparsers(dest="cmd", title="commands", parser_class=argparse.ArgumentParser)
+
+    def command(name, summary, description=None):
+        return sub.add_parser(name, help=summary, description=description or summary)
+
+    convert_cmd = command(
+        "convert", "Convert equations and write them to standard output.",
+        description="Convert equations and write them to standard output. The default output (-t omml) "
+                    "is OMML text for people working with the XML. Use mathshuttle copy to paste into Office.",
+    )
+    copy_cmd = command("copy", "Copy an equation to paste into Word or PowerPoint.")
+    paste_cmd = command("paste", "Convert an equation copied in Office and write it to standard output.")
+    extract_cmd = command("extract", "Write each equation in a document with its location.")
+    command("version", version_help)
+
+    for p in (convert_cmd, copy_cmd):
+        input_group = p.add_mutually_exclusive_group()
+        input_group.add_argument("-e", "--expr", metavar="TEXT", help="use TEXT instead of a file or standard input")
+        input_group.add_argument("file", nargs="?", metavar="FILE", help="read input from FILE (default: standard input)")
+        p.add_argument("-f", "--from", dest="src", choices=READ_FORMATS, default="latex",
+                       help="input format (default: %(default)s)")
+    for p, default in ((convert_cmd, "omml"), (paste_cmd, "latex"), (extract_cmd, "latex")):
+        p.add_argument("-t", "--to", dest="dst", choices=WRITE_FORMATS, default=default,
+                       help="output format (default: %(default)s)")
+        p.add_argument("--wrapper", choices=WRAPPER_KEYS, default="auto", metavar="WRAPPER",
+                       help="delimiters or environment for LaTeX output (default: auto). Choices: %(choices)s")
+    for p in (convert_cmd, copy_cmd, paste_cmd):
+        p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto",
+                       help="use inline or display math (auto keeps the detected mode)")
+    for p in (convert_cmd, copy_cmd, extract_cmd):
+        p.add_argument("--macros", action="append", default=[], metavar="FILE",
+                       help="load LaTeX macro definitions from FILE (repeatable)")
+    for p in (convert_cmd, paste_cmd):
+        p.add_argument("--no-tidy", dest="tidy", action="store_false",
+                       help="keep texmath's original LaTeX when reading MathML or OMML")
+    convert_cmd.add_argument("--annotate", action="store_true", help="keep the TeX source inside MathML output")
+    copy_cmd.add_argument("--index", type=int, default=1, metavar="N",
+                          help="copy equation N from the input (default: 1, the first equation)")
+    extract_cmd.add_argument("file", metavar="FILE", help="document to read (.tex, .md, .docx or .pptx)")
+    extract_cmd.add_argument("--docx", metavar="OUT", help="also write the equations to the Word file OUT")
+
+    if argv and argv[0] not in sub.choices and argv[0] not in ("--help", "-h", "--version"):
+        name = argv[0]
+        if os.path.isfile(name) or name.lower().endswith(tuple(READABLE)):
+            end_options = "-- " if name.startswith("-") else ""
+            parser.error(f"to read equations from a document, try mathshuttle extract {end_options}{_quote_arg(name)}")
+    args = parser.parse_args(argv)
     errors: tuple = (ConversionError, PandocNotFound, InputError)
     if args.cmd in ("copy", "paste"):
         from . import clipboard
         errors += (clipboard.ClipboardError,)
     try:
-        if args.cmd == "convert":
+        if args.version or args.cmd == "version":
+            print(f"MathShuttle {__version__}")
+            print(engine_report())
+            return 0
+        if args.cmd in ("convert", "copy", "extract"):
             for path in args.macros:
                 if not os.path.isfile(path):
                     raise InputError("macro file %s does not exist" % path)
-            result = convert(_read_source(args.file), args.src, args.dst, args.mode, args.wrapper, args.annotate,
+        if args.cmd == "convert":
+            source = _read_source(args.file, args.expr, args.cmd)
+            result = convert(source, args.src, args.dst, args.mode, args.wrapper, args.annotate,
                              macros=load_macros(args.macros), tidy=args.tidy)
             sys.stdout.write(result.text + "\n")
             for note in result.notes:
                 sys.stderr.write(note + "\n")
         elif args.cmd == "copy":
-            for path in args.macros:
-                if not os.path.isfile(path):
-                    raise InputError("macro file %s does not exist" % path)
             if args.index < 1:
                 raise InputError("--index counts from 1")
-            copy = office_copy(_read_source(args.file), args.src, args.mode, load_macros(args.macros),
-                               index=args.index - 1)
+            source = _read_source(args.file, args.expr, args.cmd)
+            copy = office_copy(source, args.src, args.mode, load_macros(args.macros), index=args.index - 1)
             clipboard.copy_mathml_for_office(copy.mathml)  # the plain text must be the MathML too (see there)
-            sys.stderr.write("".join(n + "\n" for n in copy.notes) or "Equation copied - paste it into Word / PowerPoint.\n")
+            sys.stderr.write("".join(n + "\n" for n in copy.notes) or "Equation copied. Paste it into Word or PowerPoint.\n")
         elif args.cmd == "paste":
             found = clipboard.read_office_equation()
             if not found:
@@ -137,10 +191,6 @@ def _cli(argv: list[str]) -> int:
             for note in result.notes:  # e.g. several equations in the copied text
                 sys.stderr.write(note + "\n")
         elif args.cmd == "extract":
-            from .documents import read_document
-            for path in args.macros:
-                if not os.path.isfile(path):
-                    raise InputError("macro file %s does not exist" % path)
             doc = read_document(args.file)
             macros = load_macros(args.macros)
             notes = list(doc.notes) + macro_notes(macros)
@@ -149,15 +199,25 @@ def _cli(argv: list[str]) -> int:
                 written = write_docx(doc, args.docx, macros)
                 sys.stderr.write("".join(n + "\n" for n in written) + "written to %s\n" % args.docx)
                 sys.stderr.flush()
-            own = macros if doc.source == "latex" else None  # macros apply to a document's own LaTeX
+            own = doc.macros(macros)  # a document's own LaTeX: the macro files and its own definitions
+            failures = []
             for i, found in enumerate(doc.found, 1):
-                text, new = convert_equation(found.equation, args.dst, args.wrapper, own)
-                notes += [n for n in new if n not in notes]
-                sys.stdout.write(_comment(args.dst, "[%d] %s" % (i, found.where)) + "\n" + text + "\n\n")
-            sys.stderr.write("".join(n + "\n" for n in notes) + "%d equation(s) in %s\n" % (
-                len(doc.found), os.path.basename(args.file)))
-        elif args.cmd == "version":
-            sys.stdout.write(engine_report() + "\n")
+                location = f"[{i}] {' '.join(found.where.split())}"
+                try:
+                    text, new = convert_equation(found.equation, args.dst, args.wrapper, own)
+                except ConversionError as e:
+                    reason = _failure_reason(e)
+                    text = _comment(args.dst, "Could not be converted: " + reason)
+                    failures.append(f"{location}: {reason}")
+                else:
+                    notes += [n for n in new if n not in notes]
+                sys.stdout.write(_comment(args.dst, location) + "\n" + text + "\n\n")
+            count = f"{len(doc.found)} equation(s) in {os.path.basename(args.file)}"
+            for line in notes + [count] + failures:
+                print(line, file=sys.stderr)
+            if failures:
+                print(f"{len(failures)} of {count} could not be converted", file=sys.stderr)
+                return 1
         else:
             parser.print_help()
             return 2

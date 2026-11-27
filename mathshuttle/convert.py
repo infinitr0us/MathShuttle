@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from . import compat, latex_wrap, tidy as _tidy
+from . import compat, diagnose as _diagnose, latex_wrap, tidy as _tidy
 from .pandoc_engine import (READ_FORMATS, WRITE_FORMATS, ConversionError, Equation,  # noqa: F401
                             drop_annotations, mathml_elements, parse_mathml, read_equations, read_latex_text,
                             readable_mathml, strip_tex, write_equation, write_mathml)
@@ -22,6 +22,7 @@ FORMAT_LABELS = {
 MODES = [("auto", "Auto"), ("display", "Display"), ("inline", "Inline")]
 
 _TAG_NOTE = "\\tag numbers are not carried over (Word / PowerPoint number equations themselves)."
+_UNICODE_NOTE = "The LaTeX contains a Unicode character that pdfLaTeX may reject."
 
 
 @dataclass
@@ -81,6 +82,14 @@ def for_texmath(eq: Equation, src: str, macros: Optional[compat.Macros],
     return Equation(tex, eq.display), notes if src == "latex" else []
 
 
+def _write(prepared: Equation, dst: str, eq: Equation, which: str = "", **kw) -> str:
+    """write_equation, with texmath's parse error of LaTeX input explained in plain words first."""
+    try:
+        return write_equation(prepared, dst, **kw)
+    except ConversionError as e:
+        raise _diagnose.explained(e, eq.tex, prepared.tex, which) from None
+
+
 def _read(text: str, src: str, mode: str, tidy: bool) -> List[Equation]:
     return _read_text(text, src, mode, tidy)[0]
 
@@ -126,6 +135,8 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
             if tidy and src != "latex":
                 # for the mode of the output (\limits stays in $...$); bare: the equation's own mode
                 eq = tidied(eq, eq.display if wrapper == "bare" else display)
+            if src != "latex" and not eq.tex.isascii():
+                _add(notes, [_UNICODE_NOTE])
             outputs.append(latex_wrap.wrap(eq.tex, wrapper, display))
             numbering_conflict |= latex_wrap.numbering_conflict(eq.tex, wrapper, display)
             # the mode of the output, which the wrapper decides (Auto: a kept environment)
@@ -135,7 +146,8 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
             # the symbols of the input - the identifiers were already read right, see read_mathml)
             prepared, new = for_texmath(eq, src, macros, dst)
             _add(notes, new)
-            outputs.append(write_equation(prepared, dst, annotate=annotate, source=eq.tex))
+            which = "Equation %d of %d" % (i + 1, len(eqs)) if len(eqs) > 1 else ""
+            outputs.append(_write(prepared, dst, eq, which, annotate=annotate, source=eq.tex))
             if src == "latex" and re.search(r"\\tag(?![a-zA-Z@])", eq.tex):
                 _add(notes, [_TAG_NOTE])
     if numbering_conflict:
@@ -322,7 +334,7 @@ def convert_equation(eq: Equation, dst: str, wrapper: str = "auto", macros: Opti
         display = not latex_wrap.wrapper_is_inline(wrapper, eq.display)
         return latex_wrap.wrap(eq.tex, wrapper, display), []
     prepared, notes = for_texmath(eq, "latex", macros, dst)
-    return write_equation(prepared, dst, annotate=annotate, source=eq.tex), notes
+    return _write(prepared, dst, eq, annotate=annotate, source=eq.tex), notes
 
 
 @dataclass
@@ -366,8 +378,11 @@ def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat
         if re.search(r"\\tag(?![a-zA-Z@])", eq.tex):
             _add(notes, [_TAG_NOTE])
         _add(notes, macro_notes(macros))
-    mathml = write_equation(prepared, "mathml", for_office=True)
+    which = "Equation %d of %d" % (index + 1, len(eqs)) if len(eqs) > 1 and src == "latex" else ""
+    mathml = _write(prepared, "mathml", eq, which, for_office=True)
     latex = tidied(eq) if tidy and src != "latex" else eq
+    if src != "latex" and not latex.tex.isascii():
+        _add(notes, [_UNICODE_NOTE])
     return OfficeCopy(mathml, latex_wrap.wrap(latex.tex, "auto", eq.display), notes)
 
 

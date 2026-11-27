@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mathshuttle import pandoc_engine as pe  # noqa: E402
+from mathshuttle import __version__, pandoc_engine as pe  # noqa: E402
 from mathshuttle.__main__ import main  # noqa: E402
 
 
@@ -84,7 +84,11 @@ def test_engine_report_shows_shim_and_target(tmp_path, monkeypatch):
 
 def test_version_command(capsys):
     assert main(["version"]) == 0
-    out = capsys.readouterr().out.splitlines()
-    assert re.fullmatch(r"pandoc \S+  \(texmath \d+(?:\.\d+)+\)", out[0]), out[0]
-    assert os.path.isfile(out[1].split("  ->  ")[0])
-    assert len(out) == 2  # no "version unknown" hint for the real binary
+    report = capsys.readouterr().out
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out == report
+    out = report.splitlines()
+    assert out[0] == f"MathShuttle {__version__}"
+    assert re.fullmatch(r"pandoc \S+  \(texmath \d+(?:\.\d+)+\)", out[1]), out[1]
+    assert os.path.isfile(out[2].split("  ->  ")[0])
+    assert len(out) == 3  # no "version unknown" hint for the real binary

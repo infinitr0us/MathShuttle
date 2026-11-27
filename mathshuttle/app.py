@@ -1046,6 +1046,23 @@ class EquationList(tk.Toplevel):
     def _latex(found) -> str:
         return latex_wrap.wrap(found.equation.tex, "auto", found.equation.display)
 
+    def _macros(self):
+        """The user's macros, plus a .tex file's own definitions for its equations."""
+        user = self.app._macros()
+        return self.doc.macros(user) if self.doc.source == "latex" else user
+
+    def _with_definitions(self, found) -> str:
+        """The equation as LaTeX, after the document's own definitions it needs that pandoc left
+        (\\DeclarePairedDelimiter...): in the main window they then apply as definitions in the input."""
+        latex = self._latex(found)
+        own = self.doc.macros(None) if self.doc.source == "latex" else None
+        if own is None:
+            return latex
+        user = self.app._macros()
+        needed = [d.source for d in own.needed(found.equation.tex)
+                  if not (user and d.name in user.definitions)]
+        return "\n".join(needed + [latex])
+
     def use(self) -> None:
         found = self._selected()
         if found is None:
@@ -1053,7 +1070,7 @@ class EquationList(tk.Toplevel):
         app = self.app
         app.src_var.set("latex")
         app.input.delete("1.0", "end")
-        app.input.insert("1.0", self._latex(found))
+        app.input.insert("1.0", self._with_definitions(found))
         app.input.edit_modified(False)
         app.convert_now()
         app.lift()
@@ -1063,10 +1080,10 @@ class EquationList(tk.Toplevel):
         if found is None:
             return
         try:
-            copy = office_copy(self._latex(found), "latex", self.app.mode_var.get(), self.app._macros())
+            copy = office_copy(self._latex(found), "latex", self.app.mode_var.get(), self._macros())
             clipboard.copy_mathml_for_office(copy.mathml)
         except (ConversionError, PandocNotFound, clipboard.ClipboardError) as e:
-            self.info.set("Could not copy: %s" % str(e).splitlines()[-1])
+            self.info.set("Could not copy: %s" % str(e).splitlines()[0])
             return
         self.info.set("   ".join(["Copied: press %s+V in Word / PowerPoint" % KEY] + copy.notes))
 
@@ -1104,7 +1121,7 @@ class EquationList(tk.Toplevel):
         if not path:
             return
         from .documents import write_docx
-        macros = self.app._macros()
+        macros = self.app._macros()  # (write_docx adds the document's own definitions)
         self.info.set("Writing %s..." % os.path.basename(path))
 
         def done(notes, error) -> None:

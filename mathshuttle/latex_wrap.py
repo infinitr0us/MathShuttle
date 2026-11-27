@@ -203,10 +203,21 @@ def _inline(open_, close, body: str) -> str:
     return "%s%s%s%s" % (open_, body, "\n" if _ends_in_comment(body) else "", close)
 
 
+_LEADING_LABELS = re.compile(r"^((?:\s|%[^\n]*\n)*(?:\\label\s*\{[^{}]*\}(?:\s|%[^\n]*\n)*)+)")
+
+
 def wrap(tex: str, wrapper: str, display: bool = True) -> str:
     """Return `tex` re-wrapped as `wrapper` (one of WRAPPER_KEYS)."""
     if wrapper not in WRAPPER_KEYS:
         raise ValueError("unknown wrapper %r" % wrapper)
+    labels = _LEADING_LABELS.match(tex)
+    if labels and has_outer_env(tex[labels.end():]):
+        # \begin{subequations}\label{g} \begin{align}..\end{align}: pandoc gives the group's label before
+        # the environment, which LaTeX takes only inside subequations (not inside \[ \])
+        rest = tex[labels.end():]
+        if wrapper == "auto":
+            return "\\begin{subequations}%s\n%s\n\\end{subequations}" % (labels.group(1).strip(), rest.strip())
+        tex = rest  # the rows keep their own labels; the group's has no place in another wrapper
     if wrapper == "auto":
         if has_outer_env(tex):
             return tex.strip()
