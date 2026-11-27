@@ -93,7 +93,8 @@ class MacHotkeyListener:
                                              ctypes.byref(self._hotkey_ref))
         if status:
             self.stop()
-            self.error = ("%s is already used by another program" % self.hotkey if status == eventHotKeyExistsErr
+            # (macOS reports a clash within this process only; another program may hold it unnoticed)
+            self.error = ("%s is already in use" % self.hotkey if status == eventHotKeyExistsErr
                           else "could not register %s (Carbon error %d)" % (self.hotkey, status))
         return self.error
 

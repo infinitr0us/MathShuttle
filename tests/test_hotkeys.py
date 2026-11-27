@@ -61,7 +61,7 @@ def test_mac_listener_registers_hears_and_releases():
     try:
         assert listener.start_and_wait() is None and listener.is_alive()
         other = hotkeys.HotkeyListener(KEY)
-        assert "already used" in (other.start_and_wait() or "")  # the same combination twice
+        assert "already in use" in (other.start_and_wait() or "")  # the same combination twice
         listener.simulate_press()  # straight to the application's event target
         assert listener.presses.get(timeout=2) == KEY
         listener.post_press()  # into the main event queue: Tk's event loop must dispatch it

@@ -319,13 +319,14 @@ def test_open_document_lists_and_uses_equations(app, tmp_path):
         del app._show_equations
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="RegisterHotKey: the hotkey is Windows only for now")
+@pytest.mark.skipif(sys.platform not in ("win32", "darwin"), reason="no hotkey here")
 def test_copy_for_office_hotkey_round_trip(app):
     """The hotkey (a simulated press: no keystroke is sent): LaTeX text on the clipboard becomes an
     equation for Office, and pressing again turns it back into LaTeX text.  Overwrites the clipboard."""
     from mathshuttle import hotkeys
     app.src_var.set("latex")
-    app.hotkey = "Ctrl+Alt+Shift+F23"  # not the user's key, which a running MathShuttle may hold
+    # not the user's key, which a running MathShuttle may hold (the Mac has no F21-F24)
+    app.hotkey = "Ctrl+Alt+Shift+F23" if sys.platform == "win32" else "Ctrl+Alt+Shift+F18"
     app.hotkey_var.set(True)
     app._toggle_hotkey()
     assert app._listener is not None, app.status_var.get()
