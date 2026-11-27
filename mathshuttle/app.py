@@ -258,6 +258,7 @@ class App(tk.Tk):
         ttk.Button(bottom, text="Convert", command=self.convert_now).pack(side="left", **pad)
         ttk.Button(bottom, text="Clear", command=self.clear).pack(side="left", padx=(10, 4))
         ttk.Button(bottom, text="Open file...", command=self.open_document).pack(side="left", padx=(10, 4))
+        ttk.Button(bottom, text="Save as Word...", command=self.save_as_word).pack(side="left", padx=4)
 
         # --- the LaTeX preview (above the buttons; shown when a LaTeX installation is found) ---
         self.preview_frame = tk.Frame(self, bg="white", height=10, highlightthickness=1, highlightbackground="#c8c8c8")
@@ -858,6 +859,34 @@ class App(tk.Tk):
                 pass  # the window closed meanwhile (the thread still finishes its work)
 
         self.after(50, poll)
+
+    def save_as_word(self, path: Optional[str] = None) -> None:
+        """The input as a Word document: a chat answer, notes or LaTeX text with its prose, and each
+        equation a native Word equation (wordexport.passage_to_word)."""
+        text = self.input.get("1.0", "end-1c")
+        if self.src_var.get() != "latex":
+            self._set_status("Save as Word takes LaTeX or Markdown input (a chat answer, notes)", error=True)
+            return
+        if not text.strip():
+            self._set_status("Nothing to save: the input is empty", error=True)
+            return
+        path = path or filedialog.asksaveasfilename(
+            parent=self, title="Save the input as a Word document", defaultextension=".docx",
+            initialfile="equations.docx", filetypes=[("Word document", "*.docx"), ("All files", "*.*")])
+        if not path:
+            return
+        from .wordexport import passage_to_word
+        macros = self._macros()
+        self._set_status("Writing %s..." % os.path.basename(path))
+
+        def done(notes, error) -> None:
+            if error is not None:
+                if not isinstance(error, (ConversionError, PandocNotFound)):
+                    raise error
+                self._set_status(str(error).splitlines()[0] if str(error).strip() else "Could not save", error=True)
+                return
+            self._set_status("   ".join(["Written: %s" % os.path.basename(path)] + (notes or [])))
+        self._in_background(lambda: passage_to_word(text, path, macros), done, daemon=False)
 
     def open_document(self, path: Optional[str] = None) -> None:
         """List the equations of a .docx / .pptx / .tex / .md file (Open file...)."""

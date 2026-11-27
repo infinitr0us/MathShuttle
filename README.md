@@ -180,6 +180,17 @@ still cannot be converted is listed with its reason; in the Word export it is ke
 under its line, with the reason. Equations made with the old Equation Editor 3.0 or MathType (objects
 without Office Math inside) cannot be read; their number is reported.
 
+**A passage or a whole paper as a Word file.** **Save as Word...** writes the input, a chat answer,
+Markdown notes or a piece of LaTeX, as a Word document: its prose, headings, lists, tables and code as
+they are, and each equation a native Word equation, made as *Copy for Word/PowerPoint* makes it (your
+macros, the built-in packs). On the command line, `mathshuttle word FILE -o OUT.docx` does the same for a
+passage, and for a whole `.tex` or `.md` file it writes the document: with the paper's own definitions,
+and with the `.aux` file LaTeX wrote next to it, each numbered equation's number at the right margin as
+Word numbers equations itself (`\tag{..}` too), and `\eqref`, `\ref` and numeric `\cite` showing their
+numbers. An equation that cannot be converted stays LaTeX text, followed by the reason. The rest is
+pandoc's reading of the paper: figures, tables and sections as pandoc converts them, and a command
+pandoc does not know is left out, as in pandoc's own conversions.
+
 MathML input may also come from elsewhere: prefixed elements (`<mml:math>`, as written by
 Word's XSLT, MathType or JATS journal XML), named entities (`&InvisibleTimes;`, from
 Mathematica / Maple), several documents each with its own XML declaration. MathML that carries its
@@ -319,6 +330,8 @@ mathshuttle --version
 * `--macros FILE` loads LaTeX definitions for `convert`, `copy` and `extract` and can be repeated.
   `--wrapper` sets the delimiters or environment for LaTeX output. With `convert` or `paste`,
   `--no-tidy` keeps texmath's original LaTeX from MathML or OMML.
+* `word FILE -o OUT.docx` (or `-e TEXT`, or standard input) writes a passage, or a whole `.tex` / `.md`
+  document, as a Word file with native equations (see *A passage or a whole paper as a Word file*).
 * `--version` and `version` both show the MathShuttle, pandoc and texmath versions and the pandoc path.
 
 ## Keeping texmath up to date
@@ -401,6 +414,7 @@ mathshuttle/
   tidy.py            texmath's LaTeX from MathML / OMML → the LaTeX an author writes
   convert.py         convert(text, src, dst, mode, wrapper, macros, tidy) used by GUI and CLI
   documents.py       the equations of .docx / .pptx / .tex / .md files, with where they are; a .docx of them
+  wordexport.py      a passage or a whole .tex / .md document as a Word file (numbers, references, citations)
   hotkeys.py         the system-wide hotkey (Windows: RegisterHotKey in a thread of its own)
   _hotkeys_macos.py  the hotkey on macOS (Carbon RegisterEventHotKey via ctypes)
   preview.py         the LaTeX preview (latex + dvipng)

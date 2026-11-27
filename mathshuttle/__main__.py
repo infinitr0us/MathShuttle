@@ -123,7 +123,21 @@ def _cli(argv: list[str]) -> int:
     copy_cmd = command("copy", "Copy an equation to paste into Word or PowerPoint.")
     paste_cmd = command("paste", "Convert an equation copied in Office and write it to standard output.")
     extract_cmd = command("extract", "Write each equation in a document with its location.")
+    word_cmd = command(
+        "word", "Write a passage or a whole .tex / .md document as a Word file with native equations.",
+        description="Write a passage (a chat answer, Markdown notes, LaTeX text: a file, -e TEXT or standard "
+                    "input) or a whole .tex / .md document as a Word file: its prose, headings, lists and tables, "
+                    "and each equation a native Word equation. A .tex file gets its own definitions, and the "
+                    "equation numbers of its .aux file at the right margin.")
     command("version", version_help)
+
+    word_input = word_cmd.add_mutually_exclusive_group()
+    word_input.add_argument("-e", "--expr", metavar="TEXT", help="use TEXT instead of a file or standard input")
+    word_input.add_argument("file", nargs="?", metavar="FILE",
+                            help="a .tex or .md document, or a text file with a passage (default: standard input)")
+    word_cmd.add_argument("-o", "--output", required=True, metavar="OUT", help="the Word file to write (.docx)")
+    word_cmd.add_argument("--macros", action="append", default=[], metavar="FILE",
+                          help="load LaTeX macro definitions from FILE (repeatable)")
 
     for p in (convert_cmd, copy_cmd):
         input_group = p.add_mutually_exclusive_group()
@@ -166,11 +180,19 @@ def _cli(argv: list[str]) -> int:
             print(f"MathShuttle {__version__}")
             print(engine_report())
             return 0
-        if args.cmd in ("convert", "copy", "extract"):
+        if args.cmd in ("convert", "copy", "extract", "word"):
             for path in args.macros:
                 if not os.path.isfile(path):
                     raise InputError("macro file %s does not exist" % path)
-        if args.cmd == "convert":
+        if args.cmd == "word":
+            from . import wordexport
+            if args.file and os.path.splitext(args.file)[1].lower() in (".tex", ".md"):
+                notes = wordexport.document_to_word(args.file, args.output, load_macros(args.macros))
+            else:
+                source = _read_source(args.file, args.expr, args.cmd)
+                notes = wordexport.passage_to_word(source, args.output, load_macros(args.macros))
+            sys.stderr.write("".join(n + "\n" for n in notes) + "written to %s\n" % args.output)
+        elif args.cmd == "convert":
             source = _read_source(args.file, args.expr, args.cmd)
             result = convert(source, args.src, args.dst, args.mode, args.wrapper, args.annotate,
                              macros=load_macros(args.macros), tidy=args.tidy)

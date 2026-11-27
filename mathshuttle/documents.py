@@ -370,6 +370,7 @@ _READS = re.compile(r"\\(input|include|subfile|usepackage|RequirePackage)\s*(?:\
 _NEWLABEL = re.compile(r"\\newlabel\{([^{}]+)\}\{\{((?:[^{}]|\{[^{}]*\})*)\}(?:\{((?:[^{}]|\{[^{}]*\})*)\})?"
                        r"(?:\{((?:[^{}]|\{[^{}]*\})*)\})?")
 _AUX_INPUT = re.compile(r"\\@input\{([^{}]+)\}")
+_BIBCITE = re.compile(r"\\bibcite\{([^{}]+)\}\{([^{}]*)\}")
 
 
 def _source_text(data: bytes) -> str:
@@ -470,23 +471,29 @@ def _aux_labels(path: str) -> Dict[str, str]:
                 value = (value or "").strip()
                 if value and "\\" not in value:
                     labels.setdefault(field + key, value)
+        for m in _BIBCITE.finditer(data):  # \bibcite{key}{12}: a numeric citation's number ("cite:key")
+            number = m.group(2).strip()
+            if re.fullmatch(r"[\w.\-]{1,12}", number):
+                labels.setdefault("cite:" + m.group(1), number)
         todo += [os.path.join(folder, n) for n in _AUX_INPUT.findall(data)]
     return labels
 
 
-def _read_latex_blocks(text: str, folder: str, notes: List[str]) -> Tuple[list, str, Optional[str]]:
+def _read_latex_blocks(text: str, folder: str, notes: List[str], raw: bool = False) -> Tuple[list, str, Optional[str]]:
     """pandoc's reading of a .tex file; if pandoc cannot read the file (a style file it trips over:
     "unexpected \\@ ... \\maketitle"), the body alone, whose macros then come from the preamble.
-    Returns the blocks, pandoc's warnings, and the preamble when the body was read alone."""
+    Returns the blocks, pandoc's warnings, and the preamble when the body was read alone.  `raw`: keep
+    what the reader does not know as raw TeX (it drops it otherwise, without a word)."""
+    fmt = "latex+raw_tex" if raw else "latex"
     try:
-        out, err = _run(["-f", "latex", "-t", "json"], text.encode("utf-8"), cwd=folder)
+        out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
         return json.loads(out)["blocks"], err, None
     except ConversionError as e:
         begin, end = _document_bounds(text)
         if begin is None:
             raise
         body = text[begin:end if end is not None else len(text)]
-        out, err = _run(["-f", "latex", "-t", "json"], body.encode("utf-8"), cwd=folder)
+        out, err = _run(["-f", fmt, "-t", "json"], body.encode("utf-8"), cwd=folder)
         reason = next((line.strip() for line in str(e).splitlines() if line.strip() and "WARNING" not in line), "")
         notes.append("pandoc could not read the preamble (%s): the body was read alone, with the preamble's "
                      "definitions." % _shorten(reason, 120))
