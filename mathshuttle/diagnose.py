@@ -95,12 +95,13 @@ def _unclosed(tex: str) -> Optional[str]:
             opened.pop()
     if opened:
         return "a { is never closed (it opens before \"%s\")" % _after(tex, opened[-1])
-    lefts = len(re.findall(r"\\left(?![a-zA-Z@])", tex))
-    rights = len(re.findall(r"\\right(?![a-zA-Z@])", tex))
+    tokens = [m for m in _TOKEN.finditer(tex) if not m.group().startswith("%")]  # (a comment is ignored)
+    lefts = sum(1 for m in tokens if m.group() == "\\left")
+    rights = sum(1 for m in tokens if m.group() == "\\right")
     if lefts != rights:
         return "%d \\left but %d \\right: each \\left needs its \\right (\\right. for none)" % (lefts, rights)
-    begins = re.findall(r"\\begin\s*\{([^{}]*)\}", tex)
-    ends = re.findall(r"\\end\s*\{([^{}]*)\}", tex)
+    begins = [m.group("env") for m in tokens if m.group("be") == "begin"]
+    ends = [m.group("env") for m in tokens if m.group("be") == "end"]
     for env in begins:
         if begins.count(env) != ends.count(env):
             return "\\begin{%s} and \\end{%s} do not pair up" % (env, env)

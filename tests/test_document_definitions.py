@@ -50,7 +50,7 @@ def paper(tmp_path):
 
 def test_the_documents_own_definitions_and_labels_apply(paper):
     doc = read_document(paper)
-    assert doc.labels == {"eq:a": "1.1"}
+    assert doc.labels == {"eq:a": "1.1", "page:eq:a": "1", "title:eq:a": "Intro"}
     macros = doc.macros(None)
     for found in doc.found:
         text, _ = convert_equation(found.equation, "mathml", "auto", macros)

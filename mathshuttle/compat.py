@@ -440,6 +440,7 @@ class Definition:
     paired: Optional[Tuple[str, str]] = None  # \DeclarePairedDelimiter: the left and right delimiter
     span: Tuple[int, int] = (0, 0)          # where it is in the text it was read from
     paired_x: Optional[Tuple[int, str]] = None  # \DeclarePairedDelimiterX: its arguments and body
+    loop: bool = False                      # made by a \foreach alphabet loop (pandoc cannot run it)
 
 
 def _control_words(tex: str) -> set:
@@ -493,6 +494,7 @@ def _parse_definition(text: str, m) -> Optional[Definition]:
         return Definition(name, text[m.start():end], frozenset(_control_words(left + right + body) - {name}),
                           (left, right), (m.start(), end), paired_x=(count, body))
     elif cmd.endswith("DocumentCommand"):  # xparse: \NewDocumentCommand{\foo}{O{1} m m}{body}
+        # pandoc's reader implements xparse (o, O{}, \IfNoValueTF, \RenewDocumentCommand): kept as written
         s0 = _GAP.match(text, pos).end()
         if text[s0:s0 + 1] != "{" or _group_end(text, s0) < 0:
             return None
@@ -501,18 +503,8 @@ def _parse_definition(text: str, m) -> Optional[Definition]:
         if text[b0:b0 + 1] != "{" or _group_end(text, b0) < 0:
             return None
         end = _group_end(text, b0)
-        spec = text[s0 + 1:s1 - 1]
-        count, default = 0, None
-        for i, t in enumerate(re.finditer(r"\s*(?:([mo])|O\s*(\{(?:[^{}]|\{[^{}]*\})*\})|(\S))", spec)):
-            if t.group(3) or (t.group(1) == "o" or t.group(2)) and i:  # only a first optional argument
-                return None
-            if t.group(1) == "o" or t.group(2):
-                default = t.group(2)[1:-1] if t.group(2) else ""
-            count += 1
         body = text[b0 + 1:end - 1]
-        source = "\\newcommand{%s}%s%s{%s}" % (name, "[%d]" % count if count else "",
-                                               "[%s]" % default if default is not None else "", body)
-        return Definition(name, source, frozenset(_control_words(body) - {name}), span=(m.start(), end))
+        return Definition(name, text[m.start():end], frozenset(_control_words(body) - {name}), span=(m.start(), end))
     else:  # \newcommand{\foo}[n][default]{body}, \DeclareMathOperator*{\foo}{text}
         if not cmd.startswith("DeclareMathOperator"):
             pos = _optional(text, pos, 2)
@@ -576,7 +568,7 @@ def _letter_loops(text: str) -> "Tuple[List[Definition], List[Tuple[int, int]]]"
                 value = re.sub(re.escape(var) + r"(?![a-zA-Z@])", lambda _m: letter, template)
                 name = "\\" + d.group(1) + letter
                 defs.append(Definition(name, "\\newcommand{%s}{%s}" % (name, value),
-                                       frozenset(_control_words(value) - {name}), span=(m.start(), end)))
+                                       frozenset(_control_words(value) - {name}), span=(m.start(), end), loop=True))
                 found = True
         if found:
             spans.append((m.start(), end))
@@ -620,6 +612,37 @@ def packages_in(text: str) -> set:
         if not _in_comment(text, m.start()):
             names.update(p.strip() for p in m.group(1).split(",") if p.strip())
     return names
+
+
+_VERBATIM = re.compile(r"\\begin\s*\{(verbatim\*?|Verbatim\*?|lstlisting|minted|comment|BVerbatim|LVerbatim)\}"
+                       r"[\s\S]*?\\end\s*\{\1\}|\\(?:verb|lstinline)\*?([^\sa-zA-Z{])[^\n]*?\2")
+
+
+def without_verbatim(text: str) -> str:
+    """LaTeX source without its verbatim parts (a LaTeX example in a tutorial is no definition)."""
+    return _VERBATIM.sub(lambda m: "\n" * m.group().count("\n"), text)
+
+
+def pandoc_leftovers(text: str) -> str:
+    """The definitions in LaTeX source that pandoc's reader does not apply (\\DeclarePairedDelimiter(X),
+    the \\foreach alphabet loop), with the source's \\usepackage lines: what a document or a pasted
+    preamble adds to the macros of its equations, which pandoc already expanded otherwise.  Only
+    those: re-applying all definitions would also apply one that holds in a group elsewhere."""
+    text = without_verbatim(text)
+    if not any(k in text for k in ("\\DeclarePairedDelimiter", "\\foreach", "\\@for", "usepackage")):
+        return ""
+    defs, _ = parse_definitions(text, document=True)
+    wanted = [d for d in defs if d.paired or d.loop]
+    # with the definitions those use (\DeclarePairedDelimiter{\pr}{\myL}{\myR} and \myL's \newcommand)
+    names = {n for d in wanted for n in d.uses}
+    while True:
+        more = {n for d in defs if d.name in names for n in d.uses} - names
+        if not more:
+            break
+        names |= more
+    keep = [d.source for d in defs if d.paired or d.loop or d.name in names]
+    keep += ["\\usepackage{%s}" % p for p in sorted(packages_in(text))]
+    return "\n".join(keep)
 
 
 class Macros:
@@ -850,8 +873,9 @@ def _refs(tex: str, labels: Dict[str, str]) -> str:
         keys = [k.strip() for k in _unbrace(tex[a0:a1]).split(",") if k.strip()]
         if m.group(1).lower().startswith("cite"):
             shown = "[%s]" % ", ".join(keys)
-        else:
-            shown = ", ".join(labels.get(k, k) for k in keys)
+        else:  # (the .aux holds a label's number, page and title: "page:key", "title:key")
+            field = {"pageref": "page:", "nameref": "title:"}.get(m.group(1), "")
+            shown = ", ".join(labels.get(field + k, k) for k in keys)
             shown = "(%s)" % shown if m.group(1) == "eqref" else shown
         in_text = _in(_text_spans(tex), m.start())
         new = shown if in_text else "\\text{%s}" % shown.replace("_", "\\_")
@@ -921,7 +945,7 @@ def _spacing(tex: str) -> str:
 
     def length(value: str, unit: str) -> str:
         factor, base = _LENGTHS[unit]
-        number = float(value.replace(" ", "")) * factor
+        number = float(re.sub(r"\s+", "", value)) * factor  # (a line break between - and the number)
         return "%s%s" % (("%.3f" % number).rstrip("0").rstrip(".") or "0", base)
 
     def sub(m):
@@ -930,7 +954,7 @@ def _spacing(tex: str) -> str:
         if m.group(3):  # \kern / \hskip
             return "\\hspace{%s}" % length(m.group(3), m.group(4))
         if m.group(6) == "mu":  # \mkern 3mu
-            return "\\mspace{%smu}" % m.group(5).replace(" ", "")
+            return "\\mspace{%smu}" % re.sub(r"\s+", "", m.group(5))
         return "\\hspace{%s}" % length(m.group(5), m.group(6))
     return _SPACING.sub(sub, tex)
 
@@ -949,7 +973,8 @@ def _drop_arguments(tex: str, names: Dict[str, int]) -> str:
 
 
 def _sideset(tex: str) -> str:
-    """\\sideset{_a^b}{_c^d}\\sum -> {}_a^b\\sum_c^d (the scripts beside the operator)."""
+    """\\sideset{_a^b}{_c^d}\\sum -> {}_a^b\\sum_c^d (the scripts beside the operator); limits after it
+    (\\sideset{}{'}\\sum_{i=1}^n) stay under and over the operator, the side scripts beside them."""
     pattern = re.compile(r"\\sideset" + _CS)
     while True:
         m = _find(tex, pattern)
@@ -959,7 +984,23 @@ def _sideset(tex: str) -> str:
         r0, r1 = _argument(tex, l1)
         o0, o1 = _argument(tex, r1)
         left, right = _unbrace(tex[l0:l1]), _unbrace(tex[r0:r1])
-        tex = tex[:m.start()] + "{}%s{%s}%s" % (left, tex[o0:o1], right) + tex[o1:]
+        operator, end, limits = tex[o0:o1], o1, {}
+        while True:  # _{..} and ^{..} right after the operator: its limits
+            s = re.compile(_GAP.pattern + r"(\\limits" + _CS + r")?" + _GAP.pattern + r"([_^])").match(tex, end)
+            if not s or s.group(2) in limits:
+                break
+            a0, a1 = _argument(tex, s.end())
+            if a1 <= a0:
+                break
+            limits[s.group(2)] = _unbrace(tex[a0:a1])
+            end = a1
+        if limits:
+            if "^" in limits:
+                operator = "\\overset{%s}{%s}" % (limits["^"], operator)
+            if "_" in limits:
+                operator = "\\underset{%s}{%s}" % (limits["_"], operator)
+        new = "{}%s{%s}%s" % (left, operator, "{}" + right if right and limits else right)
+        tex = tex[:m.start()] + new + tex[end:]
 
 
 def _accent_fonts(tex: str) -> str:

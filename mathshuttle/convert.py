@@ -90,6 +90,14 @@ def _write(prepared: Equation, dst: str, eq: Equation, which: str = "", **kw) ->
         raise _diagnose.explained(e, eq.tex, prepared.tex, which) from None
 
 
+def _with_input_definitions(macros: Optional[compat.Macros], text: str, src: str) -> Optional[compat.Macros]:
+    """The macros plus what LaTeX input defines outside its equations that pandoc's reader drops
+    (\\DeclarePairedDelimiter above $\\abs{x}$, as Open file's Use writes it) and the packages it loads."""
+    if src != "latex":
+        return macros
+    return compat.with_document(macros, compat.pandoc_leftovers(text))
+
+
 def _read(text: str, src: str, mode: str, tidy: bool) -> List[Equation]:
     return _read_text(text, src, mode, tidy)[0]
 
@@ -123,6 +131,7 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
         raise ValueError("cannot write format %r" % dst)
 
     eqs, as_markdown = _read_text(text, src, mode, tidy)
+    macros = _with_input_definitions(macros, text, src)
     notes: List[str] = [_MARKDOWN_NOTE] if as_markdown else []
     if len(eqs) > 1:
         notes.append("%d equations found in the input; each was converted separately." % len(eqs))
@@ -368,6 +377,7 @@ def office_copy(text: str, src: str, mode: str = "auto", macros: Optional[compat
         eqs, as_markdown = _read_text(text, src, mode, tidy)
     if not 0 <= index < len(eqs):
         raise ConversionError("There is no equation %d: the input has %d." % (index + 1, len(eqs)))
+    macros = _with_input_definitions(macros, text, src)
     notes: List[str] = [_MARKDOWN_NOTE] if as_markdown else []
     if len(eqs) > 1:
         notes.append("Equation %d of the %d in the input was copied." % (index + 1, len(eqs)))

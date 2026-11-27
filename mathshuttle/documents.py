@@ -366,47 +366,75 @@ def _inline_text(node, words: List[str]) -> None:
 
 
 _READS = re.compile(r"\\(input|include|subfile|usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]+)\}")
-_NEWLABEL = re.compile(r"\\newlabel\{([^{}]+)\}\{\{((?:[^{}]|\{[^{}]*\})*)\}")
+# \newlabel{key}{{number}{page}{title}{anchor}{}} (hyperref); without hyperref only {number}{page}
+_NEWLABEL = re.compile(r"\\newlabel\{([^{}]+)\}\{\{((?:[^{}]|\{[^{}]*\})*)\}(?:\{((?:[^{}]|\{[^{}]*\})*)\})?"
+                       r"(?:\{((?:[^{}]|\{[^{}]*\})*)\})?")
 _AUX_INPUT = re.compile(r"\\@input\{([^{}]+)\}")
 
 
+def _source_text(data: bytes) -> str:
+    """A source file's text: as decode_text, but a style file in Latin-1 (an old author's é in a comment)
+    is read all the same."""
+    try:
+        return decode_text(data)
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
+
+
 def _local_sources(path: str, text: str) -> str:
-    """The document's text and that of the local files it reads (\\input, \\include, \\subfile, and a
-    \\usepackage'd .sty next to it), for their definitions.  At most 300 files of up to 4 MB."""
+    """The document's text with the local files it reads (\\input, \\include, \\subfile, and a
+    \\usepackage'd .sty next to it) put in where they are read (so that definitions after an \\input
+    win over the file's), without comments and verbatim parts, for its definitions.  At most 300
+    files of up to 4 MB."""
     folder = os.path.dirname(os.path.abspath(path))
     seen = {os.path.normcase(os.path.abspath(path))}
-    parts, queue = [text], [text]
-    while queue and len(seen) < 300:
-        current = queue.pop(0)
+
+    def expand(current: str) -> str:
+        current = compat.without_verbatim(re.sub(r"(?<!\\)((?:\\\\)*)%[^\n]*", r"\1", current))
+        out, last = [], 0
         for m in _READS.finditer(current):
-            if compat._in_comment(current, m.start()):
-                continue
             package = m.group(1) in ("usepackage", "RequirePackage")
+            inserted = []
             for name in m.group(2).split(","):
                 name = name.strip()
-                if not name:
-                    continue
-                for candidate in ([name + ".sty"] if package else [name, name + ".tex"]):
+                for candidate in ([name + ".sty"] if package else [name, name + ".tex"]) if name else []:
                     full = os.path.normcase(os.path.abspath(os.path.join(folder, candidate)))
-                    if full in seen or not os.path.isfile(full):
+                    if full in seen or len(seen) >= 300 or not os.path.isfile(full):
                         continue
                     seen.add(full)
                     try:
                         if os.path.getsize(full) > 4 << 20:
-                            continue
+                            break
                         with open(full, "rb") as f:
-                            data = decode_text(f.read())
+                            inserted.append(expand(_source_text(f.read())))
                     except OSError:
-                        continue
-                    parts.append(data)
-                    queue.append(data)
+                        pass
                     break
-    return "\n".join(parts)
+            out.append(current[last:m.end()])
+            out += ["\n" + part + "\n" for part in inserted]
+            last = m.end()
+        return "".join(out) + current[last:]
+    return expand(text)
+
+
+def _document_bounds(text: str) -> Tuple[Optional[int], Optional[int]]:
+    """Where the body starts and ends (after \\begin{document}, at \\end{document}), not counting
+    those in comments or verbatim parts."""
+    plain = compat.without_verbatim(text)
+    begin = end = None
+    for m in re.finditer(r"\\(begin|end)\s*\{document\}", plain):
+        if compat._in_comment(plain, m.start()):
+            continue
+        if m.group(1) == "begin" and begin is None:
+            begin = m.end()
+        elif m.group(1) == "end" and begin is not None and end is None:
+            end = m.start()
+    return begin, end
 
 
 def _aux_labels(path: str) -> Dict[str, str]:
     """\\label -> number from the .aux file LaTeX wrote next to the document (and the .aux files of its
-    \\include s); empty without one."""
+    \\include s), plus "page:key" and "title:key" for \\pageref and \\nameref; empty without one."""
     labels: Dict[str, str] = {}
     folder = os.path.dirname(os.path.abspath(path))
     todo, seen = [os.path.splitext(os.path.abspath(path))[0] + ".aux"], set()
@@ -422,28 +450,34 @@ def _aux_labels(path: str) -> Dict[str, str]:
             continue
         for m in _NEWLABEL.finditer(data):
             key, number = m.group(1), m.group(2).strip()
-            if "@cref" not in key and number and not number.startswith("\\"):
-                labels.setdefault(key, number)
+            if "@cref" in key or not number or number.startswith("\\"):
+                continue
+            labels.setdefault(key, number)
+            for field, value in (("page:", m.group(3)), ("title:", m.group(4))):
+                value = (value or "").strip()
+                if value and "\\" not in value:
+                    labels.setdefault(field + key, value)
         todo += [os.path.join(folder, n) for n in _AUX_INPUT.findall(data)]
     return labels
 
 
-def _read_latex_blocks(text: str, folder: str, notes: List[str]) -> Tuple[list, str]:
+def _read_latex_blocks(text: str, folder: str, notes: List[str]) -> Tuple[list, str, Optional[str]]:
     """pandoc's reading of a .tex file; if pandoc cannot read the file (a style file it trips over:
-    "unexpected \\@ ... \\maketitle"), the body alone, whose macros then come from the preamble."""
+    "unexpected \\@ ... \\maketitle"), the body alone, whose macros then come from the preamble.
+    Returns the blocks, pandoc's warnings, and the preamble when the body was read alone."""
     try:
         out, err = _run(["-f", "latex", "-t", "json"], text.encode("utf-8"), cwd=folder)
+        return json.loads(out)["blocks"], err, None
     except ConversionError as e:
-        begin = re.search(r"\\begin\s*\{document\}", text)
-        end = re.search(r"\\end\s*\{document\}", text)
-        if not begin:
+        begin, end = _document_bounds(text)
+        if begin is None:
             raise
-        body = text[begin.end():end.start() if end and end.start() > begin.end() else len(text)]
+        body = text[begin:end if end is not None else len(text)]
         out, err = _run(["-f", "latex", "-t", "json"], body.encode("utf-8"), cwd=folder)
         reason = next((line.strip() for line in str(e).splitlines() if line.strip() and "WARNING" not in line), "")
         notes.append("pandoc could not read the preamble (%s): the body was read alone, with the preamble's "
                      "definitions." % _shorten(reason, 120))
-    return json.loads(out)["blocks"], err
+        return json.loads(out)["blocks"], err, text[:begin]
 
 
 def read_text_document(path: str, fmt: str) -> DocumentEquations:
@@ -461,8 +495,12 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
     if markdown:  # (with money before maths read right: "$5.00 ($p$ after tax)")
         blocks, err = markdown_blocks(text, "markdown", folder)
     else:
-        blocks, err = _read_latex_blocks(text, folder, result.notes)
-        result.definitions = _local_sources(path, text)
+        blocks, err, preamble = _read_latex_blocks(text, folder, result.notes)
+        # what pandoc did not apply (\DeclarePairedDelimiter...); with the body read alone, also the whole
+        # preamble's definitions, which pandoc did not see
+        result.definitions = compat.pandoc_leftovers(_local_sources(path, text))
+        if preamble is not None:
+            result.definitions = _local_sources(path, preamble) + "\n" + result.definitions
         result.labels = _aux_labels(path)
     result.notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
                      if line.startswith("[WARNING]")]

@@ -203,6 +203,34 @@ def _inline(open_, close, body: str) -> str:
     return "%s%s%s%s" % (open_, body, "\n" if _ends_in_comment(body) else "", close)
 
 
+def _env_sequence(tex: str) -> Optional[List[str]]:
+    """`tex` as one or more outer environments one after the other (with only spaces and comments
+    between them), or None."""
+    envs, start, depth, last = [], None, 0, 0
+    for m in _TOKEN_RE.finditer(tex):
+        if m.group("be") is None:
+            if not depth and not m.group().startswith("%"):
+                return None  # something between the environments
+            continue
+        if m.group("be") == "begin":
+            if not depth:
+                if tex[last:m.start()].strip() and not re.fullmatch(r"(?:\s|%[^\n]*)*", tex[last:m.start()]):
+                    return None
+                start = m.start()
+            depth += 1
+        else:
+            depth -= 1
+            if not depth:
+                env = tex[start:m.end()]
+                if split_env(env, _OUTER)[0] is None:
+                    return None
+                envs.append(env.strip())
+                last = m.end()
+    if depth or not envs or not re.fullmatch(r"(?:\s|%[^\n]*)*", tex[last:]):
+        return None
+    return envs
+
+
 _LEADING_LABELS = re.compile(r"^((?:\s|%[^\n]*\n)*(?:\\label\s*\{[^{}]*\}(?:\s|%[^\n]*\n)*)+)")
 
 
@@ -211,12 +239,17 @@ def wrap(tex: str, wrapper: str, display: bool = True) -> str:
     if wrapper not in WRAPPER_KEYS:
         raise ValueError("unknown wrapper %r" % wrapper)
     labels = _LEADING_LABELS.match(tex)
-    if labels and has_outer_env(tex[labels.end():]):
-        # \begin{subequations}\label{g} \begin{align}..\end{align}: pandoc gives the group's label before
-        # the environment, which LaTeX takes only inside subequations (not inside \[ \])
-        rest = tex[labels.end():]
+    rest = tex[labels.end():] if labels else tex
+    envs = _env_sequence(rest)
+    if envs and (labels or len(envs) > 1):
+        # \begin{subequations}\label{g} \begin{align}..\end{align} (or two equation environments): pandoc
+        # gives the group's label before the environments, which LaTeX takes only inside subequations
+        # (not inside \[ \]), as it takes several environments only one after the other
         if wrapper == "auto":
-            return "\\begin{subequations}%s\n%s\n\\end{subequations}" % (labels.group(1).strip(), rest.strip())
+            return "\\begin{subequations}%s\n%s\n\\end{subequations}" % (
+                labels.group(1).strip() if labels else "", "\n".join(envs))
+        if len(envs) > 1:  # each in the wrapper; the group's label has no place there
+            return "\n\n".join(wrap(env, wrapper, display) for env in envs)
         tex = rest  # the rows keep their own labels; the group's has no place in another wrapper
     if wrapper == "auto":
         if has_outer_env(tex):

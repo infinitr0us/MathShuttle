@@ -139,10 +139,25 @@ def _bracket(parts: Sequence[str], sized: bool, left: str = "\\langle", right: s
 Handler = Callable[[_Args, Set[str]], Optional[str]]
 
 
-def _bra(a: _Args, _p) -> Optional[str]:
+def _physics_style(packages) -> bool:
+    """physics' meaning of the commands it shares with braket (unless only braket is loaded)."""
+    return "physics" in packages or "braket" not in packages
+
+
+def _bra(a: _Args, packages) -> Optional[str]:
     sized = not a.take_star()
     x = a.first()
-    return None if x is None else _fence("\\langle", "|", x, sized)
+    if x is None:
+        return None
+    k = re.compile(_GAP.pattern + r"\\ket" + _CS).match(a.tex, a.end)
+    if k and _physics_style(packages):  # physics contracts \bra{a}\ket{b} into <a|b>
+        ket = _Args(a.tex, k.end())
+        ket.take_star()
+        y = ket.first()
+        if y is not None:
+            a.end = ket.end
+            return _bracket([x, y], sized)
+    return _fence("\\langle", "|", x, sized)
 
 
 def _ket(a: _Args, _p) -> Optional[str]:
@@ -156,12 +171,15 @@ def _braket(a: _Args, packages) -> Optional[str]:
     x = a.first()
     if x is None:
         return None
-    y = a.brace()
-    if y is not None:  # physics: \braket{a}{b}
-        return _bracket([x, y], sized)
     parts = _split_bars(x)
-    if len(parts) == 1 and "physics" in packages and "braket" not in packages:
-        parts = [x, x]  # physics' \braket{a} is <a|a>
+    # physics: \braket{a}{b}; braket's \braket takes one argument (\braket{a|b}), a group after it is
+    # the next factor
+    if len(parts) == 1 and _physics_style(packages):
+        y = a.brace()
+        if y is not None:
+            return _bracket([x, y], sized)
+        if "physics" in packages:
+            parts = [x, x]  # physics' \braket{a} is <a|a>
     return _bracket(parts, sized)
 
 
@@ -184,6 +202,8 @@ def _set(sized: bool) -> Handler:
 
 def _expval(a: _Args, _p) -> Optional[str]:
     sized = not a.take_star()
+    a.star = False
+    a.take_star()  # \ev**{A}{psi}: physics' second star (no sizing either)
     x = a.first()
     if x is None:
         return None
@@ -199,8 +219,11 @@ def _mel(a: _Args, _p) -> Optional[str]:
 
 def _innerproduct(a: _Args, _p) -> Optional[str]:
     sized = not a.take_star()
-    x, y = a.brace(), a.brace()
-    return None if y is None else _bracket([x, y], sized)
+    x = a.first()
+    if x is None:
+        return None
+    y = a.brace()
+    return _bracket([x, x if y is None else y], sized)  # physics' \ip{a} is <a|a>
 
 
 def _outerproduct(a: _Args, _p) -> Optional[str]:
@@ -253,11 +276,12 @@ def _qty(a: _Args, _p) -> Optional[str]:
     if found is None:
         return None
     opening, content = found
-    if opening == "{":
-        probe = _Args(a.tex, a.end)
-        if probe.brace() is not None:  # \qty{3.2}{\per\second}: siunitx
-            a.end = start
-            return None
+    probe = _Args(a.tex, a.end)
+    # \qty{3.2}{\per\second}, \qty[per-mode=symbol]{10}{m/s}: siunitx
+    if (opening == "{" and probe.brace() is not None) or (
+            opening == "[" and probe.brace() is not None and probe.brace() is not None):
+        a.end = start
+        return None
     left, right = _QTY[opening]
     return _fence(left, right, content, sized)
 
@@ -286,7 +310,7 @@ def _arrow_vector(a: _Args, _p) -> Optional[str]:  # \va{x}, \va*{x}
     x = a.argument()
     if x is None:
         return None
-    return "\\vec{%s}" % ("\\boldsymbol{%s}" % x if star else x)
+    return "\\vec{%s{%s}}" % ("\\boldsymbol" if star else "\\mathbf", x)  # physics: an arrow over bold
 
 
 def _operator(name: str) -> Handler:
@@ -502,6 +526,27 @@ _add("siunitx", "numlist", _numlist)
 _QUANTITY_NAMES = ("\\qty", "\\SI")
 
 
+def packages_for(tex: str, defined: Set[str], packages: Set[str]) -> List[str]:
+    """The LaTeX packages the pack commands in `tex` come from, for the preview (which sets the LaTeX as
+    written): physics or braket (not both: they define the same commands), slashed, tensor, siunitx."""
+    needed: Set[str] = set()
+    for m in re.finditer(r"\\[A-Za-z]+", tex):
+        name = m.group()
+        if name not in PACKS or name in defined:
+            continue
+        package, _, loaded_only = PACKS[name]
+        if loaded_only and package not in packages or package == "aastex":
+            continue
+        if name == "\\qty":  # siunitx' \qty{12}{kHz} or physics' \qty(..)
+            probe = _Args(tex, m.end())
+            probe.option()
+            package = "siunitx" if probe.brace() is not None and probe.brace() is not None else "physics"
+        needed.add(package)
+    if {"physics", "braket"} <= needed:
+        needed.discard("physics" if "braket" in packages and "physics" not in packages else "braket")
+    return sorted(needed)
+
+
 def apply(tex: str, defined: Set[str], packages: Set[str], used: List[str]) -> str:
     """`tex` with the commands of the built-in packs written out; `defined`: names the input or the
     user's / document's macros define (left alone); `packages`: what the document loads; `used`
@@ -530,6 +575,8 @@ def apply(tex: str, defined: Set[str], packages: Set[str], used: List[str]) -> s
             pos = m.end()
             continue
         used.append("%s: %s" % (package, name))
+        if re.search(r"\\[A-Za-z]+$", new) and re.match(r"[A-Za-z@]", tex[args.end:args.end + 1]):
+            new += " "  # \ket{0}a: \rangle a, not the control word \ranglea
         tex = tex[:m.start()] + new + tex[args.end:]
         pos = m.start()  # the arguments may hold more of them
     return tex

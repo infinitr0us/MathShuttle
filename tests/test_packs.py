@@ -90,7 +90,7 @@ def test_physics_braket_with_one_argument_follows_the_loaded_package():
     (r"\operatornamewithlimits{argmin}_x", r"\operatorname*{argmin}_x"),
     (r"\bigm| x", r"\big| x"),
     (r"\cfrac[l]{1}{1+\cfrac{1}{x}}", r"\dfrac{1}{1+\dfrac{1}{x}}"),
-    (r"\sideset{}{'}\sum_{n} a_n", r"{}{\sum}'_{n} a_n"),
+    (r"\sideset{}{'}\sum_{n} a_n", r"{}{\underset{n}{\sum}}{}' a_n"),  # the limit stays under the sum
     (r"\widetilde\mathcal K", r"\widetilde{\mathcal{K}}"),
     (r"\begin{aligned}[t] a &= b \end{aligned}", r"\begin{aligned} a &= b \end{aligned}"),
     (r"\addtocounter{equation}{1} x = 1", r"{} x = 1"),

@@ -150,17 +150,38 @@ def latex_command(t: dict, name: str) -> List[str]:
     return args + [name]
 
 
+_INSTALLED: dict = {}
+
+
+def installed(package: str) -> bool:
+    """Whether the LaTeX installation has `package` (kpsewhich; remembered)."""
+    t = tools()
+    if t is None:
+        return False
+    if package not in _INSTALLED:
+        kpsewhich = _which("kpsewhich")
+        try:
+            _INSTALLED[package] = bool(kpsewhich and subprocess.run(
+                [kpsewhich, package + ".sty"], capture_output=True, timeout=20, creationflags=_FLAGS,
+                env=t.get("env")).stdout.strip())
+        except (OSError, subprocess.TimeoutExpired):
+            _INSTALLED[package] = False
+    return _INSTALLED[package]
+
+
 def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
-           work: Optional[str] = None) -> str:
+           work: Optional[str] = None, packages: Sequence[str] = ()) -> str:
     """A PNG of `equations` (objects with .tex and .display), one below the other, with `definitions` in
-    the preamble.  Cached by content."""
+    the preamble, and `packages` (physics, braket...: those the equations' commands come from) where the
+    installation has them.  Cached by content."""
     t = tools()
     if t is None:
         raise PreviewError("no LaTeX installation (latex and dvipng) on PATH")
     work = work or cache_dir()
     lines = [_LINE % math_line(eq.tex, eq.display) for eq in equations]
     body = lines[0] if len(lines) == 1 else "\\begin{tabular}{@{}c@{}}%s\\end{tabular}" % "\\\\[8pt]\n".join(lines)
-    source = TEMPLATE % {"packages": t["packages"], "definitions": "\n".join(definitions), "body": body}
+    extra = "".join("\n\\usepackage{%s}" % p for p in packages if installed(p))
+    source = TEMPLATE % {"packages": t["packages"] + extra, "definitions": "\n".join(definitions), "body": body}
     key = hashlib.sha1(("%d\0%s" % (dpi, source)).encode("utf-8")).hexdigest()[:20]
     png = os.path.join(work, key + ".png")
     if os.path.exists(png):

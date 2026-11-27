@@ -146,9 +146,13 @@ def _infix_operators(row: ET.Element) -> None:
         return
     fenced = any(edge.get("stretchy") != "false" and _is_mo(edge, *chars)
                  for edge, chars in ((row[0], "([{⟨⌊⌈|‖"), (row[-1], ")]}⟩⌋⌉|‖")))
+    # bars that the MathML itself says stretch, in pairs (a |y/x| b): an absolute value or a norm
+    declared = [i for i in range(1, len(row) - 1) if row[i].tag == "mo" and row[i].get("stretchy") == "true"
+                and (row[i].text or "").strip() in ("|", "‖")]
+    paired = set(declared) if len(declared) >= 2 and len(declared) % 2 == 0 else set()
     for i in range(1, len(row) - 1):
         mo = row[i]
-        if mo.tag != "mo" or mo.get("stretchy") == "false" or mo.get("fence") == "true":
+        if mo.tag != "mo" or mo.get("stretchy") == "false" or mo.get("fence") == "true" or i in paired:
             continue
         ch = (mo.text or "").strip()
         name = unicodedata.name(ch, "") if len(ch) == 1 else ""

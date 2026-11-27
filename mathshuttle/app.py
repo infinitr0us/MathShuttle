@@ -715,14 +715,20 @@ class App(tk.Tk):
         self._preview_seq += 1
         seq = self._preview_seq
         src, tidy, macros = args[1], args[6], self._macros(args[7])
+        if src == "latex":  # with the definitions written into the input that pandoc does not apply
+            macros = compat.with_document(macros, compat.pandoc_leftovers(args[0]))
         equations = list(result.equations[:6])
         dpi = max(96, int(self.winfo_fpixels("1i") * 1.15))
 
         def work():
+            from . import packs
             from .convert import tidied
             eqs = [tidied(eq) if src != "latex" and tidy else eq for eq in equations]
-            definitions = preview.definitions_for(" ".join(e.tex for e in eqs), macros if src == "latex" else None)
-            return preview.render(eqs, definitions, dpi=dpi), len(result.equations)
+            tex = " ".join(e.tex for e in eqs)
+            definitions = preview.definitions_for(tex, macros if src == "latex" else None)
+            needed = packs.packages_for(tex, set(macros.definitions) if macros is not None else set(),
+                                        macros.packages if macros is not None else set()) if src == "latex" else []
+            return preview.render(eqs, definitions, dpi=dpi, packages=needed), len(result.equations)
 
         self._in_background(work, lambda value, error: self._show_preview(seq, value, error))
 
