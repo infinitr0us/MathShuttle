@@ -34,9 +34,10 @@ Windows and macOS. Everything runs on your computer; nothing is sent anywhere.
    also install it yourself: `winget install JohnMacFarlane.Pandoc` (Windows) or `brew install pandoc`
    (macOS).
 
-With Python 3.9 or later (with tkinter): `pipx install mathshuttle` gives the commands `mathshuttle`
-(the window without arguments, the command line with them) and `mathshuttle-gui`. No other Python
-packages are needed. A LaTeX installation (MiKTeX, TeX Live, MacTeX) turns on the LaTeX preview.
+With Python 3.9 or later (with tkinter): `pipx install mathshuttle` (or, straight from GitHub,
+`pipx install git+https://github.com/infinitr0us/MathShuttle`) gives the commands `mathshuttle` (the
+window without arguments, the command line with them) and `mathshuttle-gui`. No other Python packages
+are needed. A LaTeX installation (MiKTeX, TeX Live, MacTeX) turns on the LaTeX preview.
 
 ## Use
 
