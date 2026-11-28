@@ -238,3 +238,100 @@ def test_a_latin_1_paper(tmp_path):
                                        .encode("latin-1"))
     document_to_word(str(tmp_path / "old.tex"), str(tmp_path / "old.docx"))
     assert "Caf\u00e9" in words(zipfile.ZipFile(str(tmp_path / "old.docx")).read("word/document.xml").decode("utf-8"))
+
+
+# ---- the realistic re-check -----------------------------------------------------------------------------
+ARTICLE = "\\documentclass{article}\\usepackage{amsmath}%s\\begin{document}\n%s\n\\end{document}\n"
+
+
+def test_a_matrix_in_a_numbered_gather_keeps_both_rows(tmp_path):
+    _, z = export(tmp_path, ARTICLE % ("", "\\begin{gather} A = \\begin{pmatrix} 1 & 0 \\\\ 0 & 1 \\end{pmatrix} \\\\ "
+                                           "B = I \\end{gather}\n\\begin{gather} C = \\begin{pmatrix} a \\\\ b "
+                                           "\\end{pmatrix} \\\\ D \\notag \\end{gather}"))
+    xml = z.read("word/document.xml").decode("utf-8")
+    assert numbers(xml) == ["(1)", "(2)", "(3)"]
+    second = xml[xml.index("#(3)") - 3000:xml.index("#(3)")]
+    assert second.count("<m:mr>") == 2  # (3) on the row with the 2x1 matrix, not around both rows
+
+
+def test_a_tag_with_maths_and_an_aux_keeps_the_count(tmp_path):
+    _, z = export(tmp_path, ARTICLE % ("", "\\begin{equation} a \\label{a} \\end{equation}\n"
+                                           "\\begin{equation} b \\tag{$\\dagger$} \\label{star} \\end{equation}\n"
+                                           "\\begin{equation} c \\end{equation}\nSee \\eqref{star}."),
+                  aux="\\newlabel{a}{{1}{1}}\n\\newlabel{star}{{{$\\dagger $}}{1}}\n")
+    xml = z.read("word/document.xml").decode("utf-8")
+    assert numbers(xml) == ["(1)", "(\u2020)", "(2)"] and "See (\u2020)." in words(xml)
+
+
+def test_a_reference_to_the_only_tag(tmp_path):
+    _, z = export(tmp_path, ARTICLE % ("", "\\[ a \\tag{A} \\label{a} \\]\nSee \\eqref{a}."))
+    assert "See (A)." in words(z.read("word/document.xml").decode("utf-8"))
+
+
+def test_a_theorem_counter_shared_with_equations_is_no_plain_count(tmp_path):
+    notes, z = export(tmp_path, ARTICLE % ("\\usepackage{amsthm}\\newtheorem{theorem}[equation]{Theorem}",
+                                           "\\begin{equation} a \\label{a} \\end{equation}\n\\begin{theorem}T"
+                                           "\\end{theorem}\n\\begin{equation} b \\end{equation}"),
+                      aux="\\newlabel{a}{{1}{1}}\n")
+    assert numbers(z.read("word/document.xml").decode("utf-8")) == ["(1)"]  # b is (3) in LaTeX: not guessed
+
+
+def test_a_macro_that_steps_the_counter_counts_only_when_used(tmp_path):
+    helper = "\\newcommand\\numberthis{\\addtocounter{equation}{1}\\tag{\\theequation}}"
+    _, z = export(tmp_path, ARTICLE % (helper, "\\begin{equation} a \\end{equation}\n\\begin{equation} b \\end{equation}"))
+    assert numbers(z.read("word/document.xml").decode("utf-8")) == ["(1)", "(2)"]
+    notes, z = export(tmp_path, ARTICLE % (helper, "\\begin{equation} a \\end{equation}\n"
+                                                   "\\begin{align*} b \\numberthis \\end{align*}"))
+    assert any("No equation numbers" in n for n in notes)
+
+
+def test_figures_in_a_graphicspath_folder_without_extension(tmp_path):
+    (tmp_path / "figs").mkdir()
+    (tmp_path / "figs" / "sample.png").write_bytes(_png())
+    (tmp_path / "plot.png").write_bytes(_png())
+    _, z = export(tmp_path, ARTICLE % ("\\usepackage{graphicx}\\graphicspath{{figs/}}",
+                                       "\\includegraphics{sample}\n\n\\includegraphics{plot.pdf}"))
+    assert len([n for n in z.namelist() if n.startswith("word/media/")]) == 2  # (a .png beside the .pdf)
+
+
+def test_citations_and_references_in_the_abstract(tmp_path):
+    _, z = export(tmp_path, ARTICLE % ("", "\\begin{abstract}We extend \\cite{smith}. See \\eqref{e}.\\end{abstract}\n"
+                                           "\\begin{equation} x \\label{e} \\end{equation}"),
+                  aux="\\bibcite{smith}{7}\n\\newlabel{e}{{1}{1}}\n")
+    assert "We extend [7]. See (1)." in words(z.read("word/document.xml").decode("utf-8"))
+
+
+def test_numeric_citet_and_an_accented_author(tmp_path):
+    aux = ("\\bibcite{smith}{{7}{2020}{{Smith et~al.}}{{Smith}}}\n"
+           "\\bibcite{groetschel}{{8}{1988}{{Gr{\\\"o}tschel et~al.}}{{Gr{\\\"o}tschel, Lov{\\'a}sz}}}\n")
+    _, z = export(tmp_path, ARTICLE % ("\\usepackage[numbers]{natbib}",
+                                       "Following \\citet{smith}, see \\citep{groetschel}."), aux=aux)
+    assert "Following Smith et al. [7], see [8]." in words(z.read("word/document.xml").decode("utf-8"))
+    _, z = export(tmp_path, ARTICLE % ("\\usepackage{natbib}", "See \\citep{groetschel}."), aux=aux)
+    assert "See (Gr\u00f6tschel et al., 1988)." in words(z.read("word/document.xml").decode("utf-8"))
+
+
+def test_markdown_maths_uses_an_input_file_s_macros(tmp_path):
+    (tmp_path / "defs.tex").write_text("\\newcommand{\\Domain}{\\mathcal{D}}\n", encoding="utf-8")
+    md = tmp_path / "notes.md"
+    md.write_text("\\input{defs}\n\nInline $x \\in \\Domain$ and\n\n$$\\Domain^2$$\n", encoding="utf-8")
+    document_to_word(str(md), str(tmp_path / "notes.docx"))
+    xml = zipfile.ZipFile(str(tmp_path / "notes.docx")).read("word/document.xml").decode("utf-8")
+    assert xml.count("<m:oMath>") == 2 and "not converted" not in words(xml)
+
+
+@pytest.mark.parametrize("text, maths", [("# Usage\n\nCall `train_model` to fit.", 0),
+                                         ("\\section{Results}\nWe observed two samples.", 0),
+                                         ("AB + CD", 1), ("sin x cos y", 1)])
+def test_passages_are_read_as_what_they_are(tmp_path, text, maths):
+    out = tmp_path / "p.docx"
+    passage_to_word(text, str(out))
+    xml = zipfile.ZipFile(str(out)).read("word/document.xml").decode("utf-8")
+    assert xml.count("<m:oMath>") == maths and "not converted" not in words(xml)
+
+
+def test_autoref_and_cref_in_one_document_and_mixed_lists(tmp_path):
+    aux = "\\newlabel{e}{{1}{1}{}{equation.1}{}}\n\\newlabel{fig:a}{{2}{1}{}{figure.2}{}}\n"
+    _, z = export(tmp_path, ARTICLE % ("\\usepackage{hyperref}\\usepackage{cleveref}",
+                                       "A \\autoref{fig:a}. B \\cref{e}. C \\cref{fig:a,e}. D \\Cref{fig:a}."), aux=aux)
+    assert "A Figure 2. B eq. (1). C fig. 2 and eq. (1). D Fig. 2." in words(z.read("word/document.xml").decode("utf-8"))

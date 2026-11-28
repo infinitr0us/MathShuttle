@@ -35,7 +35,8 @@ def test_what_word_does_to_structures_is_no_edit(case):
     (r"\binom{n}{k}", r"\left(\frac{n}{k}\right)"), (r"\ell", "l"), (r"\mathbf{2} x", "2 x"),
     (r"\langle x, y \rangle", "< x, y >"), (r"a \parallel b", r"a \| b"), (r"\mathbf{x}", "x"), (r"\mathrm{d}x", "dx"),
     (r"\sum_{i} x", r"\sum^{i} x"), (r"x_i", "x^i"), (r"\sqrt{x}", r"\sqrt[3]{x}"), (r"\frac{a}{b}", r"\frac{b}{a}"),
-    (r"\mathcal{L}", "L"), (r"\mathbb{R}", "R"), ("x'", "x"), (r"(a+b)^2", r"(a+b^2)")])
+    (r"\mathcal{L}", "L"), (r"\mathbb{R}", "R"), ("x'", "x"), (r"(a+b)^2", r"(a+b^2)"),
+    (r"\mathbb{1}_{A}", "1_{A}")])
 def test_an_edit_is_told_apart(a, b):
     assert recall.fingerprint(office_copy(a, "latex").mathml) != recall.fingerprint(office_copy(b, "latex").mathml)
 

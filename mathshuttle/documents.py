@@ -414,8 +414,30 @@ _READS = re.compile(r"\\(input|include|subfile|usepackage|RequirePackage)\s*(?:\
 _NEWLABEL = re.compile(r"\\newlabel\{([^{}]+)\}\{\{((?:[^{}]|\{[^{}]*\})*)\}(?:\{((?:[^{}]|\{[^{}]*\})*)\})?"
                        r"(?:\{((?:[^{}]|\{[^{}]*\})*)\})?(?:\{((?:[^{}]|\{[^{}]*\})*)\})?")
 _AUX_INPUT = re.compile(r"\\@input\{([^{}]+)\}")
-# \bibcite{key}{12}, or natbib's \bibcite{key}{{12}{2020}{{Smith et~al.}}{{Smith, Jones, and Lee}}}
-_BIBCITE = re.compile(r"\\bibcite\{([^{}]+)\}\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}")
+# \bibcite{key}{12}, or natbib's \bibcite{key}{{12}{2020}{{Smith et~al.}}{{Smith, Jones, and Lee}}} (its
+# argument read by brace depth: a name holds {\"o})
+_BIBCITE = re.compile(r"\\bibcite\{([^{}]+)\}\s*\{")
+_TEX_ACCENTS = {'"': "\u0308", "'": "\u0301", "`": "\u0300", "^": "\u0302", "~": "\u0303", "=": "\u0304",
+                ".": "\u0307", "c": "\u0327", "v": "\u030c", "u": "\u0306", "H": "\u030b", "r": "\u030a", "k": "\u0328"}
+_TEX_LETTERS = {"ss": "ß", "o": "ø", "O": "Ø", "ae": "æ", "AE": "Æ", "oe": "œ", "OE": "Œ", "aa": "å", "AA": "Å",
+                "l": "ł", "L": "Ł", "i": "ı", "j": "ȷ"}
+_ACCENTED = re.compile(r"\\([\"'`^~=.])\s*(?:\{\s*(\\?[A-Za-z]+)\s*\}|(\\[A-Za-z]+|[A-Za-z]))"
+                       r"|\\([cvuHrk])(?:\s*\{\s*(\\?[A-Za-z]+)\s*\}|\s+([A-Za-z]))")
+
+
+def _group_end(text: str, start: int) -> int:
+    """Index after the {...} group whose { is at `start` (-1 if it does not close)."""
+    depth, i = 0, start
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        depth += {"{": 1, "}": -1}.get(ch, 0)
+        i += 1
+        if not depth:
+            return i
+    return -1
 
 
 def _groups(text: str) -> List[str]:
@@ -434,7 +456,16 @@ def _groups(text: str) -> List[str]:
 
 
 def _aux_text(value: str) -> str:
-    """Text from an .aux field: its braces, ~ and \\& as they print."""
+    """Text from an .aux field as it prints: accents ({\\"o} as ö), \\ss and the like, ~, \\&, no braces."""
+    import unicodedata
+
+    def accent(m: "re.Match") -> str:
+        mark = _TEX_ACCENTS[m.group(1) or m.group(4)]
+        base = next(g for g in (m.group(2), m.group(3), m.group(5), m.group(6)) if g)
+        base = {"\\i": "i", "\\j": "j"}.get(base, base.lstrip("\\"))
+        return unicodedata.normalize("NFC", base[:1] + mark + base[1:])
+    value = _ACCENTED.sub(accent, value)
+    value = re.sub(r"\\(ss|ae|AE|oe|OE|aa|AA|o|O|l|L|i|j)(?![A-Za-z])\s*", lambda m: _TEX_LETTERS[m.group(1)], value)
     value = value.replace("~", " ").replace("\\&", "&").replace("\\ ", " ")
     return " ".join(value.replace("{", "").replace("}", "").split())
 
@@ -548,7 +579,10 @@ def _aux_labels(path: str) -> Dict[str, str]:
             if anchor:
                 labels.setdefault("type:" + key, anchor.group(1))
         for m in _BIBCITE.finditer(data):  # a citation's number ("cite:key"); natbib's author and year too
-            key, value = m.group(1), m.group(2).strip()
+            end = _group_end(data, m.end() - 1)
+            if end < 0:
+                continue
+            key, value = m.group(1), data[m.end():end - 1].strip()
             fields = _groups(value) if value.startswith("{") else [value]
             number = fields[0].strip() if fields else ""
             if re.fullmatch(r"[\w.\-]{1,12}", number):

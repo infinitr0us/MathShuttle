@@ -986,15 +986,22 @@ def reference_text(command: str, keys: List[str], labels: Dict[str, str]) -> Opt
     style = ("hyperref" if command == "autoref" else "cleveref" if command in ("cref", "Cref")
              else labels.get(REF_STYLE, "hyperref"))
     kind = types[0] if len(set(types)) == 1 else None
-    if style == "cleveref":
-        shown = ["(%s)" % n if t == "equation" else n for n, t in zip(numbers, types)]
-        names = _CREF_NAMES.get(kind or "")
-        if not names:
-            return _listed(shown)
-        name = names[0] if len(keys) == 1 else names[1]
-        if command in ("Cref", "ref+Label"):
-            name = name[:1].upper() + name[1:]
-        return "%s %s" % (name, _listed(shown))
+    if style == "cleveref":  # one name for each run of one type: "fig. 1 and eqs. (2) and (3)"
+        groups: List[Tuple[Optional[str], List[str]]] = []
+        for n, t in zip(numbers, types):
+            shown = "(%s)" % n if t == "equation" else n
+            if groups and groups[-1][0] == t:
+                groups[-1][1].append(shown)
+            else:
+                groups.append((t, [shown]))
+        parts = []
+        for t, shown in groups:
+            names = _CREF_NAMES.get(t or "")
+            name = (names[0] if len(shown) == 1 else names[1]) if names else ""
+            if name and command in ("Cref", "ref+Label"):
+                name = name[:1].upper() + name[1:]
+            parts.append(("%s %s" % (name, _listed(shown))) if name else _listed(shown))
+        return _listed(parts)
     name = _AUTOREF_NAMES.get(kind or "")
     return "%s %s" % (name, _listed(numbers)) if name else _listed(numbers)
 
@@ -1025,6 +1032,11 @@ def citation_text(command: str, cites: List[Tuple[str, str, str]], labels: Dict[
         if suffix:
             parts[-1] = parts[-1][:-1] + ", " + suffix + ")"
         return "; ".join(parts), found
+    if command in ("citet", "citealt") and all(author[k] for k, _, _ in cites):  # numeric \citet: Smith [7]
+        parts = ["%s [%s]" % (author[k], labels.get("cite:" + k, k)) for k, _, _ in cites]
+        if suffix:
+            parts[-1] = parts[-1][:-1] + ", " + suffix + "]"
+        return ", ".join(parts), found
     body = ", ".join(labels.get("cite:" + k, k) for k, _, _ in cites)
     body = (prefix + " " if prefix else "") + body + (", " + suffix if suffix else "")
     return "[%s]" % body, found

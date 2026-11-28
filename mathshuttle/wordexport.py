@@ -35,24 +35,30 @@ _PER_ROW = frozenset("align flalign alignat xalignat xxalignat gather eqnarray".
 _ONE_NUMBER = frozenset(("equation", "multline"))
 _ENV = re.compile(r"(\s*\\begin\s*\{([a-zA-Z]+)(\*?)\}(?:\s*\{[^{}]*\})?)([\s\S]*?)(\\end\s*\{\2\3\}\s*)")
 _REFERENCE_TYPES = ("eqref", "ref", "autoref", "cref", "Cref", "ref+label", "ref+Label")
+REF_COMMANDS = "\x00ref-commands:"  # + the keys of an \autoref / \cref: the commands, in source order
 _RAW_TEX = ("tex", "latex")
 _BLOCK_TYPES = frozenset("Para Plain Header CodeBlock BlockQuote OrderedList BulletList DefinitionList Table Div "
                          "HorizontalRule LineBlock RawBlock Figure".split())
 # what makes a passage Markdown to Word, besides what makes its equations Markdown (looks_like_markdown)
 _PROSE_SIGNS = re.compile(r"^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+\S|^[ \t]*>[ \t]?\S", re.M)
-_DOCUMENT_NUMBERING = re.compile(
-    r"\\(?:numberwithin|counterwithin\*?)\s*\{equation\}|\\@addtoreset\s*\{equation\}"
-    r"|\\(?:re|provide)?newcommand\*?\s*\{?\s*\\theequation(?![a-zA-Z@])|\\def\s*\\theequation(?![a-zA-Z@])"
-    r"|\\(?:setcounter|addtocounter|stepcounter|refstepcounter)\s*\{equation\}|\\begin\s*\{subequations\}"
-    r"|\\chapter(?![a-zA-Z@])")
 _CHAPTER_CLASS = re.compile(r"\\documentclass\s*(?:\[[^\]]*\])?\s*\{\s*(?:report|book|memoir|scrbook|scrreprt|amsbook"
                             r"|[^{}]*thesis[^{}]*|siamart[^{}]*|siamonline[^{}]*)\s*\}")
 
 
 # ---- the passage or document, as pandoc JSON ---------------------------------------------------------
 def _prose(text: str) -> bool:
-    """Words, not an equation (for a passage without maths delimiters): no command, script or brace."""
-    return not re.search(r"\\[A-Za-z]|[_^{}=]", text) and len(re.findall(r"[A-Za-z]{2,}", text)) >= 2
+    """Words, not an equation (for a passage without maths delimiters): no command, script, brace or
+    operator, and three words or a sentence ("sin x cos y" and "AB + CD" are equations)."""
+    if re.search(r"\\[A-Za-z]|[_^{}=+<>|*/]", text):
+        return False
+    words = len(re.findall(r"[A-Za-z]{2,}", text))
+    return words >= 3 or (words >= 2 and text.rstrip().endswith((".", "!", "?")))
+
+
+# LaTeX text, not an equation: a passage without maths delimiters with these is read as LaTeX
+_LATEX_TEXT = re.compile(r"\\(?:section|subsection|subsubsection|paragraph|chapter|item|textbf|textit|emph|"
+                         r"citep?|citet|ref|eqref|footnote|begin\s*\{(?:itemize|enumerate|description|abstract|"
+                         r"quote)\})(?![a-zA-Z@])")
 
 
 def passage_blocks(text: str) -> Tuple[list, bool]:
@@ -62,14 +68,16 @@ def passage_blocks(text: str) -> Tuple[list, bool]:
     from .convert import input_equations
     from .pandoc_engine import (_COMMENT_LINE, _LATEX_DOCUMENT, _has_math_delimiters, _without_code,
                                 looks_like_markdown, strip_tex)
-    if not _has_math_delimiters(text):
-        if _prose(text) or not text.strip():
-            return markdown_blocks(text, MARKDOWN)[0], True
-        return [{"t": "Para", "c": [{"t": "Math", "c": [{"t": "DisplayMath"}, strip_tex(text)]}]}], False
     prose = _without_code(text)
     if not _LATEX_DOCUMENT.search(prose) and (looks_like_markdown(text) or (
             _PROSE_SIGNS.search(prose) and not _COMMENT_LINE.search(prose))):
         return markdown_blocks(text, MARKDOWN)[0], True
+    if not _has_math_delimiters(text):
+        if _LATEX_TEXT.search(text):
+            return json.loads(_run(["-f", "latex", "-t", "json"], text.encode("utf-8"))[0])["blocks"], False
+        if _prose(text) or not text.strip():
+            return markdown_blocks(text, MARKDOWN)[0], True
+        return [{"t": "Para", "c": [{"t": "Math", "c": [{"t": "DisplayMath"}, strip_tex(text)]}]}], False
     try:
         as_markdown = input_equations(text, "latex").as_markdown
     except ConversionError:  # no equation after all ($5 and $10): text
@@ -139,16 +147,48 @@ def document_to_word(source: str, path: str, macros: Optional[compat.Macros] = N
             definitions = documents._local_sources(source, preamble) + "\n" + definitions
         labels = documents._aux_labels(source)
         labels[compat.REF_STYLE] = "cleveref" if re.search(r"\bcleveref\b", sources) else "hyperref"
+        # pandoc reads \autoref and \cref alike (ref+label): which one each reference is, in source order
+        for m in re.finditer(r"\\(autoref|cref)\*?\s*\{([^{}]*)\}", sources):
+            key = REF_COMMANDS + ",".join(k.strip() for k in m.group(2).split(","))
+            labels[key] = (labels.get(key, "") + " " + m.group(1)).strip()
         labels[compat.CITE_STYLE] = _cite_style(sources)
         _split_grouped(blocks)
+        graphics = re.search(r"\\graphicspath\s*\{((?:\s*\{[^{}]*\})+)\s*\}", sources)
+        _find_figures(blocks, folder, re.findall(r"\{([^{}]*)\}", graphics.group(1)) if graphics else [])
         plans, counted, more = _count_equations(blocks, labels, sources + "\n" + _local_class(source, text))
         notes += more
-        for key, number in counted.items():
-            labels.setdefault(key, number)
+        labels.update(counted)  # (the same as the .aux's when it has them; a \tag's as it prints)
         own = compat.with_document(macros, definitions, labels)
     notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
               if line.startswith("[WARNING]") and "Could not convert TeX math" not in line]
     return write_word(blocks, path, own, labels, notes, folder, markdown=ext == ".md", meta=meta, plans=plans)
+
+
+_PICTURES = ("", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".svg", ".emf", ".wmf")
+
+
+def _find_figures(node, folder: str, dirs: List[str]) -> None:
+    """Each figure's file, found as LaTeX finds it: next to the document or in a \\graphicspath folder, with
+    the extension LaTeX adds (\\includegraphics{plot}); a picture Word can take before a .pdf or .eps of
+    the same name.  In place."""
+    if isinstance(node, list):
+        for n in node:
+            _find_figures(n, folder, dirs)
+    elif isinstance(node, dict):
+        if node.get("t") == "Image" and isinstance(node.get("c"), list) and len(node["c"]) == 3:
+            target = node["c"][2][0]
+            if re.match(r"[a-z]+://", target):
+                return
+            stem, ext = os.path.splitext(target)
+            names = ([stem + e for e in _PICTURES[1:]] if ext.lower() in (".pdf", ".eps", ".ps") else []) + \
+                [target + e for e in _PICTURES]
+            for base in [""] + dirs:
+                found = next((p for p in (os.path.join(folder, base, n) for n in names) if os.path.isfile(p)), None)
+                if found:
+                    node["c"][2][0] = found
+                    return
+            return
+        _find_figures(node.get("c"), folder, dirs)
 
 
 # ---- equation numbers ---------------------------------------------------------------------------------
@@ -325,9 +365,10 @@ def _count_equations(blocks: list, aux: Dict[str, str], sources: str
     """The numbers LaTeX gives the display equations of a document read by pandoc: (for each display's
     id, its rows' numbers; the labels so numbered; notes), counted (1), (2)... as LaTeX does, unless the
     document numbers equations otherwise (then None, and the .aux numbers of labelled equations are used)
-    or its .aux file says other numbers."""
+    or its .aux file says other numbers.  The labels of \\tag rows refer to the tag as it prints, always."""
     plans: Dict[int, List[Optional[str]]] = {}
     counted: Dict[str, str] = {}
+    tagged: Dict[str, str] = {}
     counter = 0
     displays: list = []
     _display_maths(blocks, displays)
@@ -343,32 +384,66 @@ def _count_equations(blocks: list, aux: Dict[str, str], sources: str
                     counted.setdefault(m.group(1), str(counter))
             else:
                 numbers.append(None)
-                if kind:  # a \tag's label refers to the tag
+                if kind:  # a \tag's label refers to the tag, as it prints (the .aux has its TeX: $\dagger $)
                     for m in _LABEL.finditer(row):
-                        counted.setdefault(m.group(1), _tag_text(kind[4], aux))
+                        tagged.setdefault(m.group(1), _tag_text(kind[4], aux))
         if any(numbers):
             plans[id(node)] = numbers
     if not counter:
-        return None, {}, []
+        return None, tagged, []
     have_aux = any(k in aux for k in counted)
-    if _DOCUMENT_NUMBERING.search(sources) or _CHAPTER_CLASS.search(sources):
+    if _numbering_changed(sources) or _CHAPTER_CLASS.search(sources):
         unnumbered = sum(1 for numbers in plans.values() for n in numbers if n) - sum(
             1 for k in counted if k in aux)
         if not have_aux:
-            return None, {}, ["No equation numbers: the document numbers its equations by chapter or "
-                              "section (or sets the counter itself), which only LaTeX's .aux file next to it "
-                              "tells (compile it once)."]
-        return None, {}, ["Equations without a \\label have no number (%d): the document numbers equations by "
-                          "chapter or section, which the .aux file tells only for labelled ones." % unnumbered] \
-            if unnumbered > 0 else []
+            return None, tagged, ["No equation numbers: the document numbers its equations by chapter or "
+                                  "section (or another counter shares theirs, or it sets the counter itself), "
+                                  "which only LaTeX's .aux file next to it tells (compile it once)."]
+        return None, tagged, ["Equations without a \\label have no number (%d): the document numbers equations "
+                              "by chapter or section, or another way the .aux file tells only for labelled ones."
+                              % unnumbered] if unnumbered > 0 else []
     differ = [k for k, v in counted.items() if k in aux and aux[k] != v]
     if differ:
-        return None, {}, ["Only labelled equations have numbers: the .aux file's numbers are not (1), (2)... in "
-                          "order (%s is %s there), so the others are not known (an .aux file older than the "
-                          "document, or numbering the document sets itself)." % (differ[0], aux[differ[0]])]
+        return None, tagged, ["Only labelled equations have numbers: the .aux file's numbers are not (1), (2)... "
+                              "in order (%s is %s there), so the others are not known (an .aux file older than "
+                              "the document, or numbering the document sets itself)." % (differ[0], aux[differ[0]])]
     notes = [] if have_aux else ["Equations numbered (1), (2)... in order, as LaTeX numbers them in this document "
                                  "(not checked: no .aux file next to it holds their labels)."]
-    return plans, counted, notes
+    return plans, dict(counted, **tagged), notes
+
+
+_COUNTER_CHANGE = re.compile(
+    r"\\(?:numberwithin|counterwithin\*?)\s*\{equation\}|\\@addtoreset\s*\{equation\}"
+    r"|\\(?:re|provide)?newcommand\*?\s*\{?\s*\\theequation(?![a-zA-Z@])|\\def\s*\\theequation(?![a-zA-Z@])"
+    r"|\\(?:setcounter|addtocounter|stepcounter|refstepcounter)\s*\{equation\}|\\begin\s*\{subequations\}"
+    r"|\\chapter(?![a-zA-Z@])|\\newtheorem\s*\{[^{}]*\}\s*\[\s*equation\s*\]|\\newaliascnt\s*\{[^{}]*\}\s*\{equation\}")
+_DEFINITION = re.compile(r"\\(?:re|provide)?newcommand\*?\s*\{?\s*\\([a-zA-Z@]+)\s*\}?\s*(?:\[\d\])?\s*(?:\[[^\]]*\])?\s*\{"
+                         r"|\\[gex]?def\s*\\([a-zA-Z@]+)[^{\n]*\{")
+
+
+def _numbering_changed(sources: str) -> bool:
+    """Whether the document numbers equations otherwise than (1), (2)... in order: by chapter or section,
+    a theorem counter sharing theirs, subequations, or the counter set or stepped; a macro that steps it
+    (\\numberthis) only if the document uses it."""
+    stepping, spans = [], []
+    for m in _DEFINITION.finditer(sources):
+        depth, i = 1, m.end()
+        while i < len(sources) and depth:
+            if sources[i] == "\\":
+                i += 2
+                continue
+            depth += {"{": 1, "}": -1}.get(sources[i], 0)
+            i += 1
+        body = sources[m.end():i - 1]
+        name = m.group(1) or m.group(2)
+        if name != "theequation" and _COUNTER_CHANGE.search(body):
+            stepping.append(name)
+            spans.append((m.start(), i))
+    rest = sources
+    for start, end in reversed(spans):
+        rest = rest[:start] + rest[end:]
+    return bool(_COUNTER_CHANGE.search(rest)) or any(
+        re.search(r"\\%s(?![a-zA-Z@])" % re.escape(name), rest) for name in stepping)
 
 
 # ---- preparing the blocks -----------------------------------------------------------------------------
@@ -379,6 +454,8 @@ class _Prepare:
     def __init__(self, macros: Optional[compat.Macros], labels: Dict[str, str], folder: Optional[str],
                  markdown: bool = False, plans: Optional[Dict[int, List[Optional[str]]]] = None):
         self.macros, self.labels, self.folder = macros, labels, folder
+        self.base_macros = macros
+        self.ref_commands = {k[len(REF_COMMANDS):]: v.split() for k, v in labels.items() if k.startswith(REF_COMMANDS)}
         # raw TeX in Markdown is read by the LaTeX reader; in a LaTeX document it is what that reader could
         # not read (\gls{..}, a package's command): kept as code, not dropped as pandoc's docx writer would
         self.markdown = markdown
@@ -413,6 +490,12 @@ class _Prepare:
         if re.search(r"\\(?:input|include)(?![a-zA-Z@])", raw) or _MACRO_DEF.search(raw) or \
                 re.search(r"\\(?:DeclareMathOperator|let)(?![a-zA-Z@])", raw):
             self.definitions.append(raw)
+            # for the Markdown maths after it too ($\R$), which pandoc expands only from definitions written
+            # into the Markdown itself, not from an \input file's
+            from . import documents
+            sources = documents._local_sources(os.path.join(self.folder or os.getcwd(), "notes.md"),
+                                               "\n".join(self.definitions))
+            self.macros = compat.with_document(self.base_macros, sources, self.labels)
         return self.as_latex(read) if read and isinstance(read[0], dict) and read[0].get("t") != "CodeBlock" \
             else read
 
@@ -456,6 +539,8 @@ class _Prepare:
         if not isinstance(node, dict):
             return node
         t = node.get("t")
+        if t is None:  # the metadata (title, abstract: its citations and maths as the text's), a MetaMap's
+            return {k: self.node(v) for k, v in node.items()}
         if t == "Math":
             self.math(node)
             return node
@@ -464,6 +549,10 @@ class _Prepare:
             kind, key = attrs.get("reference-type"), attrs.get("reference", "")
             if kind in _REFERENCE_TYPES:
                 keys = [k.strip() for k in key.split(",") if k.strip()]
+                if kind == "ref+label":  # \autoref or \cref: the next of those the source has for these keys
+                    queue = self.ref_commands.get(",".join(keys))
+                    if queue:
+                        kind = queue.pop(0)
                 shown = compat.reference_text(kind, keys, self.labels)
                 if shown is not None:
                     return {"t": "Str", "c": shown}
@@ -700,34 +789,39 @@ def _as_array(matrix: str) -> Optional[str]:
     """texmath's matrix for gather, eqnarray, flalign (and an align without &) as the equation array Word
     numbers rows of: a row's cells joined at alignment points (eqnarray's at its middle column), a gather
     row centred."""
-    jcs = re.findall(r'<m:mcJc m:val="(\w+)"\s*/>', matrix[:matrix.find("<m:mr>")] if "<m:mr>" in matrix else "")
-    rows = []
-    for row in re.finditer(r"<m:mr>([\s\S]*?)</m:mr>", matrix):
-        cells, pos = [], 0
-        content = row.group(1)
-        while True:
-            start = content.find("<m:e>", pos)
-            if start < 0:
-                break
-            end = _top_level_end(content, start)
-            if end < 0:
-                return None
-            cells.append(content[start + len("<m:e>"):end - len("</m:e>")])
-            pos = end
-        if jcs == ["right", "center", "left"] and len(cells) == 3:
-            rows.append(cells[0] + _ALIGN + cells[1] + cells[2])
+    first_row = matrix.find("<m:mr>")
+    jcs = re.findall(r'<m:mcJc m:val="(\w+)"\s*/>', matrix[:first_row] if first_row > 0 else "")
+    rows: List[List[str]] = []
+    depth, start = 0, None
+    for m in _TAG_TOKEN.finditer(matrix):  # its own rows (depth 2) and cells (depth 3), not a nested matrix's
+        if m.group(3):
+            continue
+        if not m.group(1):
+            depth += 1
+            if depth == 2 and m.group(2) == "mr":
+                rows.append([])
+            elif depth == 3 and m.group(2) == "e" and rows:
+                start = m.end()
         else:
-            rows.append(_ALIGN.join(cells))
-    return "<m:eqArr>%s</m:eqArr>" % "".join("<m:e>%s</m:e>" % r for r in rows) if rows else None
+            if depth == 3 and m.group(2) == "e" and start is not None:
+                rows[-1].append(matrix[start:m.start()])
+                start = None
+            depth -= 1
+    out = []
+    for cells in rows:
+        if jcs == ["right", "center", "left"] and len(cells) == 3:
+            out.append(cells[0] + _ALIGN + cells[1] + cells[2])
+        else:
+            out.append(_ALIGN.join(cells))
+    return "<m:eqArr>%s</m:eqArr>" % "".join("<m:e>%s</m:e>" % r for r in out) if len(out) > 1 else None
 
 
 def _numbered(body: str, numbers: Dict[int, str], count: List[int]) -> str:
     """An equation's OMML (inside m:oMath) with its sentinels made Word numbers: in an equation array at
     the end of their rows, else around the whole equation as a one-row array."""
     stripped = body.strip()
-    if stripped.startswith("<m:m>") and _top_level_end(stripped, 0) == len(stripped) and \
-            len(re.findall(r"QQMSN\d+QQ", stripped)) > 1:
-        stripped = _as_array(stripped) or stripped  # rows numbered one by one
+    if stripped.startswith("<m:m>") and _top_level_end(stripped, 0) == len(stripped):
+        stripped = _as_array(stripped) or stripped  # rows numbered one by one (or the last, multline)
     if stripped.startswith("<m:eqArr>") and _top_level_end(stripped, 0) == len(stripped):
         rows = _rows(stripped)
         out, last = [], 0

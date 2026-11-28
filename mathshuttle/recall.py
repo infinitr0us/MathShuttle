@@ -89,10 +89,11 @@ def _char(ch: str, tag: str, variant: Optional[str], word: bool) -> str:
         base, cls = _LETTERLIKE[ch]
         return base + cls
     name = unicodedata.name(ch, "")
-    if name.startswith("MATHEMATICAL"):  # 𝐱 𝑥 𝔤 𝟐 𝛻: the character says its font
+    if name.startswith("MATHEMATICAL"):  # 𝐱 𝑥 𝔤 𝟐 𝟙 𝛻: the character says its font
         base = unicodedata.normalize("NFKC", ch)
         cls = next((c for w, c in _NAME_WORDS if w in name), "u")
-        return base + (cls if base.isalpha() or cls == "b" else "")
+        # (a letter or digit keeps its font, 𝟙 is not 1; a symbol only bold: Word writes ∇ as 𝛻)
+        return base + (cls if base.isalnum() or cls == "b" else "")
     if not ch.isalpha():
         return ch
     if tag == "mi":
