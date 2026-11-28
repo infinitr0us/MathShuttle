@@ -171,7 +171,7 @@ def _cli(argv: list[str]) -> int:
     compare_cmd.add_argument("returned", metavar="RETURNED.docx")
     compare_cmd.add_argument("paper", metavar="PAPER.tex")
     compare_cmd.add_argument("-o", "--output", metavar="CORRECTED.tex", help="write a corrected copy and its diff")
-    compare_cmd.add_argument("--all", action="store_true", help="also show unchanged equations and their comments")
+    compare_cmd.add_argument("--all", action="store_true", help="also show unchanged equations without comments")
     word_cmd = command(
         "word", "Write a passage or a whole .tex / .md document as a Word file with native equations.",
         description="Write a passage (a chat answer, Markdown notes, LaTeX text: a file, -e TEXT or standard "
@@ -249,8 +249,8 @@ def _cli(argv: list[str]) -> int:
             result = compare(args.returned, args.paper)
             originals = {row.original.n: row.original for row in result.rows if row.original}
             for row in result.rows:
-                if row.status == "unchanged" and not args.all:
-                    continue
+                if row.status == "unchanged" and not args.all and not row.comments:
+                    continue  # (an unchanged equation with a co-author's comment is shown)
                 eq = row.original
                 if eq:
                     where = [eq.number or "equation %d" % eq.n, *eq.labels, eq.section]

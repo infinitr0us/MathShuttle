@@ -213,9 +213,11 @@ def test_cli(tmp_path, capsys):
     assert main(argv + ["-o", str(tmp_path / "corrected.tex")]) == 0
     output = capsys.readouterr().out
     assert "deleted" in output and "eq:energy" in output and "Bounds" in output and "added" in output
-    assert "unchanged" not in output
+    # an unchanged equation is shown only when it has a comment: (1) yes, the inline one (3) not
+    assert "unchanged (1) eq:loss" in output and "Should this be 1/(2N)?" in output
+    assert output.count("unchanged") == 1
     assert main(argv + ["--all"]) == 0
-    assert "Should this be 1/(2N)?" in capsys.readouterr().out
+    assert capsys.readouterr().out.count("unchanged") >= 2
 
 
 def test_macro_boundaries_and_longest_expansion(tmp_path):

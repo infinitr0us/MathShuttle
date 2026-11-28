@@ -279,7 +279,14 @@ def _replacement(original, tex, macros, notes):
             new_body = re.sub(r"(?<!\\)&\s*(\\[A-Za-z]+|[=<>+\-])", r"&\1&", new_body)
     else:
         new_body = latex_wrap.plain_form(tex)
-    return "\\begin{%s}\n%s\n\\end{%s}" % (name, _restore_rows(original, body, new_body, notes).strip(), name)
+    restored = _restore_rows(original, body, new_body, notes).strip()
+    # indented as the author indented the original's body
+    first = next((line for line in body.splitlines() if line.strip()), "")
+    indent = first[:len(first) - len(first.lstrip())]
+    if indent:
+        restored = "\n".join(indent + line if line.strip() and not line[:1].isspace() else line
+                             for line in restored.splitlines())
+    return "\\begin{%s}\n%s\n\\end{%s}" % (name, restored, name)
 
 
 def _restore_rows(original, body, new_body, notes):
