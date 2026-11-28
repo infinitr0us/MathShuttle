@@ -119,7 +119,8 @@ environment. A macro used as a bare argument (`\widetilde\K`) gets braces, so it
 (`\widetilde{\mathcal K}`). A macro made of LaTeX's internal commands (`\@namedef`, `\global`,
 `\expandafter`, as in some style files) is kept as written, and a note names it: written out without
 `\makeatletter` it would break. The status bar lists the macros written out.
-LaTeX → LaTeX never re-renders the equation; only the delimiters change.
+LaTeX → LaTeX never re-renders the equation; only the delimiters change (and, with *Expand macros*, the
+macros, see below).
 
 ## MathML and OMML input
 

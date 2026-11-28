@@ -75,7 +75,7 @@ def test_convert_and_error_display(app):
     assert pump(app, until=lambda: "unexpected eof" in app.output.get("1.0", "end"))
     assert app.output.tag_ranges("error")
     assert app.status_var.get() == "Conversion failed"
-    assert str(app.status_label.cget("foreground")) == "#b00020"  # errors in red, not like a success
+    assert str(app.status_label.cget("foreground")) == app.palette["error"]  # errors in red, not like a success
 
 
 @pytest.mark.skipif(sys.platform not in ("win32", "darwin"), reason="no clipboard backend here")

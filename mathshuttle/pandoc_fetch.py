@@ -145,7 +145,7 @@ def _save_body(source: BinaryIO, path: Path, total: Optional[int], progress, can
     return done, digest.hexdigest()
 
 
-def _download(url, path, progress, cancel):
+def _download(url, path, progress, cancel, expected=None):
     try:
         response = _open_url(url)
     except (urllib.error.URLError, ssl.SSLError) as exc:
@@ -173,7 +173,7 @@ def _download(url, path, progress, cancel):
     with subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           creationflags=_FLAGS) as proc:
         try:
-            result = _save_body(proc.stdout, path, None, progress, cancel)
+            result = _save_body(proc.stdout, path, expected, progress, cancel)  # (curl gives no size: the release's)
             if proc.wait(timeout=_TIMEOUT) != 0:
                 raise FetchError("The system downloader could not fetch pandoc. Check your connection "
                                  "and certificates, or install pandoc manually.")
@@ -301,7 +301,7 @@ def install(progress: Optional[_Progress] = None, cancel: Optional[threading.Eve
         with ExitStack() as cleanup:
             archive = _temp_path(folder, cleanup)
             try:
-                size, digest = _download(url or _RELEASE_URL + asset.name, archive, progress, cancel)
+                size, digest = _download(url or _RELEASE_URL + asset.name, archive, progress, cancel, asset.size)
             except (OSError, http.client.HTTPException, subprocess.TimeoutExpired) as exc:
                 _check_cancel(cancel)
                 raise FetchError(f"Could not download pandoc. Check your connection and try again. ({exc})") from exc

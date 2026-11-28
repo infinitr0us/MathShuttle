@@ -84,6 +84,9 @@ class DocumentEquations:
     # not apply (\DeclarePairedDelimiter, the \foreach alphabet idiom...); its \label numbers (.aux)
     definitions: str = ""
     labels: Dict[str, str] = field(default_factory=dict)
+    # read for Expand macros: the preamble's definitions with an @ in them too (\text{a@b}; an \eqlabel made
+    # of \@namedef, which is then kept as written with a note), which `definitions` leaves out
+    expansion_definitions: str = ""
 
     def rows(self, display: bool = False, unique: bool = False, match: str = "") -> List[EquationRow]:
         """Matching occurrences in source order. Group equal LaTeX after applying both filters."""
@@ -111,7 +114,7 @@ class DocumentEquations:
         (with its own definitions, which win), not to equations read from Office."""
         if self.source != "latex":
             return None
-        return compat.with_document(user, self.definitions, self.labels)
+        return compat.with_document(user, self.definitions, self.labels, preamble=self.expansion_definitions)
 
 
 def _q(ns: str, tag: str) -> str:
@@ -686,9 +689,12 @@ def read_text_document(path: str, fmt: str, expand_macros: bool = False) -> Docu
             body, leading = compat.before_equations(text[begin:end])
             if begin is not None:
                 local = _local_sources(path, text[:begin])
-                top = [d.source for d in compat.parse_definitions(local, document=True)[0]
-                       if not compat._depth(local, d.span[0])]
+                # also those with an @ in what they stand for (\text{a@b}, or \eqlabel made of \@namedef,
+                # which expand_macros then keeps as written, with a note); not internal names (\@foo)
+                top = [d.source for d in compat.parse_definitions(local)[0]
+                       if "@" not in d.name and not compat._depth(local, d.span[0])]
                 leading = "\n".join(top + [leading])
+                result.expansion_definitions = "\n".join(s for s in top if "@" in s)
             if leading.strip():
                 # Keep the raw macro calls for the LaTeX writer. Some macros produce whole
                 # equations in prose, so use the full reading if the body alone loses any.

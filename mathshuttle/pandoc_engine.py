@@ -122,7 +122,7 @@ def find_pandoc() -> str:
         name, env = _env_pandoc()
         if env and not os.path.isfile(env):  # a typo must not silently select some other pandoc
             raise PandocNotFound(f"{name} is set to {env!r}, which is not an existing file. "
-                                 f"Correct or unset {name}. {_DOWNLOAD_HINT}")
+                                 f"Correct it, or unset {name} so that MathShuttle looks for pandoc itself.")
         for p in _candidate_paths():
             if p and os.path.isfile(p):
                 _pandoc_path = p

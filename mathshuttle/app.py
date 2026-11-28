@@ -61,7 +61,8 @@ INPUT (From)
   Macros...  your papers' macro files (math_commands.tex, a preamble) and extra
           definitions: \\newcommand, \\def, \\let, \\DeclareMathOperator,
           \\DeclarePairedDelimiter.  Every LaTeX input may then use those macros;
-          LaTeX -> LaTeX output keeps them as you wrote them.
+          LaTeX -> LaTeX output keeps them as you wrote them; with Expand macros
+          ticked it writes them out (for a place without your macro file).
   MathML  <math> element(s), with or without the xmlns / XML prolog, also prefixed
           (<mml:math>) and with named entities (&InvisibleTimes;).
   OMML    <m:oMath> or <m:oMathPara>, alone or inside any Word XML.

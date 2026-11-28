@@ -802,7 +802,9 @@ def _paired(tex: str, paired: Dict[str, Tuple[str, str]]) -> str:
     ``\\left\\lvert x\\right\\rvert``, ``\\abs[\\big]{x}`` -> ``\\bigl\\lvert x\\bigr\\rvert``."""
     if not paired:
         return tex
-    pattern = re.compile(r"(%s)%s" % ("|".join(re.escape(k) for k in paired), _CS))
+    # (a control symbol, \DeclarePairedDelimiter{\1}..., may be followed by a letter: \1x)
+    pattern = re.compile(r"(%s)" % "|".join(re.escape(k) + (_CS if re.match(r"\\[a-zA-Z@]", k) else "")
+                                            for k in paired))
     pos = 0
     while True:
         m = _find(tex, pattern, pos)
@@ -864,8 +866,10 @@ def _expand(body: str, sources: List[str], keep_layout: bool = False) -> Optiona
 
 
 def _fraction_arguments(tex: str, names: AbstractSet[str]) -> str:
-    """Keep a macro used as a single fraction argument together when its body has several tokens."""
-    fractions = {r"\frac", r"\dfrac", r"\tfrac", r"\binom", r"\dbinom", r"\tbinom"} - names
+    """Keep a macro used as a single fraction argument together when its body has several tokens (also
+    the second argument of \\overset and its kind: \\overset\\K\\K)."""
+    fractions = {r"\frac", r"\dfrac", r"\tfrac", r"\cfrac", r"\binom", r"\dbinom", r"\tbinom", r"\overset",
+                 r"\underset", r"\stackrel"} - names
     out, last = [], 0
     for m in _TOKEN.finditer(tex):
         if m.group() in fractions:
@@ -1391,8 +1395,9 @@ def _expand_definitions(tex: str, own: List[Definition], used: List[Definition],
             out = out.strip()
     if plain:
         if not for_writer:
-            out = _fraction_arguments(out, last.keys())
-            plain = [_fraction_arguments(s, last.keys()) for s in plain]
+            bare = {n for n, d in last.items() if not _takes_arguments(d)}  # (\frac1\norm{x}: not {\norm}{x})
+            out = _fraction_arguments(out, bare)
+            plain = [_fraction_arguments(s, bare) for s in plain]
         expanded = _expand(out, plain, not for_writer)
         if expanded is None and for_writer:
             # a style file's machinery (\let to internals, \expandafter, \csname...) can stop pandoc:
@@ -1439,16 +1444,31 @@ def _braced_arguments(tex: str, names: AbstractSet[str]) -> str:
     return "".join(out) + tex[last:]
 
 
+def _takes_arguments(d: Definition) -> bool:
+    """\\newcommand{\\f}[1]..., \\def\\f#1..., a paired delimiter: a macro that takes arguments."""
+    return bool(d.paired) or "#" in d.source
+
+
+def _after_name(d: Definition) -> str:
+    """The definition without its head (\\gdef\\R, \\newcommand{\\R}): what the macro stands for."""
+    i = d.source.find(d.name)
+    return d.source[i + len(d.name):] if i >= 0 else d.source
+
+
 def expand_macros(tex: str, macros: Optional[Macros] = None) -> Tuple[str, List[str]]:
     """Write out the macros of an equation for LaTeX output and say which ones were used."""
     from .pandoc_engine import ConversionError
+    from .diagnose import _KNOWN
     source = tex
     comments = [m.span() for m in _TOKEN.finditer(tex) if m.group().startswith("%")]
     used = macros.needed(_without(tex, comments)) if macros else []
-    machinery = {d.name for d in used if "@" in d.name or _MACHINERY.search(d.source)}
+    effective = {d.name: d for d in used}  # (a later definition of a name wins, as in LaTeX)
+    machinery = {name for name, d in effective.items() if "@" in name or _MACHINERY.search(_after_name(d))}
     used = [d for d in used if d.name not in machinery]
     own, _ = parse_definitions(tex)
-    tex = _braced_arguments(tex, {d.name for d in used + own})
+    effective.update({d.name: d for d in own})
+    # braces for a macro written as a bare argument, if it takes no arguments itself (\hat\K, not \hat\abs{x})
+    tex = _braced_arguments(tex, {n for n, d in effective.items() if n not in machinery and not _takes_arguments(d)})
     own, skipped = parse_definitions(tex)
     body = _without(tex, [d.span for d in own]) if own else tex
     names = {m.group() for m in _TOKEN.finditer(body)}
@@ -1457,7 +1477,11 @@ def expand_macros(tex: str, macros: Optional[Macros] = None) -> Tuple[str, List[
     kept = sorted(names & machinery)
     try:
         out, ok = _expand_definitions(tex, own, used, for_writer=False)
-        if skipped or not ok or any(m.group() in defined for m in _TOKEN.finditer(out)):
+        # a defined name still there means a macro that did not expand, unless it is a standard command
+        # that a definition gives back (\let\oldhat\hat \renewcommand{\hat}[1]{\oldhat{...}}, \phi and
+        # \varphi swapped with \let)
+        left = {m.group() for m in _TOKEN.finditer(out)} & defined
+        if skipped or not ok or left - set(_KNOWN):
             return tex_kept
         hits: List[str] = []
         out = _expand_packs(out, tex, macros, own, hits, for_latex=True)
