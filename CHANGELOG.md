@@ -3,7 +3,7 @@
 What changed in each release of MathShuttle. The release pages on GitHub have the download files,
 their SHA-256 sums and what each release was tested with.
 
-## Unreleased
+## 0.9.0 (2026-11-28)
 
 ### New
 - Compare a Word file that came back from a co-author with the paper: the equations they changed,
