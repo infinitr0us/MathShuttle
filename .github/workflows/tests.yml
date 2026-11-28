@@ -41,7 +41,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y xvfb
-          xvfb-run -a python -m pytest tests -q -rs
+          xvfb-run -a python -m pytest tests -v -rs -o faulthandler_timeout=240
       - name: Tests
         if: runner.os != 'Linux'
-        run: python -m pytest tests -q -rs
+        timeout-minutes: 15
+        run: python -m pytest tests -v -rs -o faulthandler_timeout=240
