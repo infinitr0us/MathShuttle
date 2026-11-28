@@ -30,6 +30,8 @@ _NAMES = frozenset("arccos arcsin arctan arg cos cosh cot coth csc deg det dim e
 def _joins(left, right):
     """Whether two upright runs are one word Word split (s + in, d + et), not two (\\log + \\det, log + GDP):
     a complete operator name joins only into a longer one (sin + h, lim + sup)."""
+    if left in _NAMES and right in _NAMES:
+        return False  # two names: \lim\inf is not \liminf
     joined = left + right
     if joined in _NAMES or any(name.startswith(joined) for name in _NAMES):
         return True
@@ -93,8 +95,9 @@ _MARKERS = frozenset(W + t for t in ("bookmarkStart", "bookmarkEnd", "commentRan
                                      "proofErr", "permStart", "permEnd"))
 
 
-def strip_numbers(math, expected=()):
-    """Remove trailing number marks from equation-array rows, including marks split across runs."""
+def strip_numbers(math, expected=(), per_row=None):
+    """Remove trailing number marks from equation-array rows, including marks split across runs.
+    `per_row`, a list: gets each row's number, None for a row without one."""
     numbers = []
     for formula in math.iter(M + "oMath"):
         for array in formula.findall(M + "eqArr"):
@@ -118,9 +121,12 @@ def strip_numbers(math, expected=()):
                     if mark and mark[1] not in expected:
                         mark = None
                 if not mark:
-                    mark = re.search(r"#([^#()]+)\Z", value)
+                    # a \tag*{...}, printed without parentheses: only the export's own (P(t) too)
+                    mark = re.search(r"#((?:[^#()]|\([^#()]*\)){1,32})\Z", value)
                     if mark and mark[1] not in expected:
                         mark = None
+                if per_row is not None:
+                    per_row.append(mark[1] if mark else None)
                 if not mark:
                     continue
                 numbers.append(mark[1])

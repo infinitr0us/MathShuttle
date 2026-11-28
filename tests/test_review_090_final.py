@@ -360,3 +360,97 @@ def test_a_tag_with_parentheses_in_it(tmp_path):
     paper, docx = export(tmp_path, "\\begin{equation} x=7 \\tag{P(t)}\\label{problem}\\end{equation}", AMS)
     text, _ = corrected(tmp_path, paper, edit(docx, seven_to_nine))
     assert "\\#" not in text and compact("x=9\\tag{P(t)}\\label{problem}") in compact(text)
+
+
+# ---- the last re-check ------------------------------------------------------------------------------
+
+def test_a_starred_tag_with_parentheses_in_it(tmp_path):
+    paper, docx = export(tmp_path, "\\begin{equation} x=7 \\tag*{P(t)}\\label{prob}\\end{equation}", AMS)
+    text, _ = corrected(tmp_path, paper, edit(docx, seven_to_nine))
+    assert "\\#" not in text and compact("x=9\\tag*{P(t)}\\label{prob}") in compact(text)
+
+
+def test_swapped_bodies_under_fixed_numbers_take_their_labels_along(tmp_path):
+    body = "\\begin{align}u(0,t)&=0\\label{bc:left}\\\\u(1,t)&=1\\label{bc:right}\\end{align}"
+    paper, docx = export(tmp_path, body, AMS)
+
+    def swap_bodies(root):
+        first, second = next(root.iter(M + "eqArr")).findall(M + "e")
+        a, b = list(first)[:-1], list(second)[:-1]
+        first[:-1], second[:-1] = b, a
+
+    text, notes = corrected(tmp_path, paper, edit(docx, swap_bodies))
+    assert not notes, notes
+    assert compact("u(1,t)&=1\\label{bc:right}\\\\u(0,t)&=0\\label{bc:left}") in compact(text)
+
+
+def test_a_numbered_row_keeps_its_label_next_to_an_unnumbered_one(tmp_path):
+    body = "\\begin{align}u(0,t)&=0\\notag\\\\u(1,t)&=0\\label{bc:right}\\end{align}"
+    paper, docx = export(tmp_path, body, AMS)
+
+    def shift(root):
+        left, right = next(root.iter(M + "eqArr")).findall(M + "e")
+        change_text(left, "0", "1")
+        change_text(right, "1", "2")
+
+    text, notes = corrected(tmp_path, paper, edit(docx, shift))
+    assert not notes, notes
+    assert compact("u(1,t)&=0\\notag\\\\u(2,t)&=0\\label{bc:right}") in compact(text)
+
+
+def test_a_reference_next_to_a_macro_that_prints_the_same_number(tmp_path):
+    preamble = AMS + "\n\\newcommand{\\caseone}{(1)}"
+    body = ("\\begin{equation} x=1\\label{bound}\\end{equation}"
+            "\\[f=7\\quad\\text{in case \\caseone, by \\eqref{bound}}\\]")
+    paper, docx = export(tmp_path, body, preamble)
+
+    def delete(root):
+        t = next(t for t in root.iter(M + "t") if "in case" in (t.text or ""))
+        t.text = t.text.split(", by")[0]
+
+    text, notes = corrected(tmp_path, paper, edit(docx, delete))
+    assert "\\text{in case \\eqref" not in text and any("\\eqref{bound}" in n for n in notes)
+
+
+def test_a_reference_to_a_starred_tag_in_parentheses(tmp_path):
+    body = "\\begin{equation} x=1 \\tag*{(H)}\\label{hyp}\\end{equation}\\[z=7\\quad\\text{by \\eqref{hyp}}\\]"
+    paper, docx = export(tmp_path, body, AMS)
+    text, _ = corrected(tmp_path, paper, edit(docx, seven_to_nine))
+    assert "\\text{by \\eqref{hyp}}" in text
+
+
+def test_an_alignat_with_an_added_column_pair_counts_it(tmp_path):
+    paper, docx = export(tmp_path, "\\begin{alignat}{2} a &= 1 & b &= 2\\label{values}\\end{alignat}", AMS)
+
+    def add_pair(root):
+        row = next(root.iter(M + "eqArr")).find(M + "e")
+        added = copy.deepcopy(list(row)[4:-1])
+        added[1].find(M + "t").text = "c"
+        added[-1].find(M + "t").text = "3"
+        row[-1:-1] = added
+
+    text, _ = corrected(tmp_path, paper, edit(docx, add_pair))
+    assert "\\begin{alignat}{3}" in text and compact("c&=3\\label{values}") in compact(text)
+
+
+def test_a_tie_between_a_repeated_formula_and_another_is_not_guessed(tmp_path):
+    body = "The example uses $p=2$. The linear case has $p=1$. The proof assumes $p=2$."
+    paper, docx = export(tmp_path, body)
+
+    def change(root):
+        remove_marks(root)
+        formulas = list(root.iter(M + "oMath"))
+        change_text(formulas[0], "2", "3")
+        for parent in root.iter():
+            if formulas[1] in list(parent):
+                parent.remove(formulas[1])
+                break
+
+    text, _ = corrected(tmp_path, paper, edit(docx, change, legacy=True))
+    assert "linear case has $p=1$" in text and "$p = 3$" not in text and "$p=3$" not in text
+
+
+def test_two_operator_names_side_by_side_stay_two(tmp_path):
+    paper, docx = export(tmp_path, "Write $a=\\lim\\inf I_n$ and $b=\\lim\\sup I_n$.", AMS)
+    read = [f.equation.tex for f in documents.read_docx(str(docx)).found]
+    assert read == ["a = \\lim\\inf I_{n}", "b = \\lim\\sup I_{n}"]

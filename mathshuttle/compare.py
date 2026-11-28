@@ -40,7 +40,7 @@ class CompareRow:
     comments: list[Comment] = field(default_factory=list)
     after: Optional[int] = None  # preceding original in the returned document
     note: str = ""
-    numbers: list = field(default_factory=list)  # the row numbers Word shows, in row order
+    numbers: list = field(default_factory=list)  # the number Word shows at each row's right (or None)
 
     @property
     def tracked(self):
@@ -123,9 +123,7 @@ def _read_returned(z, originals):
         if any(e.tag in (DELETED if accept else INSERTED) for e in outer):
             return None
         view = wordmath.revision_view(math, accept)
-        stripped = wordmath.strip_numbers(view, numbers)
-        if found is not None:
-            found.extend(stripped)
+        wordmath.strip_numbers(view, numbers, found)  # found: each row's number, None for a row without
         if wordmath.empty(view):
             return None
         if display and view.tag == M + "oMath":
@@ -282,14 +280,14 @@ def _align_gap(originals, keys, a, b, pairs, uncertain, unplaced):
         known = set(before) - doubtful
 
         def held(key):
-            # the repeated formula itself, or one closer to it than to any other (x = 2 next to x = 1
-            # stays with x = 1, not with a repeated x)
+            # the repeated formula itself, or one at least as close to it as to any other: x = 2 next to
+            # x = 1 stays with x = 1, but p = 3 between a repeated p = 2 and p = 1 is not known
             if key in doubtful:
                 return True
             if key in known:
                 return False
             near = max(_ratio(value, key) for value in doubtful)
-            return near >= 0.5 and near > max((_ratio(value, key) for value in known), default=0)
+            return near >= 0.5 and near >= max((_ratio(value, key) for value in known), default=0)
 
         out_a = {i for i in a if originals[i].key in doubtful}
         out_b = {j for j in b if held(keys[j])}

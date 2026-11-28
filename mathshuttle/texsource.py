@@ -422,6 +422,12 @@ def _replacement(original, tex, macros, notes, numbers=()):
     if indent:
         restored = "\n".join(indent + line if line.strip() and not line[:1].isspace() else line
                              for line in restored.splitlines())
+    if name.startswith("alignat") and head:
+        # a column pair added in Word: alignat{n} must count them (2n - 1 & at most per row)
+        pairs = max((len(re.findall(r"(?<!\\)&", row)) + 2) // 2 for row in re.split(r"\\\\", restored))
+        count = re.search(r"\d+", head)
+        if count and pairs > int(count[0]):
+            head = head[:count.start()] + str(pairs) + head[count.end():]
     # `\begin{equation}\label{a}` on one line stays on one line
     joined = (body[:1] and not body[:1].isspace()
               and restored.split("\n", 1)[0].strip() == body.split("\n", 1)[0].strip())
@@ -429,11 +435,13 @@ def _replacement(original, tex, macros, notes, numbers=()):
 
 
 def _row_numbers(original, marks):
-    """The number of each row of the original, when every row has one (an align without \\notag)."""
+    """The number of each row of the original (None for a \\notag row), when that can be told."""
     from .wordexport import _NO_NUMBER
-    if any(_NO_NUMBER.fullmatch(m) for row in marks for m in row) or len(original.numbers) != len(marks):
+    numbered = [not any(_NO_NUMBER.fullmatch(m) for m in row) for row in marks]
+    if sum(numbered) != len(original.numbers):
         return []
-    return list(original.numbers)
+    given = iter(original.numbers)
+    return [next(given) if n else None for n in numbered]
 
 
 def _restore_rows(original, body, new_body, notes, numbers=()):
@@ -468,12 +476,19 @@ def _restore_rows(original, body, new_body, notes, numbers=()):
 
         old = [row_key(r, m) for r, m in zip(old_rows, marks)]
         new = [row_key(r) for r in rows[::2]]
+        def score(i, j):
+            return difflib.SequenceMatcher(None, old[i], new[j], autojunk=False).ratio()
+
         paired = {}
         mine = _row_numbers(original, marks)
-        if (numbers and len(numbers) == len(new) and mine and len(set(mine)) == len(mine)
-                and sorted(numbers) == sorted(mine)):
-            # every row came back with the number Word shows at its right: that says which row is which
-            paired = {j: mine.index(n) for j, n in enumerate(numbers)}
+        if numbers and len(numbers) == len(new) and mine:
+            # The number Word shows at a row's right says which row it is (rows moved with their
+            # numbers), when the row's content agrees: no other old row is closer to it. A co-author
+            # who swapped the bodies and left the numbers moved the content, and the labels follow that.
+            by_number = {j: mine.index(n) for j, n in enumerate(numbers)
+                         if n is not None and mine.count(n) == 1 and list(numbers).count(n) == 1}
+            if all(score(i, j) >= max(score(k, j) for k in range(len(old))) for j, i in by_number.items()):
+                paired.update(by_number)
         for j, value in enumerate(new):
             if j not in paired and value not in [old[i] for i in paired.values()] \
                     and old.count(value) == new.count(value) == 1:
@@ -492,8 +507,6 @@ def _restore_rows(original, body, new_body, notes, numbers=()):
             # As many rows as before and none moved: rows edited in place keep their own labels, when
             # each is closer to its own old row than to any other one (a swap with edits is not), or
             # the old rows are the same (then which is which does not matter).
-            def score(i, j):
-                return difflib.SequenceMatcher(None, old[i], new[j], autojunk=False).ratio()
             if all(score(j, j) >= 0.5 and all(score(i, j) < score(j, j) or old[i] == old[j]
                                               for i in open_rows if i != j) for j in open_rows):
                 for j in open_rows:
@@ -532,14 +545,14 @@ def _restore_references(original, new, numbers, notes):
         if m[0] in new:
             continue
         printed = numbers.get(m[2]) if m[1] == "eqref" else None
-        if printed and not (printed.startswith("(") and printed.endswith(")")):
-            printed = "(%s)" % printed  # \eqref of a \tag*{H} prints (H)
         places = [i for i in (j.start() for j in re.finditer(re.escape(printed), new))
                   if any(a <= i < b for a, b in compat._text_spans(new))] if printed else []
         # certain only when the number was this reference's alone in what Word showed: in
         # "case (1), by \eqref{a}" a deleted reference must not move onto the case number
+        # (and in the export's own text, macros written out: \caseone may print (1) too)
         shown = body.replace(m[0], printed) if printed else ""
-        if len(places) == 1 and new.count(printed) == 1 and body.count(m[0]) == 1 and shown.count(printed) == 1:
+        if (len(places) == 1 and new.count(printed) == 1 and body.count(m[0]) == 1 and shown.count(printed) == 1
+                and (original.key or "").count(printed) <= 1):
             new = new[:places[0]] + m[0] + new[places[0] + len(printed):]
         elif m[0] not in lost:
             lost.append(m[0])
@@ -575,7 +588,9 @@ def _edits(result, tree, notes):
     changes = defaultdict(list)
     filename = " ".join(result.returned_docx.name.splitlines())
     # what the export printed for \eqref{label}: the number of an equation with one label and one number
-    numbers = {o.labels[0]: o.numbers[0] for o in originals.values() if len(o.labels) == len(o.numbers) == 1}
+    # (\eqref puts the number in parentheses; a \tag*{H} shows H at the margin, so its \eqref prints (H))
+    numbers = {o.labels[0]: "(%s)" % o.numbers[0] if re.search(r"\\tag\s*\*", o.tex) else o.numbers[0]
+               for o in originals.values() if len(o.labels) == len(o.numbers) == 1}
 
     def not_found(eq):
         note = "Equation %d not found in %s. Left the source as it is." % (eq.n, eq.file or tree.paper.name)
