@@ -296,3 +296,36 @@ def test_copy_for_office_clipboard_race():
     assert clipboard.get_text() == "copied meanwhile"
     clipboard.set_text("ok", expect_sequence=clipboard.sequence_number())
     assert clipboard.get_text() == "ok"
+
+
+# What Word 365 saved when a whole fraction was deleted with Track Changes on (2026-11-28): the
+# structure's own properties carry the deletion, besides its runs.
+_DELETED_FRACTION = ('<m:oMath %s %s><m:r><m:t>a</m:t></m:r><m:r><m:t>+</m:t></m:r><m:f><m:fPr><m:ctrlPr>'
+                     '<w:%s w:id="2"/></m:ctrlPr></m:fPr><m:num><m:r><w:%s w:id="3"><m:t>b</m:t></w:%s></m:r>'
+                     '</m:num><m:den><m:r><w:%s w:id="4"><m:t>c</m:t></w:%s></m:r></m:den></m:f>'
+                     '<m:r><m:t>=</m:t></m:r><m:r><m:t>d</m:t></m:r></m:oMath>')
+
+
+def test_a_structure_deleted_whole_goes_with_its_slots():
+    from mathshuttle import wordmath
+    xml = _DELETED_FRACTION % ((W, M) + ("del",) * 5)
+    accepted = wordmath.revision_view(ET.fromstring(xml), True)
+    assert accepted.find(".//" + wordmath.M + "f") is None
+    assert "".join(t.text for t in accepted.iter(wordmath.M + "t")) == "a+=d"
+    rejected = wordmath.revision_view(ET.fromstring(xml), False)
+    assert "".join(t.text for t in rejected.iter(wordmath.M + "t")) == "a+bc=d"
+    assert rejected.find(".//" + wordmath.M + "f") is not None
+
+
+def test_a_structure_inserted_whole_is_not_in_the_original():
+    from mathshuttle import wordmath
+    xml = _DELETED_FRACTION % ((W, M) + ("ins",) * 5)
+    assert wordmath.revision_view(ET.fromstring(xml), False).find(".//" + wordmath.M + "f") is None
+    assert wordmath.revision_view(ET.fromstring(xml), True).find(".//" + wordmath.M + "f") is not None
+
+
+def test_a_structure_marked_deleted_keeps_what_was_not_deleted():
+    from mathshuttle import wordmath
+    xml = ('<m:oMath %s %s><m:f><m:fPr><m:ctrlPr><w:del w:id="2"/></m:ctrlPr></m:fPr><m:num><m:r>'
+           '<m:t>b</m:t></m:r></m:num><m:den><m:r><m:t>c</m:t></m:r></m:den></m:f></m:oMath>' % (W, M))
+    assert wordmath.revision_view(ET.fromstring(xml), True).find(".//" + wordmath.M + "f") is not None

@@ -353,6 +353,22 @@ def _row_marks(row):
     return marks + [m[0] for m in _LABEL.finditer(row)]
 
 
+_MARKS_ONLY = re.compile(r"\s*(?:\\(?:label|tag\*?|notag|nonumber)\b\s*(?:\{[^{}]*\})?\s*)+")
+
+
+def _leading(row, marks):
+    """The start of `row` when the row begins with all its marks (``\\label{a}`` before its maths), else None."""
+    from .wordexport import _without_comments
+    text = _without_comments(row).lstrip()
+    at = 0
+    for mark in marks:
+        if not text.startswith(mark, at):
+            return None
+        at += len(mark)
+        at += len(text[at:]) - len(text[at:].lstrip())
+    return text[:at].replace("\r\n", "\n") if marks and text[at:].strip() else None
+
+
 def _replacement(original, tex, macros, notes):
     tex = _original_macros(original.body, tex, macros)
     source = original.tex.strip()
@@ -364,6 +380,7 @@ def _replacement(original, tex, macros, notes):
     if not env:
         return None
     name, body = env["env"], env["body"]
+    head = ""
     if name in latex_wrap.GATHER_ENVS + latex_wrap.MULTLINE_ENVS:
         # Pandoc represents these as a one-column matrix or an equation array.
         wrapper, new_body = latex_wrap.split_env(tex, ("matrix", "gathered", "aligned", "array"))
@@ -381,6 +398,8 @@ def _replacement(original, tex, macros, notes):
             arg = latex_wrap._ALIGNAT_ARG_RE.match(body)
             if arg:
                 new_body = arg[0].strip() + "\n" + new_body
+                if not arg[1]:
+                    head = arg[0].strip()  # `\begin{alignat}{2}` as the author wrote it
         elif name.startswith("eqnarray"):
             new_body = re.sub(r"(?<!\\)&\s*(\\[A-Za-z]+|[=<>+\-])", r"&\1&", new_body)
     else:
@@ -389,13 +408,20 @@ def _replacement(original, tex, macros, notes):
     if restored is None:
         return None
     restored = restored.strip()
+    if head and restored.startswith(head):
+        restored = restored[len(head):].lstrip("\n")
+    else:
+        head = ""
     # indented as the author indented the original's body
-    first = next((line for line in body.splitlines() if line.strip()), "")
+    first = next((line for line in body.splitlines() if line.strip() and not _MARKS_ONLY.fullmatch(line)), "")
     indent = first[:len(first) - len(first.lstrip())]
     if indent:
         restored = "\n".join(indent + line if line.strip() and not line[:1].isspace() else line
                              for line in restored.splitlines())
-    return "\\begin{%s}\n%s\n\\end{%s}" % (name, restored, name)
+    # `\begin{equation}\label{a}` on one line stays on one line
+    joined = (body[:1] and not body[:1].isspace()
+              and restored.split("\n", 1)[0].strip() == body.split("\n", 1)[0].strip())
+    return "\\begin{%s}%s%s%s\n\\end{%s}" % (name, head, "" if joined else "\n", restored, name)
 
 
 def _restore_rows(original, body, new_body, notes):
@@ -410,6 +436,7 @@ def _restore_rows(original, body, new_body, notes):
             nested, new_body = new["env"], new["body"]
     old_rows, rows = _top_rows(body)[::2], _top_rows(new_body)
     marks = [_row_marks(row) for row in old_rows]
+    leads = [_leading(row, m) for row, m in zip(old_rows, marks)]
     if any(marks) and max(len(old_rows), len(rows[::2])) > 1:
         def row_key(row, marks=()):
             row = _without_comments(row)
@@ -439,9 +466,13 @@ def _restore_rows(original, body, new_body, notes):
         unused = [m for i, row_marks in enumerate(marks) if i not in paired.values() for m in row_marks]
         if unused:
             notes.append("Equation %d has fewer matching rows. Check %s." % (original.n, ", ".join(unused)))
+        leads = [leads[paired[j]] if j in paired else None for j in range(len(new))]
         marks = [marks[paired[j]] if j in paired else [] for j in range(len(new))]
     for i, mark in enumerate(marks):
-        if mark:
+        if mark and i < len(leads) and leads[i]:
+            # where the author put them: before the row's maths
+            rows[2 * i] = leads[i] + rows[2 * i].lstrip()
+        elif mark:
             rows[2 * i] = rows[2 * i].rstrip() + " " + " ".join(mark) + ("\n" if i * 2 + 1 < len(rows) else "")
     content = "".join(rows).strip()
     return "\\begin{%s}\n%s\n\\end{%s}" % (nested, content, nested) if nested else content

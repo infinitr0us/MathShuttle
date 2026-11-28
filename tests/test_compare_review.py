@@ -495,3 +495,19 @@ def test_deleted_selection_disables_word_actions():
     assert window._latex() is None and CompareWindow.STATUS["moved"] == "Moved"
     for button in (window.copy_button, window.use_button):
         button.configure.assert_called_with(state="disabled")
+
+
+@pytest.mark.parametrize("opening,indent", [("\\begin{equation}\\label{a}\n", ""),
+                                            ("\\begin{equation}\n\\label{a}\n", ""),
+                                            ("\\begin{equation}\n  \\label{a}\n", "  ")])
+def test_a_label_stays_where_the_author_put_it(tmp_path, opening, indent):
+    paper, docx = export(tmp_path, opening + indent + "x=2\n\\end{equation}")
+    text, _ = corrected(tmp_path, paper, edit(docx, lambda r: change_text(r, "2", "9")))
+    assert opening + indent + "x = 9\n\\end{equation}" in text, text
+
+
+def test_alignat_keeps_its_argument_on_the_begin_line(tmp_path):
+    body = "\\begin{alignat}{2}\na&=1 &\\quad b&=3\\label{first}\\\\\nc&=2 & d&=4\\label{last}\n\\end{alignat}"
+    paper, docx = export(tmp_path, body, "\\usepackage{amsmath}")
+    text, _ = corrected(tmp_path, paper, edit(docx, lambda r: change_text(r, "2", "9")))
+    assert "\\begin{alignat}{2}\na & = 1" in text and "c & = 9" in text and "\\label{last}" in text, text

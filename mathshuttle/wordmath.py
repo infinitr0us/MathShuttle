@@ -50,6 +50,11 @@ def revision_view(el, accept=True):
         if (node.tag == M + "r" and not any(t.text for t in new.iter(M + "t"))
                 and node.find(".//" + M + "t") is not None):
             return []
+        if (node.tag.startswith(M) and not any((t.text or "").strip() for t in new.iter(M + "t"))
+                and any(c.tag in dropped for c in node.iterfind("%sPr/%sctrlPr/*" % (node.tag, M)))):
+            # A structure deleted (or inserted) as a whole: Word marks it in its own properties, and
+            # accepting (or rejecting) the change removes it, empty slots and all.
+            return []
         return [new]
 
     copied = copy(el)
