@@ -94,7 +94,10 @@ equation in an `\input` or `\include` file goes into a copy of that file in a fo
 corrected paper (`paper.revised-inputs`), and the copy's `\input` lines point there. Nothing is
 overwritten: if that `.diff` or one of those copies already exists, MathShuttle stops and names it. If
 the paper was edited since the export and an equation cannot be found any more for sure, it is left as
-it is and named. A corrected copy written to another folder than the paper's needs the paper's own
+it is and named, as is an equation written between shorthand macros of yours (`\be ... \ee`). An
+`\eqref` inside an equation, which Word shows as its number, is put back where its place is certain
+(`\text{by \eqref{a}}`); any other is named, for you to put back. A corrected copy written to another
+folder than the paper's needs the paper's own
 `.sty` files and figures there to compile; a note says so.
 
 How it knows: a Word export of a whole paper marks each equation with a hidden bookmark (Word shows it
