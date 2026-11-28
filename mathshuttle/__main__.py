@@ -190,8 +190,6 @@ def _cli(argv: list[str]) -> int:
     word_cmd.add_argument("-o", "--output", required=True, metavar="OUT", help="the Word file to write (.docx)")
     word_cmd.add_argument("--no-pictures", action="store_true",
                           help="keep equations Word cannot convert as LaTeX text with the reason")
-    word_cmd.add_argument("--macros", action="append", default=[], metavar="FILE",
-                          help="load LaTeX macro definitions from FILE (repeatable)")
 
     for p in (convert_cmd, copy_cmd):
         input_group = p.add_mutually_exclusive_group()
@@ -207,7 +205,7 @@ def _cli(argv: list[str]) -> int:
     for p in (convert_cmd, copy_cmd, paste_cmd):
         p.add_argument("--mode", choices=[k for k, _ in MODES], default="auto",
                        help="use inline or display math (auto keeps the detected mode)")
-    for p in (convert_cmd, copy_cmd, extract_cmd):
+    for p in (convert_cmd, copy_cmd, extract_cmd, word_cmd, compare_cmd):
         p.add_argument("--macros", action="append", default=[], metavar="FILE",
                        help="load LaTeX macro definitions from FILE (repeatable)")
     for p in (convert_cmd, extract_cmd):
@@ -243,13 +241,13 @@ def _cli(argv: list[str]) -> int:
             return 0
         if args.cmd == "get-pandoc":
             return _get_pandoc(args.force)
-        if args.cmd in ("convert", "copy", "extract", "word"):
+        if args.cmd in ("convert", "copy", "extract", "word", "compare"):
             for path in args.macros:
                 if not os.path.isfile(path):
                     raise InputError("macro file %s does not exist" % path)
         if args.cmd == "compare":
             from .compare import compare, write_corrected
-            result = compare(args.returned, args.paper)
+            result = compare(args.returned, args.paper, load_macros(args.macros))
             originals = {row.original.n: row.original for row in result.rows if row.original}
             for row in result.rows:
                 if row.status == "unchanged" and not args.all and not row.comments:
@@ -268,6 +266,8 @@ def _cli(argv: list[str]) -> int:
                     print("Original:", "\n".join(eq.tex.splitlines()))
                 if row.returned:
                     print("Returned:", row.returned)
+                if row.note:
+                    print(row.note)
                 for r in row.revisions:
                     print("Tracked change:", ", ".join(filter(None, (r.author, r.date))))
                 for c in row.comments:

@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from pathlib import Path
 
 from . import __version__, compat, documents, wordmath
 from .convert import tidied
 from .pandoc_engine import ConversionError, Equation, _collect_math, _run, markdown_blocks, markdown_maths
-from .texsource import Original, SourceTree
+from .texsource import Original, SourceTree, _DELIMITERS, _dollar_spans, _pattern, _same_source
 from .wordmath import W
 
 NS = "urn:mathshuttle:equations"
@@ -25,12 +27,19 @@ def temporary_prefix():
 
 
 def key(tex):
-    """Tidied OMML LaTeX without math whitespace. Keep spaces that belong to text."""
+    """Keep text spaces and the boundary between a control word and the next letter."""
+    def compact(value):
+        def space(m):
+            if m[1]:
+                return m[1] + " "
+            return "" if m[0].isspace() else m[0]
+        return re.sub(r"(\\[A-Za-z@]+)\s+(?=[A-Za-z@])|\\[\s\S]|\s+", space, value)
+
     parts, last = [], 0
     for start, end in compat._text_spans(tex):
-        parts.extend(("".join(tex[last:start].split()), tex[start:end]))
+        parts.extend((compact(tex[last:start]), tex[start:end]))
         last = end
-    return "".join(parts) + "".join(tex[last:].split())
+    return "".join(parts) + compact(tex[last:])
 
 
 def read_maths(fragments):
@@ -82,6 +91,81 @@ def match_sources(maths, raw):
     return [candidate or eq for candidate, eq in zip(matched, expanded)]
 
 
+def _trace_sources(tree, maths, raw):
+    """Read an in-memory copy with a position written into each literal formula."""
+    from .wordexport import _split_grouped
+    prefix = temporary_prefix()
+    mark = re.compile(prefix + r"(\d+)Z")
+    origins, inserts = [], defaultdict(dict)
+
+    def insert(path, offset, origin):
+        if offset not in inserts[path]:
+            inserts[path][offset] = " " + prefix + str(len(origins)) + "Z "
+            origins.append(origin)
+
+    patterns = {_pattern(eq.tex, eq.display) for eq in raw}
+    for path, source in tree.text.items():
+        spans = {span for pattern in patterns for span in tree.spans(path, pattern)}
+        for a, b in sorted(spans, key=lambda span: (span[0], -span[1])):
+            literal = source[a:b]
+            close = next((end for start, end, _ in _DELIMITERS if literal.startswith(start) and literal.endswith(end)),
+                         None)
+            if close:
+                offset = b - len(close)
+            else:
+                end = re.search(r"\\end\s*\{[^{}]+\}\s*$", literal)
+                if not end:
+                    continue
+                offset = a + end.start()
+            insert(path, offset, (path, (a, b), ""))
+        for definition in compat.parse_definitions(source)[0]:
+            # Label maths created in prose, where there are no literal delimiters at the call.
+            ends = [b - (2 if definition.source.startswith("$$", a) else 1)
+                    for a, b in _dollar_spans(definition.source).items()]
+            ends.extend(m.start() for m in re.finditer(r"\\(?:\)|\]|end\s*\{(?:equation|align|gather|multline)\*?\})",
+                                                       definition.source))
+            for call in re.finditer(r"\\ensuremath\s*\{", definition.source):
+                end = compat._group_end(definition.source, call.end() - 1)
+                if end > 0:
+                    ends.append(end - 1)
+            for offset in ends:
+                insert(path, definition.span[0] + offset, (None, None, definition.name))
+
+    chunks = []
+    for path, start, end in tree.segments:
+        pos = start
+        for offset, value in sorted(inserts[path].items()):
+            if start <= offset < end:
+                chunks.extend((tree.text[path][pos:offset], value))
+                pos = offset
+        chunks.extend((tree.text[path][pos:end], "\n"))
+    traced, meta = [], {}
+    try:
+        blocks, _, _ = documents._read_latex_blocks("".join(chunks), str(tree.folder), [], meta=meta)
+    except ConversionError:
+        return {}
+    _split_grouped(blocks)
+    _collect_math([meta, blocks], traced)
+    if len(traced) != len(maths) or any(eq.display != actual.display or
+            _same_source(mark.sub("", eq.tex)) != _same_source(actual.tex) for eq, actual in zip(traced, maths)):
+        return {}
+    result = {}
+    for i, eq in enumerate(traced):
+        marks = [origins[int(n)] for n in mark.findall(eq.tex)]
+        literal = [origin for origin in marks if origin[0] is not None]
+        if len(literal or marks) == 1:
+            result[i] = (literal or marks)[0]
+    return result
+
+
+class _Sources(list):
+    """The source records and the files in the snapshot they describe."""
+
+    def __init__(self, tree):
+        super().__init__()
+        self.hashes = {Path(os.path.relpath(p, tree.folder)).as_posix(): value for p, value in tree.digests.items()}
+
+
 def sources(path, prep):
     from .wordexport import _LABEL, _without_comments
 
@@ -93,10 +177,20 @@ def sources(path, prep):
             raw.append(f.equation)
             sections.append(re.sub(r"  \[[^{}]*\]$", "", f.where))
     headings = {id(eq): heading for eq, heading in zip(raw, sections)}
-    originals = []
+    traced = _trace_sources(tree, prep.maths, raw) if fmt == "latex" else {}
+    originals = _Sources(tree)
     for i, source in enumerate(match_sources(prep.maths, raw)):
         original = Original(i + 1, source.tex, source.display, headings.get(id(source), ""))
-        tree.locate(original)
+        original.numbers = [prep.numbers[int(k)] for k in re.findall(r"QQMSN(\d+)QQ", prep.maths[i].prepared)
+                            if int(k) in prep.numbers]
+        if i in traced:
+            location, span, original.macro = traced[i]
+            if location:
+                tree.record(original, location, span)
+            else:
+                original.tex = prep.maths[i].tex
+        elif fmt == "markdown":
+            tree.locate(original)
         original.labels = _LABEL.findall(_without_comments(original.tex))
         originals.append(original)
     return originals
@@ -106,8 +200,9 @@ def _xml(root):
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
-def _custom_part(parts, path, records):
+def _custom_part(parts, path, records, hashes):
     manifest = ET.Element("{%s}equations" % NS, source=Path(path).name, version=__version__)
+    manifest.set("files", json.dumps(hashes, ensure_ascii=False))
     for eq in records:
         entry = ET.SubElement(manifest, "eq", n=str(eq.n), tex=eq.tex, display=str(int(eq.display)), section=eq.section,
                               file=eq.file, occurrence=str(eq.occurrence), count=str(eq.count), key=eq.key,
@@ -115,6 +210,12 @@ def _custom_part(parts, path, records):
                               numbers=json.dumps(eq.numbers, ensure_ascii=False))
         if eq.picture:
             entry.set("picture", "1")
+        if eq.digest:
+            entry.attrib.update(before=eq.before, after=eq.after)
+            if not eq.unique_context:
+                entry.set("uniqueContext", "0")
+        if eq.macro:
+            entry.set("macro", eq.macro)
     i = 1
     while f"customXml/item{i}.xml" in parts or f"customXml/itemProps{i}.xml" in parts:
         i += 1
@@ -170,7 +271,7 @@ def mark_export(parts, path, prefix, originals):
                 renamed[old_name] = "_MSEq%d" % original.n
                 if not original.picture:
                     view = wordmath.revision_view(el)
-                    original.numbers = wordmath.strip_numbers(view)
+                    original.numbers = wordmath.strip_numbers(view, original.numbers)
                     fragments.append(view)
                 records.append(original)
         # Preserve pandoc's namespace declarations, including names used in attribute values.
@@ -185,10 +286,10 @@ def mark_export(parts, path, prefix, originals):
         if tex is None:
             raise ConversionError("Could not read back exported equation %d." % record.n)
         record.key = key(tex)
-    _custom_part(parts, path, records)
+    _custom_part(parts, path, records, originals.hashes if originals else {})
 
 
-def manifest(z):
+def manifest(z, main_file=None):
     """Records reached through the document's custom XML relationship, or None for an old export."""
     for _, kind, target in documents._targets(z, "word/document.xml"):
         if not kind.endswith("/customXml") or target not in z.namelist():
@@ -197,15 +298,27 @@ def manifest(z):
         if root.tag != "{%s}equations" % NS:
             continue
         records = []
+        hashes = json.loads(root.get("files", "{}"))
         for el in root:
             if el.tag not in ("eq", "{%s}eq" % NS):
                 continue
             if "key" not in el.attrib:
                 return None
-            records.append(Original(int(el.attrib["n"]), el.attrib["tex"], el.get("display") == "1",
-                                    el.get("section", ""), el.get("file", ""), int(el.get("occurrence", 0)),
-                                    int(el.get("count", 0)), json.loads(el.get("labels", "[]")),
-                                    json.loads(el.get("numbers", "[]")), el.attrib["key"], el.get("picture") == "1"))
+            file = el.get("file", "")
+            if main_file and file == root.get("source"):
+                file = main_file
+            record = Original(int(el.attrib["n"]), el.attrib["tex"], el.get("display") == "1",
+                              el.get("section", ""), file, int(el.get("occurrence", 0)),
+                              int(el.get("count", 0)), json.loads(el.get("labels", "[]")),
+                              json.loads(el.get("numbers", "[]")), el.attrib["key"], el.get("picture") == "1",
+                              hashes.get(el.get("file", ""), ""), el.get("before", ""), el.get("after", ""),
+                              el.get("macro", ""), el.get("uniqueContext") != "0")
+            if "files" not in root.attrib:
+                # Earlier exports dropped control-word spaces. The saved literal can recover them.
+                source_key = key(record.body)
+                if source_key.replace(" ", "") == record.key and not compat._text_spans(record.body):
+                    record.key = source_key
+            records.append(record)
         return records
     return None
 

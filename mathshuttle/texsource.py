@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import codecs
 import difflib
+import hashlib
 import os
 import re
 import tempfile
@@ -28,6 +29,11 @@ class Original:
     numbers: list[str] = field(default_factory=list)
     key: str = ""
     picture: bool = False
+    digest: str = ""
+    before: str = ""
+    after: str = ""
+    macro: str = ""
+    unique_context: bool = True
 
     @property
     def body(self):
@@ -113,6 +119,7 @@ class SourceTree:
         self.folder = self.paper.parent
         self.text = {}
         self.encoding = {}
+        self.digests = {}
         self.mask = {}
         self.dollars = {}
         self._matches = {}
@@ -127,6 +134,7 @@ class SourceTree:
         if path in self.text or len(self.text) >= 300:
             return
         data = path.read_bytes()
+        self.digests[path] = hashlib.sha256(data).hexdigest()
         text = documents._source_text(data)
         if data.startswith(codecs.BOM_UTF8):
             encoding = "utf-8-sig"
@@ -179,11 +187,21 @@ class SourceTree:
                 return
             path, span = remaining[0]
         self.claimed.add((path, span))
+        self.record(original, path, span)
+
+    def record(self, original, path, span):
         original.tex = self.text[path][span[0]:span[1]]
         original.file = Path(os.path.relpath(path, self.folder)).as_posix()
         matches = self.exact_spans(path, original.tex)
         original.count = len(matches)
         original.occurrence = matches.index(span) + 1
+        original.digest = self.digests[path]
+        original.before, original.after = self.context(path, span)
+        original.unique_context = sum(self.context(path, m) == (original.before, original.after) for m in matches) == 1
+
+    def context(self, path, span):
+        a, b = span
+        return self.text[path][max(0, a - 32):a], self.text[path][b:b + 32]
 
     def spans(self, path, pattern):
         key = path, pattern
@@ -211,18 +229,37 @@ class SourceTree:
         path = (self.folder / original.file).resolve()
         if path in self.mask and original.occurrence > 0:
             matches = self.exact_spans(path, original.tex)
+            if original.digest and original.digest != self.digests[path]:
+                if not original.unique_context:
+                    return None
+                matching = [span for span in matches if self.context(path, span) == (original.before, original.after)]
+                return (path, matching[0]) if len(matching) == 1 else None
+            if not original.digest and len(matches) > 1:
+                return None
             if len(matches) == original.count and len(matches) >= original.occurrence:
                 return path, matches[original.occurrence - 1]
         return None
 
 
-def _macros(tree, user):
+def _macros(tree, user, position=None, names=None):
     """Literal expansions of the paper's zero-argument macros, longest first."""
-    definitions = documents._local_sources(str(tree.paper), tree.text[tree.paper])
+    source = tree.text[tree.paper]
+    if position:
+        path, offset = position
+        prefixes = []
+        for file, start, end in tree.segments:
+            if file == path and start <= offset < end:
+                prefixes.append(tree.text[file][start:offset])
+                break
+            prefixes.append(tree.text[file][start:end])
+        source = "\n".join(prefixes)
+    definitions = documents._local_sources(str(tree.paper), source)
     macros = compat.with_document(user, definitions)
-    choices = {}
+    choices = []
     if macros:
         for name, definition in macros.definitions.items():
+            if names is not None and name not in names:
+                continue
             body = compat._simple_expansion(name, macros.needed(name))
             if body is None and not compat._takes_arguments(definition):
                 # An explicit [0], an empty xparse signature, or a macro using an argument-taking helper.
@@ -230,14 +267,66 @@ def _macros(tree, user):
                 if tail.startswith("{") and compat._group_end(tail, 0) == len(tail):
                     body, _ = compat.expand_macros(name, macros)
             if body and body != name:
-                choices.setdefault(body, name)
-    return sorted(choices.items(), key=lambda pair: -len(pair[0]))
+                choices.append((body, name))
+    return sorted(choices, key=lambda pair: -len(pair[0]))
+
+
+def _protected(tex):
+    spans = compat._text_spans(tex)
+    for token in latex_wrap._TOKEN_RE.finditer(tex):
+        if token.group("be"):
+            end = token.end()
+            if token.group("be") == "begin" and token.group("env") in ("array", "alignedat", "alignat", "alignat*"):
+                _, end = compat._argument(tex, compat._optional(tex, end, 1))
+            spans.append((token.start(), end))
+        elif token[0] in (r"\text", r"\mathrm", r"\operatorname", r"\textrm", r"\mbox"):
+            _, end = compat._argument(tex, token.end() + int(tex[token.end():].startswith("*")))
+            spans.append((token.start(), end))
+    return spans
+
+
+def _original_macros(source, tex, macros):
+    """Restore a macro only where its original expansion survived in the returned tokens."""
+    by_name = {name: body for body, name in macros}
+    old, uses = [], []
+    protected = _protected(source)
+    for token in _TOKEN.finditer(source):
+        name = token[0]
+        if name in by_name and not compat._in(protected, token.start()):
+            expansion = _TOKEN.findall(by_name[name])
+            uses.append((len(old), expansion, name))
+            old.extend(expansion)
+        else:
+            old.append(name)
+    if not uses:
+        return tex
+    tokens = list(_TOKEN.finditer(tex))
+    new = [t[0] for t in tokens]
+    blocks = difflib.SequenceMatcher(None, old, new, autojunk=False).get_matching_blocks()
+    changes = []
+    protected = _protected(tex)
+    for index, expansion, name in uses:
+        size = len(expansion)
+        if not size or sum(old[i:i+size] == expansion for i in range(len(old))) != sum(
+                new[i:i+size] == expansion for i in range(len(new))):
+            continue
+        for a, b, length in blocks:
+            if a <= index and index + size <= a + length:
+                start = tokens[b + index - a].start()
+                end = tokens[b + index - a + size - 1].end()
+                if not any(start < y and x < end for x, y in protected):
+                    gap = " " if re.match(r"[A-Za-z@]", tex[end:end + 1]) and name[-1].isalpha() else ""
+                    changes.append((start, end, name + gap))
+                break
+    for start, end, value in reversed(changes):
+        tex = tex[:start] + value + tex[end:]
+    return tex
 
 
 def _restore_macros(tex, macros):
     tokens = list(_TOKEN.finditer(tex))
     ends = {m.end() for m in tokens}
-    protected = compat._text_spans(tex) + [m.span() for m in latex_wrap._TOKEN_RE.finditer(tex) if m.group("be")]
+    protected = _protected(tex)
     out, last = [], 0
     for token in tokens:
         start = token.start()
@@ -265,17 +354,25 @@ def _row_marks(row):
 
 
 def _replacement(original, tex, macros, notes):
-    tex = _restore_macros(tex, macros)
+    tex = _original_macros(original.body, tex, macros)
     source = original.tex.strip()
     for opening, closing, wrapper in _DELIMITERS:
         if source.startswith(opening) and source.endswith(closing):
             body = _restore_rows(original, source[len(opening):-len(closing)], tex, notes)
-            return latex_wrap.wrap(body, wrapper, original.display)
+            return latex_wrap.wrap(body, wrapper, original.display) if body is not None else None
     env = latex_wrap._ENV_RE.fullmatch(source)
     if not env:
         return None
     name, body = env["env"], env["body"]
-    if name in latex_wrap.WRAPPER_KEYS:
+    if name in latex_wrap.GATHER_ENVS + latex_wrap.MULTLINE_ENVS:
+        # Pandoc represents these as a one-column matrix or an equation array.
+        wrapper, new_body = latex_wrap.split_env(tex, ("matrix", "gathered", "aligned", "array"))
+        if wrapper == "array":
+            new_body = re.sub(r"^\s*\{\s*[clr]\s*\}", "", new_body, count=1)
+        if any(m[0] == "&" for m in latex_wrap._top_level(new_body)):
+            notes.append("Check the columns of equation %d. Left the source as it is." % original.n)
+            return None
+    elif name in latex_wrap.WRAPPER_KEYS:
         wrapped = latex_wrap.wrap(tex, name)
         new_body = latex_wrap._ENV_RE.fullmatch(wrapped)["body"].strip()
     elif name in latex_wrap.ALIGN_ENVS:
@@ -288,7 +385,10 @@ def _replacement(original, tex, macros, notes):
             new_body = re.sub(r"(?<!\\)&\s*(\\[A-Za-z]+|[=<>+\-])", r"&\1&", new_body)
     else:
         new_body = latex_wrap.plain_form(tex)
-    restored = _restore_rows(original, body, new_body, notes).strip()
+    restored = _restore_rows(original, body, new_body, notes)
+    if restored is None:
+        return None
+    restored = restored.strip()
     # indented as the author indented the original's body
     first = next((line for line in body.splitlines() if line.strip()), "")
     indent = first[:len(first) - len(first.lstrip())]
@@ -299,7 +399,7 @@ def _replacement(original, tex, macros, notes):
 
 
 def _restore_rows(original, body, new_body, notes):
-    from .wordexport import _top_rows
+    from .wordexport import _top_rows, _without_comments
     # Delimiters and equation environments can themselves enclose an aligned or split block.
     nested = None
     old = latex_wrap._ENV_RE.fullmatch(body.strip())
@@ -310,16 +410,36 @@ def _restore_rows(original, body, new_body, notes):
             nested, new_body = new["env"], new["body"]
     old_rows, rows = _top_rows(body)[::2], _top_rows(new_body)
     marks = [_row_marks(row) for row in old_rows]
-    if len(rows[::2]) != len(old_rows):
-        if any(marks):
-            retained = original.labels[:1]
-            note = "Equation %d has a different number of rows." % original.n
-            if retained:
-                note += " Kept label %s." % retained[0]
-            if original.labels[1:]:
-                note += " Check the other labels: %s." % ", ".join(original.labels[1:])
-            notes.append(note)
-            marks = [[r"\label{%s}" % label for label in retained]]
+    if any(marks) and max(len(old_rows), len(rows[::2])) > 1:
+        def row_key(row, marks=()):
+            row = _without_comments(row)
+            for mark in marks:
+                row = row.replace(mark, "")
+            return tuple(t for t in _TOKEN.findall(row) if t != "&")
+
+        old = [row_key(r, m) for r, m in zip(old_rows, marks)]
+        new = [row_key(r) for r in rows[::2]]
+        paired = {}
+        for j, value in enumerate(new):
+            if old.count(value) == new.count(value) == 1:
+                paired[j] = old.index(value)
+        left = [i for i in range(len(old)) if i not in paired.values()]
+        right = [j for j in range(len(new)) if j not in paired]
+        if len(left) == len(right) == 1:
+            paired[right[0]] = left[0]
+        elif len(right) == 1 and left:
+            scores = sorted(((difflib.SequenceMatcher(None, old[i], new[right[0]], autojunk=False).ratio(), i)
+                             for i in left), reverse=True)
+            if scores[0][0] >= 0.5 and scores[0][0] > scores[1][0]:
+                paired[right[0]] = scores[0][1]
+        if any(j not in paired for j in right) and any(marks[i] for i in left):
+            notes.append("Cannot tell which rows of equation %d keep their labels. Left the source as it is."
+                         % original.n)
+            return None
+        unused = [m for i, row_marks in enumerate(marks) if i not in paired.values() for m in row_marks]
+        if unused:
+            notes.append("Equation %d has fewer matching rows. Check %s." % (original.n, ", ".join(unused)))
+        marks = [marks[paired[j]] if j in paired else [] for j in range(len(new))]
     for i, mark in enumerate(marks):
         if mark:
             rows[2 * i] = rows[2 * i].rstrip() + " " + " ".join(mark) + ("\n" if i * 2 + 1 < len(rows) else "")
@@ -329,11 +449,10 @@ def _restore_rows(original, body, new_body, notes):
 
 def _edits(result, tree, notes):
     """Collect edits against a single snapshot, so duplicates and insertions keep their places."""
-    originals = {r.original.n: r.original for r in result.rows if r.original}
+    originals = {o.n: o for o in result.originals} or {r.original.n: r.original for r in result.rows if r.original}
     positions = {n: tree.position(eq) for n, eq in originals.items()}
     edits = defaultdict(list)
     changes = defaultdict(list)
-    macros = _macros(tree, result.macros)
     filename = " ".join(result.returned_docx.name.splitlines())
 
     def not_found(eq):
@@ -343,11 +462,15 @@ def _edits(result, tree, notes):
 
     for row in result.rows:
         eq = row.original
+        if row.status in ("unreadable", "unmatched") or (eq and eq.macro and row.status == "changed"):
+            if row.note not in notes:
+                notes.append(row.note)
+            continue
         if eq:
             pos = positions[eq.n]
             if pos:
                 changes[pos].append(row)
-            else:
+            elif row.status in ("changed", "deleted", "moved"):
                 not_found(eq)
         elif row.status == "added":
             anchor = originals.get(row.after) or originals.get(min(originals, default=None))
@@ -364,13 +487,13 @@ def _edits(result, tree, notes):
                 index = end.start() if end else len(tree.text[path])
             place = (" after " + (anchor.numbers[-1] if anchor.numbers else "equation %d" % anchor.n)
                      if row.after else " at the start")
-            added = latex_wrap.wrap(_restore_macros(row.returned, macros), "auto", row.display)
+            added = latex_wrap.wrap(row.returned, "auto", row.display)
             block = ["% MathShuttle: added in " + filename + place + ":"] + ["% " + line for line in added.splitlines()]
             text = tree.text[path]
             # A comment ending mid-paragraph must preserve the space (or adjacency) already there.
             at_line_start = not index or text[index - 1] == "\n"
             at_line_end = not text[index:index + 1] or text[index] in "\r\n"
-            prefix = "" if at_line_start else ("\n" if at_line_end else "%\n")
+            prefix = "" if at_line_start else ("\n" if at_line_end or text[index].isspace() else "%\n")
             suffix = "" if at_line_end and index < len(text) else "\n"
             edits[path].append((index, index, prefix + "\n".join(block) + suffix))
     for (path, (start, end)), rows in changes.items():
@@ -379,9 +502,13 @@ def _edits(result, tree, notes):
             continue
         row = rows[0]
         if row.status == "changed":
+            names = compat._control_words(row.original.body)
+            macros = _macros(tree, result.macros, (path, start), names) if names else []
+            before = len(notes)
             new = _replacement(row.original, row.returned, macros, notes)
             if new is None:
-                notes.append("Could not restore the delimiters of equation %d." % row.original.n)
+                if len(notes) == before:
+                    notes.append("Could not restore the delimiters of equation %d." % row.original.n)
             else:
                 edits[path].append((start, end, new))
         elif row.status == "deleted":
@@ -389,6 +516,9 @@ def _edits(result, tree, notes):
             by = " (by %s)" % "; ".join(people) if any(people) else ""
             line = tree.text[path].rfind("\n", 0, start) + 1
             edits[path].append((line, line, "% MathShuttle: deleted in " + filename + by + "\n"))
+        elif row.status == "moved":
+            line = tree.text[path].rfind("\n", 0, start) + 1
+            edits[path].append((line, line, "% MathShuttle: moved in " + filename + row.note[len("moved"):] + "\n"))
     return edits
 
 
@@ -396,8 +526,14 @@ def _outputs(tree, out, edits):
     """Choose separate files for edited inputs and redirect their parent inputs to the copies."""
     moved = out.parent != tree.folder
     paths = set(tree.text) if moved else set(edits) | {tree.paper}
+    only = [(path, match.start(1) + entry.start(), match.start(1) + entry.end(), entry[0])
+            for path, text in tree.mask.items() for match in re.finditer(r"\\includeonly\s*\{([^{}]*)\}", text)
+            for entry in re.finditer(r"[^,\s]+", match[1])]
     while True:
         parents = {p for p, links in tree.inputs.items() if any(child in paths for _, child in links)}
+        redirects = {m[2].strip() for links in tree.inputs.values() for m, child in links
+                     if m[1] == "include" and child in paths}
+        parents.update(path for path, _, _, entry in only if entry in redirects)
         if parents <= paths:
             break
         paths.update(parents)
@@ -405,13 +541,18 @@ def _outputs(tree, out, edits):
     for i, path in enumerate(sorted(paths - {tree.paper}), 1):
         relative = path.relative_to(tree.folder) if path.is_relative_to(tree.folder) else Path("external-%d" % i, path.name)
         targets[path] = out.parent / (out.stem + "-inputs") / relative
+    includes = {}
     for path in paths:
         for match, child in tree.inputs[path]:
             if child in targets:
                 name = Path(os.path.relpath(targets[child], out.parent)).as_posix()
                 if match[1] == "include" and name.endswith(".tex"):
                     name = name[:-4]
+                    includes[match[2].strip()] = name
                 edits[path].append((*match.span(2), name))
+    for path, start, end, entry in only:
+        if entry in includes:
+            edits[path].append((start, end, includes[entry]))
     return targets
 
 
@@ -431,6 +572,9 @@ def corrected(result, out):
         diff_path = out.with_suffix(".diff")
         protected = set(tree.text) | {result.returned_docx}
         destinations = [*targets.values(), diff_path]
+        for path in destinations:
+            if path != out and os.path.lexists(path):
+                raise ConversionError("The file %s already exists. Choose another name for the corrected paper." % path)
         if len(set(destinations)) != len(destinations) or any(
                 p.resolve() in protected or (p.exists() and any(p.samefile(s) for s in protected))
                 for p in destinations):
@@ -449,19 +593,34 @@ def corrected(result, out):
             bom = {"utf-16-le": codecs.BOM_UTF16_LE, "utf-16-be": codecs.BOM_UTF16_BE}.get(encoding, b"")
             files[target] = bom + after.encode(encoding)
         files[diff_path] = "".join(diff).encode("utf-8")
-        staged = {}
+        staged = None
+        created = {}
         try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=out.parent, delete=False) as f:
+                staged = Path(f.name)
+                f.write(files.pop(out))
             for target, data in files.items():
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as f:
-                    staged[target] = Path(f.name)
-                    f.write(data)
-            # Put inputs and the diff in place before publishing the main paper that refers to them.
-            for target in [p for p in staged if p != out] + [out]:
-                os.replace(staged[target], target)
+                try:
+                    with target.open("xb") as f:
+                        created[target] = os.fstat(f.fileno())
+                        f.write(data)
+                except FileExistsError:
+                    raise ConversionError("The file %s already exists. Choose another name for the corrected paper."
+                                          % target)
+            os.replace(staged, out)
+        except BaseException:
+            for target, stat in created.items():
+                if target.exists() and os.path.samestat(stat, target.stat()):
+                    target.unlink()
+            raise
         finally:
-            for temp in staged.values():
-                temp.unlink(missing_ok=True)
+            if staged:
+                staged.unlink(missing_ok=True)
     except (OSError, UnicodeError) as exc:
         raise ConversionError("Could not write the corrected paper: %s" % exc) from exc
+    if out.parent != tree.folder:
+        notes.append(r"LaTeX looks for \input files, .sty files and figures next to the copy. "
+                     "Copy any missing files there before compiling.")
     return notes

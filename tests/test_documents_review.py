@@ -65,6 +65,62 @@ def test_tracked_deletion_is_not_read(tmp_path):
     assert [tex for _, tex, _ in eqs] == ["y"]
 
 
+@pytest.mark.parametrize("accept", [True, False])
+@pytest.mark.parametrize("slot", ["sup", "sub", "num", "den", "deg", "e", "lim", "fName"])
+def test_empty_tracked_math_slots(accept, slot):
+    from mathshuttle import wordmath
+    change = "del" if accept else "ins"
+    xml = ('<m:oMath %s %s><m:%s><m:r><w:%s><m:t>x</m:t></w:%s></m:r></m:%s></m:oMath>'
+           % (W, M, slot, change, change, slot))
+    view = wordmath.revision_view(ET.fromstring(xml), accept)
+    retained = view.find(wordmath.M + slot)
+    assert retained is not None and len(retained) == 0
+
+
+@pytest.mark.parametrize("revision,accept", [("ins", False), ("del", True)])
+def test_revision_around_a_whole_slot(revision, accept):
+    from mathshuttle import wordmath
+    xml = ('<m:oMath %s %s><m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e>'
+           '<w:%s><m:sup><m:r><m:t>2</m:t></m:r></m:sup></w:%s></m:sSup></m:oMath>' % (W, M, revision, revision))
+    view = wordmath.revision_view(ET.fromstring(xml), accept)
+    slot = view.find(".//" + wordmath.M + "sup")
+    assert slot is not None and len(slot) == 0
+
+
+def test_deleted_word_equation_skipped_before_batch(tmp_path, monkeypatch):
+    from mathshuttle import documents
+    from unittest.mock import Mock
+    body = ('<w:p><m:oMath><m:r><w:del><m:t>x</m:t></w:del></m:r></m:oMath>%s%s</w:p>'
+            % (omath("y"), omath("z")))
+    read = Mock(wraps=documents.read_omml)
+    monkeypatch.setattr(documents, "read_omml", read)
+    eqs, notes = found(docx(tmp_path, body))
+    assert [tex for _, tex, _ in eqs] == ["y", "z"] and not notes
+    assert read.call_count == 1
+
+
+@pytest.mark.parametrize("mark,max_dist,number", [
+    ("#(A)", False, None), ("#S", True, None), ("#N", True, None),
+    ("#(x+y)", True, None), ("#(A.1-2')", True, "(A.1-2')"),
+])
+def test_number_like_word_marks(tmp_path, mark, max_dist, number):
+    props = '<m:eqArrPr><m:maxDist m:val="1"/></m:eqArrPr>' if max_dist else ""
+    body = ('<w:p><m:oMath><m:eqArr>%s<m:e><m:r><m:t>n=</m:t></m:r><m:r><m:t>%s</m:t></m:r>'
+            '</m:e></m:eqArr></m:oMath></w:p>' % (props, mark))
+    eq = read_document(docx(tmp_path, body)).found[0]
+    assert eq.numbers == ([number] if number else [])
+    if not number:
+        assert r"\#" in eq.equation.tex
+
+
+def test_styled_ampersand_in_numbered_equation(tmp_path):
+    body = ('<w:p><m:oMath><m:eqArr><m:eqArrPr><m:maxDist m:val="1"/></m:eqArrPr><m:e>'
+            '<m:r><m:t>A</m:t></m:r><m:r><m:rPr><m:sty m:val="p"/></m:rPr><m:t>&amp;</m:t></m:r>'
+            '<m:r><m:t>B</m:t></m:r><m:r><m:t>#(1)</m:t></m:r></m:e></m:eqArr></m:oMath></w:p>')
+    eq = read_document(docx(tmp_path, body)).found[0]
+    assert r"\&" in eq.equation.tex and eq.numbers == ["(1)"]
+
+
 def test_strict_open_xml(tmp_path):
     eqs, _ = found(docx(tmp_path, "<w:p>%s</w:p>" % omath("x"), strict=True))
     assert [tex for _, tex, _ in eqs] == ["x"]

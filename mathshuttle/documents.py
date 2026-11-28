@@ -216,11 +216,15 @@ class _Collector:
         self.pictures: Dict[str, int] = {}
         self.notes: List[str] = []
 
-    def add(self, math: ET.Element, where: str, context: str, display: bool = False, word: bool = False) -> None:
+    def add(self, math: ET.Element, where: str, context: str, display: bool = False, word: bool = False,
+            expected=()) -> None:
+        revised = word and any(e.tag in wordmath.REVISIONS for e in math.iter())
         if word:
             math = wordmath.revision_view(math)
         for piece in split_math_paragraph(math):  # several equations in one math paragraph
-            numbers = wordmath.strip_numbers(piece) if word else []
+            numbers = wordmath.strip_numbers(piece, expected) if word else []
+            if revised and wordmath.empty(piece):
+                continue
             self.fragments.append(piece)
             self.entries.append((where, context, display or piece.tag == _q(OMML_NS, "oMathPara"), numbers))
 
@@ -266,7 +270,8 @@ def _read_fragments(fragments: List[ET.Element]) -> List[Optional[Equation]]:
         eqs = []
         for f in fragments:
             try:
-                eqs.append(read_omml(ET.tostring(f, encoding="unicode"))[0])
+                one = read_omml(ET.tostring(f, encoding="unicode"))
+                eqs.append(one[0] if len(one) == 1 else None)
             except ConversionError:
                 eqs.append(None)
     return eqs
@@ -298,11 +303,22 @@ def _outline_level(el: ET.Element) -> Optional[int]:
     return level if level is not None and 0 <= level <= 8 else None
 
 
-def _walk_word_part(root: ET.Element, headings: set, collector: _Collector, where: Optional[str] = None) -> None:
+def _walk_word_part(root: ET.Element, headings: set, collector: _Collector, where: Optional[str] = None,
+                    numbers=None) -> None:
     """The equations of a Word part; `where`: a fixed location (a footnote), else the heading above."""
     state = {"heading": "", "paras": []}
+    bookmarks = {}
+
+    def mark(el):
+        if el.tag == _q(WML_NS, "bookmarkStart") and numbers:
+            book = el.get(_q(WML_NS, "name"))
+            if book in numbers:
+                bookmarks[el.get(_q(WML_NS, "id"))] = numbers[book]
+        elif el.tag == _q(WML_NS, "bookmarkEnd"):
+            bookmarks.pop(el.get(_q(WML_NS, "id")), None)
 
     def visit(el):
+        mark(el)
         if el.tag == _q(WML_NS, "p"):
             style = el.find("%s/%s" % (_q(WML_NS, "pPr"), _q(WML_NS, "pStyle")))
             if where is None and ((style is not None and style.get(_q(WML_NS, "val")) in headings)
@@ -314,8 +330,14 @@ def _walk_word_part(root: ET.Element, headings: set, collector: _Collector, wher
             collector.legacy += 1
         if el.tag in _MATH_TAGS:
             para = state["paras"][-1] if state["paras"] else None
+            expected = list(bookmarks.values())
+            if numbers:
+                for child in el.iter():
+                    mark(child)
+                    if child.tag == _q(WML_NS, "bookmarkStart"):
+                        expected.extend(bookmarks.values())
             collector.add(el, where or state["heading"] or "(before the first heading)", _context(para, WML_NS, el),
-                          word=True)
+                          word=True, expected=expected[0] if expected and all(n == expected[0] for n in expected) else ())
             return False
         return True
 
@@ -327,18 +349,25 @@ def _walk_word_part(root: ET.Element, headings: set, collector: _Collector, wher
 
 
 def read_docx(path: str) -> DocumentEquations:
+    from . import wordmarks
     collector = _Collector()
     with zipfile.ZipFile(path) as z:
         names = set(z.namelist())
         headings = _heading_styles(z)
-        _walk_word_part(_parse(z.read("word/document.xml")), headings, collector)
+        try:
+            records = wordmarks.manifest(z) if any(n.startswith("customXml/") for n in names) else None
+        except (ET.ParseError, KeyError, TypeError, ValueError, AttributeError):
+            # Custom XML is optional. Ordinary Word equations are still readable without it.
+            records = None
+        numbers = {"_MSEq%d" % r.n: r.numbers for r in records or [] if r.numbers}
+        _walk_word_part(_parse(z.read("word/document.xml")), headings, collector, numbers=numbers)
         for part, kind in (("word/footnotes.xml", "footnote"), ("word/endnotes.xml", "endnote")):
             if part not in names:
                 continue
             for note in _parse(z.read(part)):
                 if note.get(_q(WML_NS, "type")) in ("separator", "continuationSeparator", "continuationNotice"):
                     continue
-                _walk_word_part(note, headings, collector, "%s %s" % (kind, note.get(_q(WML_NS, "id"), "?")))
+                _walk_word_part(note, headings, collector, "%s %s" % (kind, note.get(_q(WML_NS, "id"), "?")), numbers)
     return collector.result(path)
 
 

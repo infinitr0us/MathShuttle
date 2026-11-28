@@ -263,7 +263,7 @@ def test_occurrence_ignores_prose_comments_and_display_dollars(tmp_path):
 
 
 def test_added_before_first_equation_or_in_empty_paper(tmp_path):
-    for body in ("One $a$.", "No equations."):
+    for i, body in enumerate(("One $a$.", "No equations.")):
         paper, docx = export(tmp_path, body)
 
         def change(root):
@@ -274,7 +274,7 @@ def test_added_before_first_equation_or_in_empty_paper(tmp_path):
 
         result = compare(edit(docx, change), paper)
         assert result.rows[0].status == "added" and result.rows[0].after is None
-        out = tmp_path / "copy.tex"
+        out = tmp_path / ("copy%d.tex" % i)
         write_corrected(result, out)
         text = out.read_text()
         assert text.index("% $q$") < text.index("$a$" if "$a$" in body else r"\end{document}")

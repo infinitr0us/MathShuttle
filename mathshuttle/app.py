@@ -1489,7 +1489,8 @@ class CompareWindow(tk.Toplevel):
     """What a co-author changed in the Word file of a paper: each equation changed, deleted, added or
     commented, with the LaTeX from Word, who changed it, their comments; and a corrected copy of the paper."""
 
-    STATUS = {"changed": "Changed", "deleted": "Deleted", "added": "Added", "unchanged": "Unchanged"}
+    STATUS = {"changed": "Changed", "deleted": "Deleted", "added": "Added", "unchanged": "Unchanged",
+              "moved": "Moved", "commented": "Commented", "unreadable": "Could not be read", "unmatched": "Unmatched"}
 
     def __init__(self, app: "App", returned: str, paper: str) -> None:
         super().__init__(app)
@@ -1531,8 +1532,10 @@ class CompareWindow(tk.Toplevel):
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._show())
 
         buttons = self._buttons
-        ttk.Button(buttons, text="Copy LaTeX from Word", command=self.copy_returned).pack(side="left")
-        ttk.Button(buttons, text="Use as input", command=self.use).pack(side="left", padx=6)
+        self.copy_button = ttk.Button(buttons, text="Copy LaTeX from Word", command=self.copy_returned, state="disabled")
+        self.copy_button.pack(side="left")
+        self.use_button = ttk.Button(buttons, text="Use as input", command=self.use, state="disabled")
+        self.use_button.pack(side="left", padx=6)
         self.write_button = ttk.Button(buttons, text="Write a corrected copy of the paper...",
                                        command=self.write_corrected, style=app._accent(), state="disabled")
         self.write_button.pack(side="left", padx=6)
@@ -1562,7 +1565,9 @@ class CompareWindow(tk.Toplevel):
         rows = self.result.rows
         counts = {s: sum(1 for r in rows if r.status == s) for s in self.STATUS}
         commented = sum(1 for r in rows if r.comments)
-        summary = ", ".join("%d %s" % (counts[s], s) for s in ("changed", "deleted", "added") if counts[s])
+        summary = ", ".join("%d %s" % (counts[s], s)
+                            for s in ("changed", "deleted", "added", "moved", "unreadable", "unmatched")
+                            if counts[s])
         self.info.set("%s compared with %s: %s%s." % (
             os.path.basename(self.paper), os.path.basename(self.returned), summary or "no equation changed",
             ", %d with comments" % commented if commented else ""))
@@ -1577,7 +1582,7 @@ class CompareWindow(tk.Toplevel):
                 anchor = originals.get(row.after)
                 where = ("after %s" % (anchor.number or "equation %d" % anchor.n)) if anchor else "at the start"
             latex = " ".join((row.returned or (eq.tex if eq else "")).split())
-            notes = []
+            notes = [row.note] if row.note else []
             if row.revisions:
                 notes.append("tracked: " + ", ".join(sorted({r.author or "?" for r in row.revisions})))
             if row.comments:
@@ -1595,6 +1600,9 @@ class CompareWindow(tk.Toplevel):
 
     def _show(self) -> None:
         row = self._row()
+        state = "normal" if self._latex() else "disabled"
+        self.copy_button.configure(state=state)
+        self.use_button.configure(state=state)
         self.detail.configure(state="normal")
         self.detail.delete("1.0", "end")
         if row is not None:
@@ -1607,15 +1615,15 @@ class CompareWindow(tk.Toplevel):
                 parts.append("Tracked change by %s, %s" % (r.author or "?", r.date or "?"))
             for c in row.comments:
                 parts.append("Comment by %s: %s" % (c.author or "?", c.text))
+            if row.note:
+                parts.append(row.note)
             self.detail.insert("1.0", "\n\n".join(parts))
         self.detail.configure(state="disabled")
 
     def _latex(self) -> Optional[str]:
         row = self._row()
-        if row is None:
+        if row is None or row.status in ("deleted", "unreadable"):
             return None
-        if row.status == "deleted":
-            return row.original.tex if row.original else None
         return latex_wrap.wrap(row.returned, "auto", row.display) if row.returned else None
 
     def copy_returned(self) -> None:
