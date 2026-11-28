@@ -411,8 +411,7 @@ def _inline_text(node, words: List[str]) -> None:
 _READS = re.compile(r"\\(input|include|subfile|usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]+)\}")
 # \newlabel{key}{{number}{page}{title}{anchor}{}} (hyperref); without hyperref only {number}{page};
 # cleveref adds \newlabel{key@cref}{{[equation][7][]7}{[1][1][]1}}
-_NEWLABEL = re.compile(r"\\newlabel\{([^{}]+)\}\{\{((?:[^{}]|\{[^{}]*\})*)\}(?:\{((?:[^{}]|\{[^{}]*\})*)\})?"
-                       r"(?:\{((?:[^{}]|\{[^{}]*\})*)\})?(?:\{((?:[^{}]|\{[^{}]*\})*)\})?")
+_NEWLABEL_START = re.compile(r"\\newlabel\{([^{}]+)\}\s*\{")
 _AUX_INPUT = re.compile(r"\\@input\{([^{}]+)\}")
 # \bibcite{key}{12}, or natbib's \bibcite{key}{{12}{2020}{{Smith et~al.}}{{Smith, Jones, and Lee}}} (its
 # argument read by brace depth: a name holds {\"o})
@@ -559,8 +558,12 @@ def _aux_labels(path: str) -> Dict[str, str]:
                 data = f.read().decode("utf-8", "replace")
         except OSError:
             continue
-        for m in _NEWLABEL.finditer(data):
-            key, number = m.group(1), m.group(2).strip()
+        for m in _NEWLABEL_START.finditer(data):  # (its fields read by brace depth: a title holds $L^{2}$)
+            end = _group_end(data, m.end() - 1)
+            if end < 0:
+                continue
+            fields = _groups(data[m.end():end - 1]) + ["", "", "", ""]
+            key, number = m.group(1), fields[0].strip()
             if key.endswith("@cref"):  # what the label is a number of (cleveref): "type:key"
                 kind = re.match(r"\[([A-Za-z]+)\]", number)
                 if kind:
@@ -571,11 +574,11 @@ def _aux_labels(path: str) -> Dict[str, str]:
             if "@cref" in key or not number or number.startswith("\\"):
                 continue
             labels.setdefault(key, number)
-            for field, value in (("page:", m.group(3)), ("title:", m.group(4))):
+            for field, value in (("page:", fields[1]), ("title:", fields[2])):
                 value = (value or "").strip()
                 if value and "\\" not in value:
                     labels.setdefault(field + key, value)
-            anchor = re.match(r"([A-Za-z]+)\.", (m.group(5) or "").strip())  # hyperref's equation.2.1
+            anchor = re.match(r"([A-Za-z]+)\.", (fields[3] or "").strip())  # hyperref's equation.2.1
             if anchor:
                 labels.setdefault("type:" + key, anchor.group(1))
         for m in _BIBCITE.finditer(data):  # a citation's number ("cite:key"); natbib's author and year too
@@ -657,7 +660,7 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
     \\label numbers (see :class:`DocumentEquations`)."""
     folder = os.path.dirname(os.path.abspath(path))
     with open(path, "rb") as f:
-        text = decode_text(f.read())
+        text = _source_text(f.read())  # (an old paper in Latin-1 too)
     result = DocumentEquations(path, "latex")
     # a .md file: pandoc's Markdown, where \[1\] is an escaped bracket (pandoc writes [1] so), not maths
     # as in pasted chat text (MARKDOWN); raw TeX environments in it are read all the same

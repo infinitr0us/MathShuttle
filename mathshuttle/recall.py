@@ -75,7 +75,7 @@ _FIXED = {"msub": 2, "msup": 2, "msubsup": 3, "munder": 2, "mover": 2, "munderov
 _ONE_ARGUMENT = ("msqrt", "menclose", "mphantom", "mtd")  # their content as one argument, however grouped
 _OPENING, _CLOSING = frozenset("([{⟨⌊⌈|‖⟦⟪〈"), frozenset(")]}⟩⌋⌉|‖⟧⟫〉")
 # characters Word writes for others it was given: one of each pair stands for both
-_SAME = {"*": "∗", "-": "−", "'": "′", "ϕ": "φ"}
+_SAME = {"*": "∗", "-": "−", "'": "′"}
 
 
 def _tag(el) -> str:
@@ -90,7 +90,12 @@ def _char(ch: str, tag: str, variant: Optional[str], word: bool) -> str:
         return base + cls
     name = unicodedata.name(ch, "")
     if name.startswith("MATHEMATICAL"):  # 𝐱 𝑥 𝔤 𝟐 𝟙 𝛻: the character says its font
-        base = unicodedata.normalize("NFKC", ch)
+        # its letter (𝜙 is ϕ, \phi, and 𝜑 is φ, \varphi: Word writes each in its italic form; NFKC would
+        # make both φ)
+        decomposition = unicodedata.decomposition(ch)
+        base = chr(int(decomposition.split()[1], 16)) if decomposition.startswith("<font>") else \
+            unicodedata.normalize("NFKC", ch)
+        base = _SAME.get(base, base)
         cls = next((c for w, c in _NAME_WORDS if w in name), "u")
         # (a letter or digit keeps its font, 𝟙 is not 1; a symbol only bold: Word writes ∇ as 𝛻)
         return base + (cls if base.isalnum() or cls == "b" else "")

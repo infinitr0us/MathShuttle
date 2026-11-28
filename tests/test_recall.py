@@ -36,9 +36,17 @@ def test_what_word_does_to_structures_is_no_edit(case):
     (r"\langle x, y \rangle", "< x, y >"), (r"a \parallel b", r"a \| b"), (r"\mathbf{x}", "x"), (r"\mathrm{d}x", "dx"),
     (r"\sum_{i} x", r"\sum^{i} x"), (r"x_i", "x^i"), (r"\sqrt{x}", r"\sqrt[3]{x}"), (r"\frac{a}{b}", r"\frac{b}{a}"),
     (r"\mathcal{L}", "L"), (r"\mathbb{R}", "R"), ("x'", "x"), (r"(a+b)^2", r"(a+b^2)"),
-    (r"\mathbb{1}_{A}", "1_{A}")])
+    (r"\mathbb{1}_{A}", "1_{A}"), (r"\phi", r"\varphi"), (r"\epsilon", r"\varepsilon")])
 def test_an_edit_is_told_apart(a, b):
     assert recall.fingerprint(office_copy(a, "latex").mathml) != recall.fingerprint(office_copy(b, "latex").mathml)
+
+
+@pytest.mark.parametrize("tex, word", [(r"\epsilon", "\U0001d716"), (r"\vartheta", "\U0001d717"),
+                                       (r"\varpi", "\U0001d71b"), (r"\phi", "\U0001d719"), (r"\varphi", "\U0001d711")])
+def test_word_s_italic_greek_variants_are_the_same_letters(tex, word):
+    # Word writes texmath's ϵ ϑ ϖ ϕ φ in their mathematical italic forms (𝜙 seen in real Word)
+    mathml = '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>%s</mi></math>' % word
+    assert recall.fingerprint(office_copy(tex, "latex").mathml) == recall.fingerprint(mathml)
 
 
 @pytest.fixture

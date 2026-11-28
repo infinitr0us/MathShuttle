@@ -330,6 +330,57 @@ def test_passages_are_read_as_what_they_are(tmp_path, text, maths):
     assert xml.count("<m:oMath>") == maths and "not converted" not in words(xml)
 
 
+def test_numberthis_takes_its_number_from_the_aux(tmp_path):
+    helper = "\\newcommand\\numberthis{\\addtocounter{equation}{1}\\tag{\\theequation}}"
+    _, z = export(tmp_path, ARTICLE % (helper, "\\begin{align*} a &= b \\numberthis \\label{nt} \\\\ c &= d "
+                                               "\\numberthis \\end{align*}\nSee \\eqref{nt}."),
+                  aux="\\newlabel{nt}{{4}{1}}\n")
+    xml = z.read("word/document.xml").decode("utf-8")
+    assert numbers(xml) == ["(4)"] and "theequation" not in words(xml) and "See (4)." in words(xml)
+
+
+def test_natbib_numbers_passed_as_an_option(tmp_path):
+    _, z = export(tmp_path, ARTICLE % ("\\PassOptionsToPackage{numbers}{natbib}\\usepackage{natbib}",
+                                       "See \\citep{smith}."), aux="\\bibcite{smith}{{7}{2020}{{Smith}}{{Smith}}}\n")
+    assert "See [7]." in words(z.read("word/document.xml").decode("utf-8"))
+
+
+def test_an_align_with_a_line_starting_with_minus_is_latex(tmp_path):
+    out = tmp_path / "p.docx"
+    passage_to_word("In Theorem~1:\n\\begin{align}\n  f(x) &= a + b \\\\\n       - c + d\n\\end{align}\n"
+                    "Here $ a + b $ > 0.", str(out))
+    xml = zipfile.ZipFile(str(out)).read("word/document.xml").decode("utf-8")
+    assert xml.count("<m:oMath>") == 2 and "$" not in words(xml)
+
+
+def test_cref_names_from_titles_with_maths_and_without_an_aux(tmp_path):
+    _, z = export(tmp_path, ARTICLE % ("\\usepackage{hyperref}\\usepackage{cleveref}",
+                                       "\\section{On $L^{2}$}\\label{sec:l2}\\subsection{B}\\label{sub}\n"
+                                       "See \\cref{sec:l2}, \\cref{sec:l2,sub}."),
+                  aux="\\newlabel{sec:l2}{{1}{1}{On \\ensuremath {L^{2}}}{section.1}{}}\n"
+                      "\\newlabel{sub}{{1.1}{1}{B}{subsection.1.1}{}}\n")
+    assert "See section 1, sections 1 and 1.1." in words(z.read("word/document.xml").decode("utf-8"))
+    _, z = export(tmp_path, ARTICLE % ("\\usepackage{cleveref}", "\\begin{equation} a \\label{a} \\end{equation}\n"
+                                                                 "See \\cref{a}."))
+    assert "See eq. (1)." in words(z.read("word/document.xml").decode("utf-8"))
+
+
+def test_comments_in_subequations(tmp_path):
+    _, z = export(tmp_path, ARTICLE % ("", "\\begin{subequations}\\label{g}\n% first\n"
+                                           "\\begin{equation} x = 1 \\label{s1} \\end{equation}\n% second\n"
+                                           "\\begin{equation} y = 2 \\label{s2} \\end{equation}\n\\end{subequations}"),
+                  aux="\\newlabel{g}{{1}{1}}\n\\newlabel{s1}{{1a}{1}}\n\\newlabel{s2}{{1b}{1}}\n")
+    xml = z.read("word/document.xml").decode("utf-8")
+    assert numbers(xml) == ["(1a)", "(1b)"] and xml.count("<m:oMath>") == 2
+
+
+def test_a_latin_1_paper_opens_too(tmp_path):
+    from mathshuttle.documents import read_document
+    (tmp_path / "old.tex").write_bytes("\\documentclass{article}\\begin{document}Caf\u00e9 $x$.\\end{document}\n"
+                                       .encode("latin-1"))
+    assert [f.equation.tex for f in read_document(str(tmp_path / "old.tex")).found] == ["x"]
+
+
 def test_autoref_and_cref_in_one_document_and_mixed_lists(tmp_path):
     aux = "\\newlabel{e}{{1}{1}{}{equation.1}{}}\n\\newlabel{fig:a}{{2}{1}{}{figure.2}{}}\n"
     _, z = export(tmp_path, ARTICLE % ("\\usepackage{hyperref}\\usepackage{cleveref}",

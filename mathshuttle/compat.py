@@ -987,16 +987,16 @@ def reference_text(command: str, keys: List[str], labels: Dict[str, str]) -> Opt
              else labels.get(REF_STYLE, "hyperref"))
     kind = types[0] if len(set(types)) == 1 else None
     if style == "cleveref":  # one name for each run of one type: "fig. 1 and eqs. (2) and (3)"
-        groups: List[Tuple[Optional[str], List[str]]] = []
+        groups: List[Tuple[Optional[Tuple[str, str]], List[str]]] = []  # (a section and a subsection: one name)
         for n, t in zip(numbers, types):
             shown = "(%s)" % n if t == "equation" else n
-            if groups and groups[-1][0] == t:
+            names = _CREF_NAMES.get(t or "")
+            if groups and groups[-1][0] == names:
                 groups[-1][1].append(shown)
             else:
-                groups.append((t, [shown]))
+                groups.append((names, [shown]))
         parts = []
-        for t, shown in groups:
-            names = _CREF_NAMES.get(t or "")
+        for names, shown in groups:
             name = (names[0] if len(shown) == 1 else names[1]) if names else ""
             if name and command in ("Cref", "ref+Label"):
                 name = name[:1].upper() + name[1:]

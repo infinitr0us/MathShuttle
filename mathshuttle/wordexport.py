@@ -41,6 +41,8 @@ _BLOCK_TYPES = frozenset("Para Plain Header CodeBlock BlockQuote OrderedList Bul
                          "HorizontalRule LineBlock RawBlock Figure".split())
 # what makes a passage Markdown to Word, besides what makes its equations Markdown (looks_like_markdown)
 _PROSE_SIGNS = re.compile(r"^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+\S|^[ \t]*>[ \t]?\S", re.M)
+_OUTSIDE_MATHS = re.compile(r"\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|(?<![\\$])\$[^$\n]+\$"
+                            r"|\\begin\s*\{([a-zA-Z]+\*?)\}[\s\S]*?\\end\s*\{\1\}")
 _CHAPTER_CLASS = re.compile(r"\\documentclass\s*(?:\[[^\]]*\])?\s*\{\s*(?:report|book|memoir|scrbook|scrreprt|amsbook"
                             r"|[^{}]*thesis[^{}]*|siamart[^{}]*|siamonline[^{}]*)\s*\}")
 
@@ -69,8 +71,9 @@ def passage_blocks(text: str) -> Tuple[list, bool]:
     from .pandoc_engine import (_COMMENT_LINE, _LATEX_DOCUMENT, _has_math_delimiters, _without_code,
                                 looks_like_markdown, strip_tex)
     prose = _without_code(text)
+    outside = _OUTSIDE_MATHS.sub(" ", prose)  # (an align's continuation line "- c + d" is no list)
     if not _LATEX_DOCUMENT.search(prose) and (looks_like_markdown(text) or (
-            _PROSE_SIGNS.search(prose) and not _COMMENT_LINE.search(prose))):
+            _PROSE_SIGNS.search(outside) and not _COMMENT_LINE.search(prose))):
         return markdown_blocks(text, MARKDOWN)[0], True
     if not _has_math_delimiters(text):
         if _LATEX_TEXT.search(text):
@@ -112,7 +115,8 @@ def _cite_style(sources: str) -> str:
     if not natbib:
         return "numeric"
     numbers = any("numbers" in (options or "") for options in natbib) or re.search(
-        r"\\(?:setcitestyle|citestyle)\s*\{[^{}]*\b(?:numbers|super)\b", sources)
+        r"\\(?:setcitestyle|citestyle)\s*\{[^{}]*\b(?:numbers|super)\b"
+        r"|\\PassOptionsToPackage\s*\{[^{}]*\b(?:numbers|super)\b[^{}]*\}\s*\{\s*natbib\s*\}", sources)
     return "numeric" if numbers else "authoryear"
 
 
@@ -158,6 +162,8 @@ def document_to_word(source: str, path: str, macros: Optional[compat.Macros] = N
         plans, counted, more = _count_equations(blocks, labels, sources + "\n" + _local_class(source, text))
         notes += more
         labels.update(counted)  # (the same as the .aux's when it has them; a \tag's as it prints)
+        for key in counted:  # equations, for \cref and \autoref without an .aux
+            labels.setdefault("type:" + key, "equation")
         own = compat.with_document(macros, definitions, labels)
     notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
               if line.startswith("[WARNING]") and "Could not convert TeX math" not in line]
@@ -348,7 +354,7 @@ def _split_grouped(node) -> None:
         while k < len(node):
             n = node[k]
             if isinstance(n, dict) and n.get("t") == "Math" and n["c"][0]["t"] == "DisplayMath":
-                parts = _environments(n["c"][1])
+                parts = _environments(_without_comments(n["c"][1]))  # (% first condition between them)
                 if parts and (len(parts) > 1 or parts[0] != n["c"][1]):
                     node[k:k + 1] = [{"t": "Math", "c": [{"t": "DisplayMath"}, p]} for p in parts]
                     k += len(parts)
@@ -384,7 +390,9 @@ def _count_equations(blocks: list, aux: Dict[str, str], sources: str
                     counted.setdefault(m.group(1), str(counter))
             else:
                 numbers.append(None)
-                if kind:  # a \tag's label refers to the tag, as it prints (the .aux has its TeX: $\dagger $)
+                # a \tag's label refers to the tag, as it prints (the .aux has its TeX: $\dagger $); not
+                # \numberthis's \tag{\theequation}, whose number only the .aux knows
+                if kind and "\\theequation" not in kind[4]:
                     for m in _LABEL.finditer(row):
                         tagged.setdefault(m.group(1), _tag_text(kind[4], aux))
         if any(numbers):
@@ -620,6 +628,11 @@ class _Prepare:
             row = rows[i]
             if kind and kind != "count":
                 _, start, end, starred, argument = kind
+                if "\\theequation" in argument:  # \numberthis: the number LaTeX stepped to, from the .aux
+                    label = next((m for m in _LABEL.finditer(row) if m.group(1) in self.labels), None)
+                    rows[i] = _LABEL.sub("", row[:start] + row[end:]) + (
+                        sentinel("(%s)" % self.labels[label.group(1)]) if label else "")
+                    continue
                 shown = _tag_text(argument, self.labels)
                 rows[i] = _LABEL.sub("", row[:start] + row[end:]) + sentinel(shown if starred else "(%s)" % shown)
             elif kind == "count":
