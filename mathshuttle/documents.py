@@ -1,11 +1,12 @@
-"""Equations in whole documents: .docx, .pptx (OMML), .tex, .md - with where each one is.
+"""Equations in whole documents: .docx, .pptx, .tex, .md - with where each one is.
 
 Office files are read here, not by pandoc's docx / pptx readers, so that their equations go through
 :func:`pandoc_engine.read_omml` like a pasted one (Tidy LaTeX included) and keep their location
 (the heading above them, the slide and its title, the footnote).  What a reader of the final document
 sees is read: tracked deletions are skipped, one of a markup-compatibility block's alternatives is
 read.  Equation objects of the old Equation Editor 3.0 and MathType (OLE objects, no OMML inside)
-cannot be read; they are counted so that the user knows.
+cannot be read; they are counted so that the user knows. PowerPoint shapes can also hold LaTeX
+from IguanaTeX or TeXPoint in their tags.
 """
 from __future__ import annotations
 
@@ -18,11 +19,12 @@ import time
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from . import compat
-from .pandoc_engine import (MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _api, _collect_math, _run,
-                            markdown_blocks, markdown_maths, read_omml, split_math_paragraph)
+from .pandoc_engine import (MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _LATEX_DOCUMENT, _api,
+                            _collect_math, _has_math_delimiters, _run, _without_tex_comments, markdown_blocks,
+                            markdown_maths, read_omml, split_math_paragraph, strip_tex)
 
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -204,21 +206,28 @@ class _Collector:
 
     def __init__(self) -> None:
         self.fragments: List[ET.Element] = []
-        self.places: List[Tuple[str, str]] = []
-        self.display: List[bool] = []
+        # An OMML fragment's place, or an equation already read from a shape's tags.
+        self.entries: List[Union[Tuple[str, str, bool], Found]] = []
         self.legacy = 0
+        self.pictures: Dict[str, int] = {}
+        self.notes: List[str] = []
 
     def add(self, math: ET.Element, where: str, context: str, display: bool = False) -> None:
         for piece in split_math_paragraph(math):  # several equations in one math paragraph
             self.fragments.append(piece)
-            self.places.append((where, context))
-            self.display.append(display or piece.tag == _q(OMML_NS, "oMathPara"))
+            self.entries.append((where, context, display or piece.tag == _q(OMML_NS, "oMathPara")))
 
     def result(self, path: str) -> DocumentEquations:
         from .convert import tidied, _UNICODE_NOTE
 
-        result = DocumentEquations(path, "office")
-        for eq, (where, context), display in zip(_read_fragments(self.fragments), self.places, self.display):
+        result = DocumentEquations(path, "office", notes=list(self.notes))
+        native = iter(_read_fragments(self.fragments))
+        for entry in self.entries:
+            if isinstance(entry, Found):
+                result.found.append(entry)
+                continue
+            where, context, display = entry
+            eq = next(native)
             if eq is None:
                 result.notes.append("an equation in %s could not be read" % where)
                 continue
@@ -230,6 +239,9 @@ class _Collector:
         if self.legacy:
             result.notes.append("%d Equation Editor 3.0 / MathType object(s) cannot be read (no OMML inside)"
                                 % self.legacy)
+        if self.pictures:
+            result.notes.append(", ".join("%d %s picture%s" % (count, addin, "" if count == 1 else "s")
+                                          for addin, count in self.pictures.items()))
         return result
 
 
@@ -331,6 +343,8 @@ def _targets(z: zipfile.ZipFile, part: str) -> List[Tuple[str, str, str]]:
         return []
     out = []
     for r in _parse(z.read(rels)).iter(_q(REL_NS, "Relationship")):
+        if r.get("TargetMode") == "External":
+            continue
         target = r.get("Target") or ""
         resolved = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join(folder, target))
         out.append((r.get("Id"), r.get("Type") or "", resolved))
@@ -344,10 +358,90 @@ def _slide_paths(z: zipfile.ZipFile) -> List[str]:
     return [targets[s.get(_q(R_NS, "id"))] for s in pres.iter(_q(P_NS, "sldId")) if s.get(_q(R_NS, "id")) in targets]
 
 
-def _walk_slide_part(root: ET.Element, where: str, collector: _Collector, notes: bool = False) -> None:
+def _picture_equations(source: str, template: bool, notes: List[str]) -> List[Equation]:
+    """Read a shape's LaTeX and write its definitions into the equations that use them."""
+    text = source.replace("\r\n", "\n").replace("\r", "\n")
+    if template:
+        fields = text.split("\t")
+        if len(fields) >= 4:
+            text = fields[3]
+        else:
+            match = re.search(r"equation(.*?)template TP", text, re.I | re.S)
+            text = match.group(1) if match else ""
+        if not text.strip():
+            raise ConversionError("the TeXPoint template contains no equation")
+        text = "$" + text.strip() + "\n$"
+    if "\\DeclareMathOperator" in text:
+        text, _ = compat.before_equations(text, defer=False)
+    blocks, warnings, preamble = _read_latex_blocks(text, None, notes)
+    notes.extend(line.removeprefix("[WARNING]").strip() for line in warnings.splitlines()
+                 if line.startswith("[WARNING]"))
+    equations: List[Equation] = []
+    _collect_math(blocks, equations)
+    if not equations:
+        plain = _without_tex_comments(text).strip()
+        if plain and not warnings and not _LATEX_DOCUMENT.search(plain) and not _has_math_delimiters(plain):
+            equations.append(Equation(strip_tex(text)))  # a single bare formula, as in read_latex_text
+    # The full LaTeX reader applies ordinary preamble definitions. If it only read the body, add
+    # those too. Paired delimiters and package commands still need expanding in either case.
+    macros = compat.Macros(text=(preamble or "") + "\n" + compat.pandoc_leftovers(text))
+    expanded = []
+    for eq in equations:
+        tex, new = compat.expand_macros(eq.tex, macros)
+        if tex.strip():
+            expanded.append(Equation(tex, eq.display))
+        notes.extend(n for n in new if n not in notes)
+    if not expanded:
+        raise ConversionError("no equations found")
+    return expanded
+
+
+_SHAPES = {_q(P_NS, name) for name in ("pic", "grpSp", "sp")}
+_TAG_REF = "*/%s/%s/%s" % (_q(P_NS, "nvPr"), _q(P_NS, "custDataLst"), _q(P_NS, "tags"))
+
+
+def _read_picture(z: zipfile.ZipFile, shape: ET.Element, tag_paths: Dict[str, str], where: str,
+                  collector: _Collector) -> None:
+    """Read the tags on this shape's own non-visual properties. A group can contain other shapes."""
+    ref = shape.find(_TAG_REF)
+    if ref is None:
+        return
+    props = shape.find("*/" + _q(P_NS, "cNvPr"))
+    name = _shorten(props.get("name", "")) if props is not None else ""
+    try:
+        part = tag_paths[ref.get(_q(R_NS, "id"), "")]
+        root = _parse(z.read(part))
+    except (KeyError, ET.ParseError, UnicodeDecodeError, zipfile.BadZipFile):
+        collector.notes.append("%s: could not read the tags for %s" % (where, name or "a shape"))
+        return
+    tags = {tag.get("name"): tag.get("val", "") for tag in root.findall(_q(P_NS, "tag"))}
+    if "LATEXADDIN" in tags:
+        addin, source = "IguanaTeX", tags["LATEXADDIN"]
+    elif "SOURCE" in tags:
+        addin, source = "TeXPoint", tags["SOURCE"]
+    else:
+        return
+    collector.pictures[addin] = collector.pictures.get(addin, 0) + 1
+    location = "%s (%s)" % (where, addin)
+    notes: List[str] = []
+    try:
+        template = addin == "TeXPoint" and tags.get("TEXPOINT", "").strip().lower() == "template"
+        for eq in _picture_equations(source, template, notes):
+            collector.entries.append(Found(eq, location, name))
+    except ConversionError as e:
+        notes.append("could not read the LaTeX: " + _shorten(str(e), 140))
+    for note in notes:
+        collector.notes.append("%s: %s" % (location + (" " + name if name else ""), note))
+
+
+def _walk_slide_part(z: zipfile.ZipFile, root: ET.Element, targets: List[Tuple[str, str, str]], where: str,
+                     collector: _Collector, notes: bool = False) -> None:
     state = {"paras": []}
+    tag_paths = {rid: target for rid, kind, target in targets if kind == R_NS + "/tags"}
 
     def visit(el):
+        if el.tag in _SHAPES:
+            _read_picture(z, el, tag_paths, where, collector)
         if el.tag == _q(P_NS, "sp") and notes:
             ph = el.find(".//" + _q(P_NS, "ph"))
             if ph is None or ph.get("type") != "body":
@@ -387,10 +481,12 @@ def read_pptx(path: str) -> DocumentEquations:
                     title = _shorten("".join(t.text or "" for t in sp.iter(_q(A_NS, "t"))), 50)
                     break
             where = "slide %d" % number + (": " + title if title else "")
-            _walk_slide_part(root, where, collector)
-            for _, kind, target in _targets(z, slide):
+            targets = _targets(z, slide)
+            _walk_slide_part(z, root, targets, where, collector)
+            for _, kind, target in targets:
                 if kind.endswith("/notesSlide") and target in names:
-                    _walk_slide_part(_parse(z.read(target)), "slide %d notes" % number, collector, notes=True)
+                    _walk_slide_part(z, _parse(z.read(target)), _targets(z, target), "slide %d notes" % number,
+                                     collector, notes=True)
     return collector.result(path)
 
 
@@ -600,16 +696,19 @@ def _aux_labels(path: str) -> Dict[str, str]:
     return labels
 
 
-def _read_latex_blocks(text: str, folder: str, notes: List[str], raw: bool = False,
+def _read_latex_blocks(text: str, folder: Optional[str], notes: List[str], raw: bool = False,
                        meta: Optional[dict] = None) -> Tuple[list, str, Optional[str]]:
     """pandoc's reading of a .tex file; if pandoc cannot read the file (a style file it trips over:
     "unexpected \\@ ... \\maketitle"), the body alone, whose macros then come from the preamble.
     Returns the blocks, pandoc's warnings, and the preamble when the body was read alone.  `raw`: keep
     what the reader does not know as raw TeX (it drops it otherwise, without a word).  `meta`, if given,
-    gets pandoc's metadata (title, authors, date, abstract)."""
+    gets pandoc's metadata (title, authors, date, abstract). An embedded source has no folder from
+    which to read other files."""
     fmt = "latex+raw_tex" if raw else "latex"
+    flags = ["--sandbox"] if folder is None else []
+    args = ["-f", fmt, "-t", "json"] + flags
     try:
-        out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
+        out, err = _run(args, text.encode("utf-8"), cwd=folder)
         document = json.loads(out)
         if meta is not None:
             meta.update(document.get("meta") or {})
@@ -619,7 +718,7 @@ def _read_latex_blocks(text: str, folder: str, notes: List[str], raw: bool = Fal
         if begin is None:
             raise
         body = text[begin:end if end is not None else len(text)]
-        out, err = _run(["-f", fmt, "-t", "json"], body.encode("utf-8"), cwd=folder)
+        out, err = _run(args, body.encode("utf-8"), cwd=folder)
         reason = next((line.strip() for line in str(e).splitlines() if line.strip() and "WARNING" not in line), "")
         notes.append("pandoc could not read the preamble (%s): the body was read alone, with the preamble's "
                      "definitions." % _shorten(reason, 120))
@@ -629,7 +728,7 @@ def _read_latex_blocks(text: str, folder: str, notes: List[str], raw: bool = Fal
             front = _front_matter(text[:begin])
             if front:  # the title, authors and date of the preamble pandoc could not read, read alone
                 try:
-                    meta.update(json.loads(_run(["-f", "latex", "-t", "json"], (
+                    meta.update(json.loads(_run(["-f", "latex", "-t", "json"] + flags, (
                         front + "\n\\begin{document}\\end{document}").encode("utf-8"), cwd=folder)[0]).get("meta") or {})
                 except (ConversionError, ValueError):
                     pass
