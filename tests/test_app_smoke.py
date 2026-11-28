@@ -635,3 +635,24 @@ def test_pandoc_download_failure_can_be_retried(app, monkeypatch):
     assert "Check your connection" in app._banner_text.get()
     app._banner.destroy()
     app._banner = None
+
+
+def test_a_theme_set_by_hand_is_kept(app):
+    import json
+    app.settings["theme"] = "dark"
+    try:
+        app._save_settings()
+        with open(SETTINGS_TMP, encoding="utf-8") as f:
+            assert json.load(f)["theme"] == "dark"
+    finally:
+        del app.settings["theme"]
+
+
+def test_theme_choice():
+    from mathshuttle import theme
+    assert theme.resolve("native") == "native"
+    if sys.platform != "darwin":
+        assert theme.resolve("dark") == "dark" and theme.resolve("light") == "light"
+        assert theme.resolve(None) in ("light", "dark")
+    else:  # Aqua follows the system by itself
+        assert theme.resolve("dark") == "native"

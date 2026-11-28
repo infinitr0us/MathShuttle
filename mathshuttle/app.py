@@ -433,6 +433,8 @@ class App(tk.Tk):
                 # whole or not at all: a cut could land inside an equation, and a very large input
                 # (a whole document.xml) would be reloaded and converted again at every start
                 "input": text if len(text) <= MAX_SAVED_INPUT else ""}
+        if self.settings.get("theme") in theme.CHOICES:  # set by hand in the file: kept
+            data["theme"] = self.settings["theme"]
         try:
             os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
             with open(SETTINGS_PATH, "w", encoding="utf-8") as f:

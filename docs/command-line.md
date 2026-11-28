@@ -10,6 +10,7 @@ mathshuttle copy -e 'x^2'
 mathshuttle paste --wrapper bare
 mathshuttle extract paper.tex -t typst
 mathshuttle extract thesis.tex --display --match Method --unique
+mathshuttle get-pandoc
 mathshuttle --version
 ```
 
@@ -40,3 +41,10 @@ mathshuttle --version
 * `word FILE -o OUT.docx` (or `-e TEXT`, or standard input) writes a passage, or a whole `.tex` / `.md`
   document, as a Word file with native equations (see [Documents](documents.md#a-passage-or-a-whole-paper-as-a-word-file)).
 * `--version` and `version` both show the MathShuttle, pandoc and texmath versions and the pandoc path.
+* `get-pandoc` downloads pandoc's own release for this system from GitHub, checks its size and
+  SHA-256 against the values MathShuttle carries, and installs the program for this user only
+  (`%LOCALAPPDATA%\MathShuttle\pandoc` on Windows, `~/Library/Application Support/MathShuttle/pandoc`
+  on macOS, `~/.local/share/MathShuttle/pandoc` on Linux), with pandoc's licence files next to it. It
+  does nothing when a pandoc is already found; `--force` downloads anyway. A pandoc you installed
+  yourself (on `PATH`, with winget, Homebrew or pandoc's installer) is always used first. This is the
+  only time MathShuttle goes online, and only when you ask for it.
