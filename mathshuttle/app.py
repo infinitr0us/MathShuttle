@@ -397,6 +397,7 @@ class App(tk.Tk):
         self.auto_var.set(bool(s.get("auto_convert", True)))
         self.annotate_var.set(bool(s.get("annotate", False)))
         self.tidy_var.set(bool(s.get("tidy", True)))
+        self.expand_var.set(bool(s.get("expand_macros", False)))
         self.hotkey_var.set(bool(s.get("hotkey_enabled", True)))
         self.preview_var.set(bool(s.get("preview", True)))
         if isinstance(s.get("hotkey"), str):
@@ -424,6 +425,7 @@ class App(tk.Tk):
         data = {"src": self.src_var.get(), "dst": self.dst_var.get(), "mode": self.mode_var.get(),
                 "wrapper": self.wrapper_var.get(), "auto_convert": self.auto_var.get(),
                 "annotate": self.annotate_var.get(), "tidy": self.tidy_var.get(),
+                "expand_macros": self.expand_var.get(),
                 "hotkey": self.hotkey,
                 # where there is no hotkey, the box is off without the user's say: keep their choice
                 "hotkey_enabled": (bool(self.settings.get("hotkey_enabled", True)) if hotkeys.UNAVAILABLE
@@ -585,9 +587,11 @@ class App(tk.Tk):
 
     # ---- actions --------------------------------------------------------------------------------
     def _conversion_args(self) -> tuple:
-        """(text, src, dst, mode, wrapper, annotate, tidy, macro key): everything a result depends on."""
+        """(text, src, dst, mode, wrapper, annotate, tidy, macro key, expand macros): everything a result
+        depends on."""
         return (self.input.get("1.0", "end-1c"), self.src_var.get(), self.dst_var.get(), self.mode_var.get(),
-                self.wrapper_var.get(), self.annotate_var.get(), self.tidy_var.get(), self._macro_key())
+                self.wrapper_var.get(), self.annotate_var.get(), self.tidy_var.get(), self._macro_key(),
+                self.expand_var.get())
 
     def _new_conversion(self) -> None:
         """Results of conversions still running are stale from now on, and so is a pending debounced
@@ -619,7 +623,7 @@ class App(tk.Tk):
     def _worker(self, seq: int, args, swap: bool) -> None:
         """Runs in a background thread; only ever touches the queue."""
         try:
-            result: object = convert(*args[:6], macros=self._macros(args[7]), tidy=args[6])
+            result: object = convert(*args[:6], macros=self._macros(args[7]), tidy=args[6], expand_macros=args[8])
             recalled = self._recalled
             if (recalled and recalled[1] and recalled[0] == args[0] and args[1] == "mathml" and args[2] == "latex"
                     and args[6] and isinstance(result, Result)):

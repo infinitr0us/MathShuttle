@@ -354,3 +354,18 @@ def test_cli_download_errors(isolated_engine, monkeypatch, capsys, failure):
     output = capsys.readouterr()
     assert output.out == ""
     assert ("download failed" if isinstance(failure, fetch.FetchError) else "cancel") in output.err.lower()
+
+
+def test_a_download_that_only_trickles_stops(tmp_path, monkeypatch):
+    # bytes keep coming (no socket time-out), but far too slowly: stop with a plain message
+    import io
+    from mathshuttle import pandoc_fetch as pf
+    clock = iter(range(0, 10_000, 10))  # every read "takes" ten seconds
+    monkeypatch.setattr(pf.time, "monotonic", lambda: next(clock))
+
+    class Trickle(io.BytesIO):
+        def read1(self, n=-1):
+            return super().read1(min(n, 1000))
+
+    with pytest.raises(pf.FetchError, match="too slow"):
+        pf._save_body(Trickle(b"x" * 1_000_000), tmp_path / "part", 1_000_000, None, None)

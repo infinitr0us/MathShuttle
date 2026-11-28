@@ -91,4 +91,5 @@ def test_version_command(capsys):
     assert out[0] == f"MathShuttle {__version__}"
     assert re.fullmatch(r"pandoc \S+  \(texmath \d+(?:\.\d+)+\)", out[1]), out[1]
     assert os.path.isfile(out[2].split("  ->  ")[0])
-    assert len(out) == 3  # no "version unknown" hint for the real binary
+    # no "version unknown" hint for the real binary; a pandoc that `get-pandoc` installed says so
+    assert out[3:] in ([], ["Installed by MathShuttle."])

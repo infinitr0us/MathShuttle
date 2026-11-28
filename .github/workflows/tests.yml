@@ -29,8 +29,9 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install pandoc with MathShuttle's own download (the real one, checked against its SHA-256)
         shell: bash
+        timeout-minutes: 10
         run: |
-          python -m mathshuttle get-pandoc --force
+          for attempt in 1 2 3; do python -m mathshuttle get-pandoc --force && break; sleep 5; done
           python -c "from mathshuttle import pandoc_fetch; print('MATHSHUTTLE_PANDOC=' + pandoc_fetch.installed_pandoc())" >> "$GITHUB_ENV"
       - name: Install pytest
         run: python -m pip install pytest

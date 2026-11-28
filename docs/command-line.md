@@ -37,7 +37,9 @@ mathshuttle --version
   the equations to a Word document.
 * `--macros FILE` loads LaTeX definitions for `convert`, `copy` and `extract` and can be repeated.
   `--wrapper` sets the delimiters or environment for LaTeX output. With `convert` or `paste`,
-  `--no-tidy` keeps texmath's original LaTeX from MathML or OMML.
+  `--no-tidy` keeps texmath's original LaTeX from MathML or OMML. `--expand-macros` (for `convert`
+  and `extract` with LaTeX output) writes the macros out, see
+  [Expand macros](latex-input.md#expand-macros-latex-for-a-place-without-your-macro-file).
 * `word FILE -o OUT.docx` (or `-e TEXT`, or standard input) writes a passage, or a whole `.tex` / `.md`
   document, as a Word file with native equations (see [Documents](documents.md#a-passage-or-a-whole-paper-as-a-word-file)).
 * `--version` and `version` both show the MathShuttle, pandoc and texmath versions and the pandoc path.

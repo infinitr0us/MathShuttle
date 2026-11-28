@@ -30,6 +30,8 @@ _MAX_DOWNLOAD = 200_000_000
 _MIN_FREE = 400_000_000
 _CHUNK = 64 * 1024
 _TIMEOUT = 20
+_SLOW_AFTER = 60  # seconds: after that, a download below _MIN_RATE bytes per second on average stops
+_MIN_RATE = 20_000
 _FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 _EXE = "pandoc.exe" if sys.platform == "win32" else "pandoc"
 _Progress = Callable[[int, Optional[int]], None]
@@ -121,6 +123,7 @@ def _save_body(source: BinaryIO, path: Path, total: Optional[int], progress, can
         raise FetchError(too_large)
     digest = hashlib.sha256()
     done = 0
+    start = time.monotonic()
     with path.open("wb") as output:
         while True:
             _check_cancel(cancel)
@@ -130,6 +133,11 @@ def _save_body(source: BinaryIO, path: Path, total: Optional[int], progress, can
             done += len(block)
             if done > _MAX_DOWNLOAD:
                 raise FetchError(too_large)
+            # a connection that stops does so after _TIMEOUT; one that only trickles would go on for hours
+            elapsed = time.monotonic() - start
+            if elapsed > _SLOW_AFTER and done < _MIN_RATE * elapsed:
+                raise FetchError("The download is too slow (%d kB/s). Check your connection and try again, "
+                                 "or install pandoc manually." % (done / elapsed / 1000))
             output.write(block)
             digest.update(block)
             if progress:

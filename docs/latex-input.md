@@ -105,6 +105,20 @@ single-equation wrapper is chosen (and `gather` → `gathered`, `multline` → `
 `eqnarray`'s `a &=& b` rows become `a &= b` in `align`/`aligned`, a `split` becomes `aligned`
 in `$…$` / `\(…\)`, and a note appears when `\tag` / `\label` commands end up where
 LaTeX rejects them (per-line ones inside `aligned`, any `\tag` in `$…$`, …).
+
+## Expand macros: LaTeX for a place without your macro file
+
+With **Expand macros** ticked (LaTeX to LaTeX; `--expand-macros` for `convert` and `extract` on the
+command line), the LaTeX output has your macros written out: those of your macro files, of the input
+and, for a document, its own definitions, so that the equation can go where your macro file is not: a
+web page with KaTeX or MathJax, a chat, a journal's submission form, a co-author's document.
+`\DeclareMathOperator` names become `\operatorname{...}` (`\operatorname*` for the starred form),
+`\DeclarePairedDelimiter` pairs their delimiters, and commands of the built-in packs (physics, braket,
+siunitx...) standard LaTeX. Everything else stays as you wrote it: `\label`, `\tag`, spacing, the
+environment. A macro used as a bare argument (`\widetilde\K`) gets braces, so it stays one argument
+(`\widetilde{\mathcal K}`). A macro made of LaTeX's internal commands (`\@namedef`, `\global`,
+`\expandafter`, as in some style files) is kept as written, and a note names it: written out without
+`\makeatletter` it would break. The status bar lists the macros written out.
 LaTeX → LaTeX never re-renders the equation; only the delimiters change.
 
 ## MathML and OMML input

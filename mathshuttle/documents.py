@@ -695,11 +695,11 @@ def read_text_document(path: str, fmt: str, expand_macros: bool = False) -> Docu
                 except ConversionError:
                     pass
                 else:
-                    original = []
+                    original: List[Equation] = []
+                    raw: List[Equation] = []
                     _collect_math(blocks, original)
-                    _collect_math(raw_blocks, raw_equations)
-                    if [eq.display for eq in original] != [eq.display for eq in raw_equations]:
-                        raw_equations = []
+                    _collect_math(raw_blocks, raw)
+                    raw_equations = _matched(original, raw)
         result.labels = _aux_labels(path)
     result.notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
                      if line.startswith("[WARNING]")]
@@ -723,10 +723,34 @@ def read_text_document(path: str, fmt: str, expand_macros: bool = False) -> Docu
         for eq in eqs:
             label = re.search(r"\\label\{([^{}]*)\}", eq.tex)
             where = (heading or "(before the first heading)") + ("  [%s]" % label.group(1) if label else "")
-            if raw_equations:
+            if len(result.found) < len(raw_equations) and raw_equations[len(result.found)] is not None:
                 eq = raw_equations[len(result.found)]
             result.found.append(Found(eq, where, "" if eq.display else context))
     return result
+
+
+def _shape(eq: Equation) -> tuple:
+    """What a macro does not change in an equation: inline or display, its environment (not its \\label,
+    which a macro such as \\eqlabel{...} may write)."""
+    env = re.match(r"\s*\\begin\s*\{([^{}]*)\}", eq.tex)
+    return eq.display, env.group(1) if env else ""
+
+
+def _matched(expanded: List[Equation], raw: List[Equation]) -> "List[Optional[Equation]]":
+    """For each equation of pandoc's reading (macros expanded), the same equation as written, from the
+    reading without the preamble (macros kept), or None where the two do not line up: a macro in the
+    prose that makes an equation of its own is in the first reading only."""
+    import difflib
+    out: "List[Optional[Equation]]" = [None] * len(expanded)
+    matcher = difflib.SequenceMatcher(None, [_shape(e) for e in expanded], [_shape(e) for e in raw],
+                                      autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal" or (tag == "replace" and i2 - i1 == j2 - j1 and
+                              all(expanded[i].display == raw[j].display
+                                  for i, j in zip(range(i1, i2), range(j1, j2)))):
+            for i, j in zip(range(i1, i2), range(j1, j2)):
+                out[i] = raw[j]
+    return out
 
 
 def read_document(path: str, *, expand_macros: bool = False) -> DocumentEquations:

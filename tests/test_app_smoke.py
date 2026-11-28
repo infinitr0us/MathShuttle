@@ -656,3 +656,22 @@ def test_theme_choice():
         assert theme.resolve(None) in ("light", "dark")
     else:  # Aqua follows the system by itself
         assert theme.resolve("dark") == "native"
+
+
+def test_expand_macros_in_the_window(app):
+    app.src_var.set("latex")
+    app.dst_var.set("latex")
+    app.wrapper_var.set("bare")
+    app.update_idletasks()
+    assert str(app.expand_chk.cget("state")) == "normal"
+    set_input(app, r"\newcommand{\R}{\mathbb{R}}" + "\n" + r"$x \in \R$")
+    app.expand_var.set(True)
+    try:
+        app.convert_now()
+        assert pump(app, until=lambda: r"\mathbb{R}" in app.output.get("1.0", "end"))
+        assert r"\R" not in app.output.get("1.0", "end")
+    finally:
+        app.expand_var.set(False)
+    app.dst_var.set("mathml")
+    app.update_idletasks()
+    assert str(app.expand_chk.cget("state")) == "disabled"

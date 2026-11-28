@@ -214,3 +214,28 @@ def test_cli_convert_extract_and_ignored_targets(tmp_path, capsys):
 ])
 def test_existing_texmath_output(tex, defs, expected, notes):
     assert compat.for_texmath(tex, compat.Macros(text=defs, labels={"k": "4"})) == (expected, notes)
+
+
+@pytest.mark.parametrize("body, expected", [
+    (r"\widetilde\K", r"\widetilde{\mathcal{K}}"),  # one argument, as TeX hands \K over
+    (r"x^\K_\K", r"x^{\mathcal{K}}_{\mathcal{K}}"),
+    (r"\hat \K + \K", r"\hat {\mathcal{K}} + \mathcal{K}"),
+])
+def test_a_macro_as_a_bare_argument_stays_one_argument(body, expected):
+    out, _ = compat.expand_macros(body, compat.Macros(text=r"\newcommand{\K}{\mathcal{K}}"))
+    assert out == expected
+
+
+def test_a_delimiter_macro_after_left_gets_no_braces():
+    out, _ = compat.expand_macros(r"\left\lb x \right\rb", compat.Macros(text=r"\newcommand{\lb}{\langle}"
+                                                                         r"\newcommand{\rb}{\rangle}"))
+    assert "{" not in out and r"\langle" in out and r"\rangle" in out
+
+
+def test_a_macro_made_of_latex_internals_is_kept_as_written():
+    # an \eqlabel from a style file (\global\@namedef...): written out without \makeatletter it breaks
+    macros = compat.Macros(text=r"\newcommand{\eqlabel}[1]{\label{#1}\global\@namedef{eq@#1}{}}"
+                                r"\newcommand{\R}{\mathbb{R}}")
+    out, notes = compat.expand_macros(r"x\in\R \eqlabel{eq:a}", macros)
+    assert out == r"x\in\mathbb{R}\eqlabel{eq:a}"  # (TeX skips the space after \R)
+    assert any("internal" in n and r"\eqlabel" in n for n in notes)

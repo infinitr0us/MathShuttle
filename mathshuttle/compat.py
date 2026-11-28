@@ -444,7 +444,12 @@ class Definition:
 
 
 def _control_words(tex: str) -> set:
-    return set(re.findall(r"\\[a-zA-Z@]+", tex))
+    """Control words, and control symbols, which can be macros too (``\\newcommand{\\1}{\\mathbf 1}``)."""
+    return set(re.findall(r"\\(?:[a-zA-Z@]+|[^a-zA-Z@\s])", tex))
+
+
+# the name being defined: a control word, or a control symbol other than the ones TeX syntax needs
+_NAME = r"(\\[a-zA-Z@]+|\\[^a-zA-Z@\s{}\\%#])"
 
 
 def _in_comment(text: str, pos: int) -> bool:
@@ -457,11 +462,11 @@ def _parse_definition(text: str, m) -> Optional[Definition]:
     pos = m.end()
     gap = _GAP.pattern  # spaces and comments, as TeX skips them
     if cmd == "let":
-        lm = re.compile(gap + r"(\\[a-zA-Z@]+)" + gap + r"=?\s*(\\[a-zA-Z@]+|\\.|[^\s\\])").match(text, pos)
+        lm = re.compile(gap + _NAME + gap + r"=?\s*(\\[a-zA-Z@]+|\\.|[^\s\\])").match(text, pos)
         if not lm:
             return None
         return Definition(lm.group(1), text[m.start():lm.end()], frozenset({lm.group(2)}), span=(m.start(), lm.end()))
-    nm = re.compile(gap + r"(?:\{" + gap + r"(\\[a-zA-Z@]+)" + gap + r"\}|(\\[a-zA-Z@]+))").match(text, pos)
+    nm = re.compile(gap + r"(?:\{" + gap + _NAME + gap + r"\}|" + _NAME + ")").match(text, pos)
     if not nm:
         return None
     name = nm.group(1) or nm.group(2)
@@ -1338,6 +1343,7 @@ _NOTES = {
                   "definitions instead",
     "kept": "the macros could not be expanded, so the equation was kept as written",
     "written": "macros written out: %s",
+    "machinery": "kept as written (they are made of LaTeX's internal commands): %s",
     "packs": "written as their packages define them (built in): %s",
     "intertext": "\\intertext: written as a row of text in the equation",
 }
@@ -1408,25 +1414,57 @@ def _expand_packs(out: str, tex: str, macros: Optional[Macros], own: List[Defini
     return packs.apply(out, defined, packages, pack_hits, for_latex)
 
 
+# a definition made of LaTeX's machinery (\@namedef, \global, \expandafter...): written out into an
+# equation, where there is no \makeatletter, it would break; such a macro is kept as written
+_MACHINERY = re.compile(r"\\[a-zA-Z]*@[a-zA-Z@]*|\\(?:global|gdef|xdef|edef|expandafter|csname|noexpand|"
+                        r"futurelet|afterassignment|aftergroup)(?![a-zA-Z@])")
+# commands that take the next token as a delimiter, not an argument in braces
+_DELIMITER_SIZES = frozenset("\\" + n for n in "left right middle big Big bigg Bigg bigl bigr Bigl Bigr biggl "
+                                                 "biggr Biggl Biggr bigm Bigm biggm Biggm".split())
+
+
+def _braced_arguments(tex: str, names: AbstractSet[str]) -> str:
+    """A macro of `names` written as a bare argument (``\\widetilde\\K``, ``x^\\R``) gets braces, so that
+    what it stands for stays one argument (``\\widetilde{\\mathcal K}``), as TeX hands the macro itself over."""
+    out, last = [], 0
+    for t in _TOKEN.finditer(tex):
+        if t.group() not in names:
+            continue
+        prev = re.search(r"(\\[a-zA-Z@]+|[\^_])\s*$", tex[last:t.start()])
+        if prev and (prev.group(1) in "^_" or (prev.group(1) in _TAKES_ARGUMENT
+                                                and prev.group(1) not in _DELIMITER_SIZES)):
+            out += [tex[last:t.start()], "{", t.group(), "}"]
+            last = t.end()
+    return "".join(out) + tex[last:]
+
+
 def expand_macros(tex: str, macros: Optional[Macros] = None) -> Tuple[str, List[str]]:
     """Write out the macros of an equation for LaTeX output and say which ones were used."""
     from .pandoc_engine import ConversionError
+    source = tex
+    comments = [m.span() for m in _TOKEN.finditer(tex) if m.group().startswith("%")]
+    used = macros.needed(_without(tex, comments)) if macros else []
+    machinery = {d.name for d in used if "@" in d.name or _MACHINERY.search(d.source)}
+    used = [d for d in used if d.name not in machinery]
+    own, _ = parse_definitions(tex)
+    tex = _braced_arguments(tex, {d.name for d in used + own})
     own, skipped = parse_definitions(tex)
     body = _without(tex, [d.span for d in own]) if own else tex
     names = {m.group() for m in _TOKEN.finditer(body)}
-    comments = [m.span() for m in _TOKEN.finditer(tex) if m.group().startswith("%")]
-    used = macros.needed(_without(tex, comments)) if macros else []
     defined = {d.name for d in used + own}
+    tex_kept = (source, [_NOTES["kept"]])
+    kept = sorted(names & machinery)
     try:
         out, ok = _expand_definitions(tex, own, used, for_writer=False)
         if skipped or not ok or any(m.group() in defined for m in _TOKEN.finditer(out)):
-            return tex, [_NOTES["kept"]]
+            return tex_kept
         hits: List[str] = []
         out = _expand_packs(out, tex, macros, own, hits, for_latex=True)
     except ConversionError:
-        return tex, [_NOTES["kept"]]
+        return tex_kept
     written = sorted((names & defined) | {h.split(": ", 1)[1] for h in hits})
-    return out, [_NOTES["written"] % ", ".join(written)] if written else []
+    notes = [_NOTES["written"] % ", ".join(written)] if written else []
+    return out, notes + ([_NOTES["machinery"] % ", ".join(kept)] if kept else [])
 
 
 def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml") -> "Tuple[str, List[str]]":
