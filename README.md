@@ -220,8 +220,10 @@ note says what was done. `\eqref`, `\ref`, `\cref`, `\Cref` and `\autoref` show 
 ("(2)", "eq. (2)", "Section 3", "Figure 1"), and citations their numbers from the `.aux` file, or
 author and year for natbib without its `numbers` option ("(Smith et al., 2020)"). An equation that
 cannot be converted stays LaTeX text, followed by the reason. The rest is pandoc's reading of the
-paper: figures (found next to the paper), tables and sections as pandoc converts them, and a command
-pandoc does not know is left out, as in pandoc's own conversions (`\pageref` and `\nameref` among them).
+paper: figures (found as LaTeX finds them, also in `\graphicspath` folders; Word takes no PDF or EPS
+figure, so one goes in only when a PNG or JPEG of the same name is beside it, and the others are
+named), tables and sections as pandoc converts them, and a command pandoc does not know is left out,
+as in pandoc's own conversions (`\pageref` and `\nameref` among them).
 
 MathML input may also come from elsewhere: prefixed elements (`<mml:math>`, as written by
 Word's XSLT, MathType or JATS journal XML), named entities (`&InvisibleTimes;`, from
