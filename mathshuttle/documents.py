@@ -16,6 +16,7 @@ import posixpath
 import re
 import tempfile
 import time
+import uuid
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -365,8 +366,8 @@ def _slide_paths(z: zipfile.ZipFile) -> List[str]:
     return [targets[s.get(_q(R_NS, "id"))] for s in pres.iter(_q(P_NS, "sldId")) if s.get(_q(R_NS, "id")) in targets]
 
 
-def _picture_equations(source: str, template: bool, notes: List[str]) -> List[Equation]:
-    """Read a shape's LaTeX and write its definitions into the equations that use them."""
+def _picture_text(source: str, template: bool) -> str:
+    """Extract the LaTeX from a shape or the formula field of a TeXPoint template."""
     text = source.replace("\r\n", "\n").replace("\r", "\n")
     if template:
         fields = text.split("\t")
@@ -380,7 +381,14 @@ def _picture_equations(source: str, template: bool, notes: List[str]) -> List[Eq
         text = "$" + text.strip() + "\n$"
     if "\\DeclareMathOperator" in text:
         text, _ = compat.before_equations(text, defer=False)
-    blocks, warnings, preamble = _read_latex_blocks(text, None, notes)
+    return text
+
+
+def _picture_equations(text: str, notes: List[str], blocks: Optional[list] = None) -> List[Equation]:
+    """Read a shape's equations with only that shape's preamble and definitions."""
+    warnings, preamble = "", None
+    if blocks is None:
+        blocks, warnings, preamble = _read_latex_blocks(text, None, notes)
     notes.extend(line.removeprefix("[WARNING]").strip() for line in warnings.splitlines()
                  if line.startswith("[WARNING]"))
     equations: List[Equation] = []
@@ -403,16 +411,87 @@ def _picture_equations(source: str, template: bool, notes: List[str]) -> List[Eq
     return expanded
 
 
+def _picture_blocks(texts):
+    """Read independent LaTeX sources together. Leave warnings and failed reads to the individual reader."""
+    if len(texts) < 2:
+        return {}
+    groups = [[]]
+    token = uuid.uuid4().hex
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            # With file scope, each preamble applies only to its own input. Pandoc concatenates the
+            # resulting blocks, so put a separate one-word document between neighbouring inputs.
+            marker = token + ".tex"
+            with open(os.path.join(folder, marker), "w", encoding="ascii") as f:
+                f.write(token)
+            args = ["-f", "latex", "-t", "json", "--sandbox", "--file-scope"]
+            for i, text in enumerate(texts.values()):
+                if i:
+                    args.append(marker)
+                filename = "%s-%d.tex" % (token, i)
+                with open(os.path.join(folder, filename), "wb") as f:
+                    f.write(text.encode("utf-8"))
+                args.append(filename)
+            out, warnings = _run(args, b"", cwd=folder)
+    except (ConversionError, OSError):
+        return {}
+    if warnings:
+        return {}
+    separator = {"t": "Para", "c": [{"t": "Str", "c": token}]}
+    for block in json.loads(out)["blocks"]:
+        if block == separator:
+            groups.append([])
+        else:
+            groups[-1].append(block)
+    return dict(zip(texts, groups)) if len(groups) == len(texts) else {}
+
+
+def _resolve_pictures(collector, pictures):
+    """Read each distinct source once and put its equations back among the native equations."""
+    keys = list(dict.fromkeys(key for _, key, _, _ in pictures))
+    cache = {}
+    for i in range(0, len(keys), 256):  # keep the file list within Windows' command line limit
+        texts = {}
+        for key in keys[i:i + 256]:
+            try:
+                texts[key] = _picture_text(*key)
+            except ConversionError as e:
+                cache[key] = [], ["could not read the LaTeX: " + _shorten(str(e), 140)]
+        blocks = _picture_blocks(texts)
+        for key, text in texts.items():
+            notes = []
+            try:
+                equations = _picture_equations(text, notes, blocks.get(key))
+            except ConversionError as e:
+                equations = []
+                notes.append("could not read the LaTeX: " + _shorten(str(e), 140))
+            cache[key] = equations, notes
+
+    written = compat._NOTES["written"].split("%s")[0]
+    entries = []
+    last = 0
+    for index, key, where, name in pictures:
+        entries.extend(collector.entries[last:index])
+        last = index
+        equations, notes = cache[key]
+        for eq in equations:
+            entries.append(Found(Equation(eq.tex, eq.display), where, name))
+        for note in notes:
+            if not note.startswith(written):
+                collector.notes.append("%s: %s" % (where + (" " + name if name else ""), note))
+    collector.entries = entries + collector.entries[last:]
+
+
 _SHAPES = {_q(P_NS, name) for name in ("pic", "grpSp", "sp")}
 _TAG_REF = "*/%s/%s/%s" % (_q(P_NS, "nvPr"), _q(P_NS, "custDataLst"), _q(P_NS, "tags"))
 
 
 def _read_picture(z: zipfile.ZipFile, shape: ET.Element, tag_paths: Dict[str, str], where: str,
-                  collector: _Collector) -> None:
-    """Read the tags on this shape's own non-visual properties. A group can contain other shapes."""
+                  collector: _Collector, pictures: list) -> bool:
+    """Record the shape's source and return whether the shape is an add-in picture."""
     ref = shape.find(_TAG_REF)
     if ref is None:
-        return
+        return False
     props = shape.find("*/" + _q(P_NS, "cNvPr"))
     name = _shorten(props.get("name", "")) if props is not None else ""
     try:
@@ -420,37 +499,30 @@ def _read_picture(z: zipfile.ZipFile, shape: ET.Element, tag_paths: Dict[str, st
         root = _parse(z.read(part))
     except (KeyError, ET.ParseError, UnicodeDecodeError, zipfile.BadZipFile):
         collector.notes.append("%s: could not read the tags for %s" % (where, name or "a shape"))
-        return
+        return False
     tags = {tag.get("name"): tag.get("val", "") for tag in root.findall(_q(P_NS, "tag"))}
     if "LATEXADDIN" in tags:
         addin, source = "IguanaTeX", tags["LATEXADDIN"]
     elif "SOURCE" in tags:
         addin, source = "TeXPoint", tags["SOURCE"]
     else:
-        return
+        return False
     collector.pictures[addin] = collector.pictures.get(addin, 0) + 1
     location = "%s (%s)" % (where, addin)
-    notes: List[str] = []
-    try:
-        template = addin == "TeXPoint" and tags.get("TEXPOINT", "").strip().lower() == "template"
-        for eq in _picture_equations(source, template, notes):
-            collector.entries.append(Found(eq, location, name))
-    except ConversionError as e:
-        notes.append("could not read the LaTeX: " + _shorten(str(e), 140))
-    written = compat._NOTES["written"].split("%s")[0]
-    for note in notes:  # what went wrong, per picture; not which macros were written out (every picture)
-        if not note.startswith(written):
-            collector.notes.append("%s: %s" % (location + (" " + name if name else ""), note))
+    template = addin == "TeXPoint" and tags.get("TEXPOINT", "").strip().lower() == "template"
+    pictures.append((len(collector.entries), (source, template), location, name))
+    return True
 
 
 def _walk_slide_part(z: zipfile.ZipFile, root: ET.Element, targets: List[Tuple[str, str, str]], where: str,
-                     collector: _Collector, notes: bool = False) -> None:
+                     collector: _Collector, pictures: list, notes: bool = False) -> None:
     state = {"paras": []}
     tag_paths = {rid: target for rid, kind, target in targets if kind == R_NS + "/tags"}
 
     def visit(el):
-        if el.tag in _SHAPES:
-            _read_picture(z, el, tag_paths, where, collector)
+        if el.tag in _SHAPES and _read_picture(z, el, tag_paths, where, collector, pictures):
+            if el.tag == _q(P_NS, "grpSp"):
+                return False  # the children draw the tagged group's equation
         if el.tag == _q(P_NS, "sp") and notes:
             ph = el.find(".//" + _q(P_NS, "ph"))
             if ph is None or ph.get("type") != "body":
@@ -477,6 +549,7 @@ def _walk_slide_part(z: zipfile.ZipFile, root: ET.Element, targets: List[Tuple[s
 
 def read_pptx(path: str) -> DocumentEquations:
     collector = _Collector()
+    pictures = []
     with zipfile.ZipFile(path) as z:
         names = set(z.namelist())
         for number, slide in enumerate(_slide_paths(z), 1):
@@ -491,11 +564,13 @@ def read_pptx(path: str) -> DocumentEquations:
                     break
             where = "slide %d" % number + (": " + title if title else "")
             targets = _targets(z, slide)
-            _walk_slide_part(z, root, targets, where, collector)
+            _walk_slide_part(z, root, targets, where, collector, pictures)
             for _, kind, target in targets:
                 if kind.endswith("/notesSlide") and target in names:
                     _walk_slide_part(z, _parse(z.read(target)), _targets(z, target), "slide %d notes" % number,
-                                     collector, notes=True)
+                                     collector, pictures, notes=True)
+    if pictures:
+        _resolve_pictures(collector, pictures)
     return collector.result(path)
 
 

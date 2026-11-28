@@ -21,10 +21,12 @@ import os
 import re
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from itertools import groupby
 from typing import Dict, List, Optional, Tuple
+from xml.parsers import expat
 
 from . import compat
 from .pandoc_engine import MARKDOWN, ConversionError, _api, _run, markdown_blocks
@@ -819,7 +821,7 @@ def _equation_picture(eq, alt):
     definitions = preview.definitions_for(eq.tex, eq.macros)
     loaded = eq.macros.packages if eq.macros is not None else set()
     defined = set(eq.macros.definitions) if eq.macros is not None else set()
-    packages = list(eq.macros.package_lines) if eq.macros is not None else []
+    packages = eq.macros.package_lines + eq.macros.tikz_libraries if eq.macros is not None else []
     packages.extend(packs.packages_for(eq.tex, defined, loaded))
     png, width, height = preview.render_picture(eq.tex, eq.display, definitions, packages)
     attrs = [["width", "%.6fin" % width], ["height", "%.6fin" % height]]
@@ -960,55 +962,113 @@ def _text_width(document_xml: str) -> int:
     return max(2880, int(size[1]) - int(left[1] if left else 1440) - int(right[1] if right else 1440))
 
 
+_PPR_ORDER = {"w:" + name: i for i, name in enumerate(
+    "pStyle keepNext keepLines pageBreakBefore framePr widowControl numPr suppressLineNumbers "
+    "pBdr shd tabs suppressAutoHyphens kinsoku wordWrap overflowPunct topLinePunct autoSpaceDE "
+    "autoSpaceDN bidi adjustRightInd snapToGrid spacing ind contextualSpacing mirrorIndents "
+    "suppressOverlap jc textDirection textAlignment textboxTightWrap outlineLvl divId cnfStyle "
+    "rPr sectPr pPrChange".split())}
+
+
+def _picture_property(ppr, name):
+    """Find or insert a direct paragraph property in Word's schema order."""
+    tag = "w:" + name
+    prop = ppr.find(tag)
+    if prop is not None:
+        return prop
+    index = next((i for i, child in enumerate(ppr) if _PPR_ORDER.get(child.tag, -1) > _PPR_ORDER[tag]), len(ppr))
+    prop = ET.Element(tag)
+    ppr.insert(index, prop)
+    return prop
+
+
+def _picture_tabs(ppr, width):
+    """Merge the display's stops with the paragraph's and report whether it has other stops."""
+    tabs = _picture_property(ppr, "tabs")
+    stops = {int(t.get("w:pos")): t for t in tabs if t.tag == "w:tab"}
+    for pos, align in ((width // 2, "center"), (width, "right")):
+        stops[pos] = ET.Element("w:tab", {"w:val": align, "w:pos": str(pos)})
+    tabs[:] = [stops[pos] for pos in sorted(stops)] + [t for t in tabs if t.tag != "w:tab"]
+    return len(stops) > 2
+
+
+def _picture_tab_run(align, positional):
+    run = ET.Element("w:r")
+    if positional:  # a tab to the margins skips intervening custom stops
+        ET.SubElement(run, "w:ptab", {"w:alignment": align, "w:relativeTo": "margin", "w:leader": "none"})
+    else:
+        ET.SubElement(run, "w:tab")
+    return run
+
+
+def _layout_picture(para, in_cell, width, shown):
+    ppr = para.find("w:pPr")
+    if ppr is None:
+        ppr = ET.Element("w:pPr")
+        para.insert(0, ppr)
+    if in_cell:
+        _picture_property(ppr, "jc").set("w:val", "center")
+    else:
+        positional = _picture_tabs(ppr, width)
+        para.insert(1, _picture_tab_run("center", positional))
+    if shown:
+        if not in_cell:
+            para.append(_picture_tab_run("right", positional))
+        run = ET.SubElement(para, "w:r")
+        # Raise the number to the middle of the picture. Word counts half points.
+        extent = next(para.iter("wp:extent"), None)
+        height = int(extent.get("cy", 0)) if extent is not None else 0
+        raise_by = round(height / 12700) - 8
+        if raise_by > 0:
+            ET.SubElement(ET.SubElement(run, "w:rPr"), "w:position", {"w:val": str(raise_by)})
+        ET.SubElement(run, "w:t", {"xml:space": "preserve"}).text = (" " if in_cell else "") + ", ".join(shown)
+
+
+def _picture_layout_tree(xml):
+    """Keep pandoc's prefixes and namespace declarations, including prefixes used in attribute values."""
+    tree = ET.TreeBuilder(insert_comments=True, insert_pis=True)
+    parser = expat.ParserCreate()
+    parser.StartElementHandler = tree.start
+    parser.EndElementHandler = tree.end
+    parser.CharacterDataHandler = tree.data
+    parser.CommentHandler = tree.comment
+    parser.ProcessingInstructionHandler = tree.pi
+    parser.Parse(xml, True)
+    return tree.close()
+
+
 def _lay_out_pictures(files: Dict[str, bytes], marks: Dict[str, List[str]]) -> int:
-    """Each display picture (found by the bookmark around it, which goes) centred by a centre tab, and
-    its number, if it has one, at the right margin by a right tab: as Word sets a numbered equation.
-    Returns how many numbers were written."""
+    """Centre each marked display in its cell or between the page margins and add its numbers."""
     width = _text_width(files.get("word/document.xml", b"").decode("utf-8"))
-    tabs = '<w:tabs><w:tab w:val="center" w:pos="%d"/><w:tab w:val="right" w:pos="%d"/></w:tabs>' % (width // 2, width)
     numbered = 0
     for part in _PARTS:
         if part not in files:
             continue
-        xml = files[part].decode("utf-8")
+        root = _picture_layout_tree(files[part])
+        parents = {child: el for el in root.iter() for child in el}
+        ends = {el.get("w:id"): el for el in root.iter("w:bookmarkEnd")}
         changed = False
-        for mark, shown in marks.items():
-            # (pandoc writes a span's identifier as a bookmark named with a leading "_")
-            start = re.search(r'<w:bookmarkStart w:id="(\d+)" w:name="_?%s"\s*/>' % re.escape(mark), xml)
-            if not start:
+        for start in list(root.iter("w:bookmarkStart")):
+            mark = start.get("w:name", "").removeprefix("_")
+            if mark not in marks:
                 continue
-            p0 = max((m.start() for m in re.finditer(r"<w:p[ >]", xml[:start.start()])), default=-1)
-            p1 = xml.find("</w:p>", start.end())
-            if p0 < 0 or p1 < 0:
+            para = parents[start]
+            while para is not None and para.tag != "w:p":
+                para = parents.get(para)
+            if para is None:
                 continue
-            para = re.sub(r'<w:bookmarkEnd w:id="%s"\s*/>' % start[1], "", xml[p0:p1].replace(start[0], "", 1), count=1)
-            head = re.match(r"<w:p\b[^>]*>", para)
-            body = para[head.end():]
-            ppr = re.match(r"<w:pPr>([\s\S]*?)</w:pPr>", body)
-            if ppr:
-                inner = ppr[1]
-                style = re.match(r"<w:pStyle\b[^>]*/>", inner)
-                inner = inner[:style.end()] + tabs + inner[style.end():] if style else tabs + inner
-                body = "<w:pPr>%s</w:pPr>" % inner + body[ppr.end():]
-                cut = len("<w:pPr>%s</w:pPr>" % inner)
-            else:
-                body = "<w:pPr>%s</w:pPr>" % tabs + body
-                cut = len("<w:pPr>%s</w:pPr>" % tabs)
-            number = ""
-            if shown:
-                # raised to the middle of the picture, as LaTeX centres a number on a tall display
-                # (w:position counts half points; the picture's height is in EMU, 12700 to the point)
-                extent = re.search(r'<wp:extent\b[^>]*\bcy="(\d+)"', body)
-                raise_by = max(0, round(int(extent[1]) / 12700) - 8) if extent else 0
-                props = '<w:rPr><w:position w:val="%d"/></w:rPr>' % raise_by if raise_by else ""
-                number = '<w:r><w:tab/></w:r><w:r>%s<w:t xml:space="preserve">%s</w:t></w:r>' % (props, ", ".join(
-                    s.replace("&", "&amp;").replace("<", "&lt;") for s in shown))
-                numbered += 1
-            body = body[:cut] + "<w:r><w:tab/></w:r>" + body[cut:] + number
-            xml = xml[:p0] + head[0] + body + xml[p1:]
+            parent = parents.get(para)
+            while parent is not None and parent.tag != "w:tc":
+                parent = parents.get(parent)
+            _layout_picture(para, parent is not None, width, marks[mark])
+            numbered += bool(marks[mark])
+            parents[start].remove(start)
+            end = ends.get(start.get("w:id"))
+            if end is not None:
+                parents[end].remove(end)
             changed = True
         if changed:
-            files[part] = xml.encode("utf-8")
+            files[part] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     return numbered
 
 

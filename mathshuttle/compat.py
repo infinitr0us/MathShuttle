@@ -608,17 +608,40 @@ def parse_definitions(text: str, document: bool = False) -> "Tuple[List[Definiti
         pos = d.span[1]
 
 
-_USEPACKAGE = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[(?P<options>[^\]]*)\])?\s*\{(?P<names>[^{}]*)\}")
+_USEPACKAGE = re.compile(r"\\(?:usepackage|RequirePackage)\s*")
+_PACKAGE_NAMES = re.compile(r"\s*\{([^{}]*)\}")
+_LIBRARY_NAME = r"[a-zA-Z0-9]+(?:[._-][a-zA-Z0-9]+)*"
+_TIKZ_LIBRARIES = re.compile(r"\\usetikzlibrary\s*\{\s*" + _LIBRARY_NAME + r"(?:\s*,\s*" + _LIBRARY_NAME + r")*\s*\}")
+
+
+def _library_lines(text: str):
+    """Literal TikZ library declarations outside comments and verbatim examples."""
+    if r"\usetikzlibrary" in text:
+        text = without_verbatim(text)
+        for match in _TIKZ_LIBRARIES.finditer(text):
+            if not _in_comment(text, match.start()):
+                yield match[0]
 
 
 def _package_requests(text: str):
     """Package declarations in source order, with the options LaTeX will need."""
-    return (m for m in _USEPACKAGE.finditer(text) if not _in_comment(text, m.start()))
+    for m in _USEPACKAGE.finditer(text):
+        if _in_comment(text, m.start()):
+            continue
+        pos, options = m.end(), ""
+        if text[pos:pos + 1] == "[":
+            end = _bracket_end(text, pos)
+            if end < 0:
+                continue
+            options, pos = text[pos + 1:end - 1], end
+        names = _PACKAGE_NAMES.match(text, pos)
+        if names:
+            yield text[m.start():names.end()], names[1], options
 
 
 def packages_in(text: str) -> set:
     """The packages that LaTeX source loads (\\usepackage{a,b})."""
-    return {p.strip() for m in _package_requests(text) for p in m["names"].split(",") if p.strip()}
+    return {p.strip() for _, names, _ in _package_requests(text) for p in names.split(",") if p.strip()}
 
 
 _VERBATIM = re.compile(r"\\begin\s*\{(verbatim\*?|Verbatim\*?|lstlisting|minted|comment|BVerbatim|LVerbatim)\}"
@@ -658,7 +681,7 @@ def pandoc_leftovers(text: str) -> str:
     apply one that holds in a group elsewhere."""
     text = without_verbatim(text)
     if not any(k in text for k in ("\\DeclarePairedDelimiter", "\\foreach", "\\@for", "usepackage", "RequirePackage",
-                                   "\\AtBeginDocument", "\\AddToHook")):
+                                   "\\usetikzlibrary", "\\AtBeginDocument", "\\AddToHook")):
         return ""
     defs, _ = parse_definitions(text, document=True)
     hooks = _hook_spans(text)
@@ -671,7 +694,8 @@ def pandoc_leftovers(text: str) -> str:
             break
         names |= more
     keep = [d.source for d in defs if d.paired or d.loop or d.name in names or _in(hooks, d.span[0])]
-    keep.extend(m[0] for m in _package_requests(text))
+    keep.extend(line for line, _, _ in _package_requests(text))
+    keep.extend(_library_lines(text))
     return "\n".join(keep)
 
 
@@ -692,6 +716,7 @@ class Macros:
         self.errors: List[str] = []
         self.packages: set = set()
         self.package_lines: List[str] = []
+        self.tikz_libraries: List[str] = []
         self.labels: Dict[str, str] = dict(labels or {})
         for path in self.files:
             try:
@@ -712,9 +737,10 @@ class Macros:
             self.order.append(d)
         if not document:  # (a document's own skipped definitions are pandoc's business)
             self.skipped += skipped
-        for request in _package_requests(text):
-            self.packages.update(p.strip() for p in request["names"].split(",") if p.strip())
-            self.package_lines.append(request[0])
+        for line, names, _ in _package_requests(text):
+            self.packages.update(p.strip() for p in names.split(",") if p.strip())
+            self.package_lines.append(line)
+        self.tikz_libraries.extend(_library_lines(text))
 
     def __len__(self) -> int:
         return len(self.definitions)
@@ -859,7 +885,7 @@ def _expand(body: str, sources: List[str], keep_layout: bool = False) -> Optiona
     # Inside \[...\] pandoc preserves the layout of an align environment as well.
     wrapped = body if not keep_layout and env and env.group(1) in _PANDOC_MATH_ENVS else "\\[" + body + "\n\\]"
     try:
-        eqs = _read_json("latex", ("\n".join(sources) + "\n" + wrapped).encode("utf-8"))
+        eqs = _read_json("latex", ("\n".join(sources) + "\n" + wrapped).encode("utf-8"), sandbox=True)
     except ConversionError:
         return None
     if len(eqs) != 1:

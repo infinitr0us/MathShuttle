@@ -11,6 +11,7 @@ from mathshuttle import preview
 from mathshuttle.__main__ import main
 from mathshuttle.compare import compare
 from mathshuttle.wordexport import document_to_word, passage_to_word
+from mathshuttle.wordexport import _lay_out_pictures
 
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -160,6 +161,97 @@ def test_drawing_error_leaves_text_and_reason(tmp_path):
 def test_units_request_mhchem(monkeypatch):
     monkeypatch.setattr(preview, "installed", lambda name: name == "mhchem")
     assert r"\usepackage{mhchem}" in preview._picture_preamble(r"\pu{25 kg}", [], "")
+
+
+PAPER_PACKAGES = r"""\usepackage[pdftitle={A paper on diagrams}]{hyperref}
+\usepackage[width=0.9\textwidth]{caption}
+\usepackage[french]{babel}
+\usepackage{biblatex}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}"""
+
+
+def test_picture_uses_only_literal_drawing_packages(monkeypatch):
+    monkeypatch.setattr(preview, "installed", lambda name: True)
+    lines = PAPER_PACKAGES.splitlines() + [
+        r"\usepackage[\paperoptions]{bm}", r"\usepackage[style={\choice[a]}]{cancel}",
+        r"\usepackage[dvipsnames]{xcolor}",
+        r"\usepackage{mathrsfs,tensor,slashed,customstyle}", r"\usepackage{tikz}",
+        r"\usetikzlibrary{arrows.meta, positioning}", r"\usetikzlibrary{../private}"]
+    preamble = preview._picture_preamble("x", lines, "")
+    for name in ("hyperref", "caption", "babel", "biblatex", "geometry", "fontenc", "customstyle",
+                 "paperoptions", "../private"):
+        assert name not in preamble
+    for name in ("bm", "cancel", "xcolor", "mathrsfs", "tensor", "slashed", "tikz"):
+        assert r"\usepackage{%s}" % name in preamble
+    assert r"\PassOptionsToPackage{dvipsnames}{xcolor}" in preamble
+    assert "arrows.meta" in preamble and "positioning" in preamble
+
+
+def test_real_paper_packages_and_tikz_library_draw_a_picture(tmp_path):
+    needs_tex("tikz-cd")
+    diagram = r"\begin{tikzcd} A \arrow[r,squiggly] & B \end{tikzcd}"
+    preamble = PAPER_PACKAGES + "\n" + r"\usepackage{tikz-cd}" + "\n" + r"\usetikzlibrary{decorations.pathmorphing}"
+    src = paper(tmp_path, r"\[" + diagram + r"\]", preamble)
+    out = src.with_suffix(".docx")
+    notes = document_to_word(src, out)
+    xml, pngs = pictures(out)
+    assert descriptions(xml) == [diagram] and len(pngs) == 1, notes
+    assert all(n > 10 for n in struct.unpack(">II", pngs[0][16:24]))
+
+
+@pytest.fixture
+def stub_picture(tmp_path, monkeypatch):
+    import base64
+    png = tmp_path / "stub.png"
+    png.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAE"
+                                     "AAH2FzhVAAAAAElFTkSuQmCC"))
+    monkeypatch.setattr(preview, "render_picture", lambda *a, **kw: (str(png), 0.4, 0.2))
+
+
+def test_display_picture_in_table_cell(tmp_path, stub_picture):
+    src = tmp_path / "table.md"
+    src.write_text("| Formula | Name |\n| --- | --- |\n| $$\\ce{H2O}$$ | Water |\n\n$$\\ce{CO2}$$\n")
+    out = src.with_suffix(".docx")
+    document_to_word(src, out)
+    xml, _ = pictures(out)
+    cell = next(p for tc in xml.iter(W + "tc") for p in tc.iter(W + "p") if descriptions(p))
+    jc = cell.findall(W + "pPr/" + W + "jc")
+    assert [j.get(W + "val") for j in jc] == ["center"]
+    assert not list(cell.iter(W + "tab"))
+    outside = next(p for p in xml.iter(W + "p") if descriptions(p) == [r"\ce{CO2}"])
+    assert [t.get(W + "val") for t in outside.findall(".//" + W + "tabs/" + W + "tab")] == ["center", "right"]
+
+
+def test_display_picture_first_in_list_item(tmp_path, stub_picture):
+    src = tmp_path / "list.md"
+    src.write_text("1. $$\\ce{CO2}$$ follows the number.\n")
+    out = src.with_suffix(".docx")
+    document_to_word(src, out)
+    xml, _ = pictures(out)
+    para = next(p for p in xml.iter(W + "p") if descriptions(p))
+    props = [el.tag for el in para.find(W + "pPr")]
+    assert props.index(W + "numPr") < props.index(W + "tabs")
+
+
+def test_picture_merges_tab_stops_in_schema_order():
+    xml = ('<w:document xmlns:w="%s" xmlns:wp="%s"><w:body><w:p><w:pPr><w:numPr/><w:pBdr/><w:shd/>'
+           '<w:tabs><w:tab w:val="left" w:pos="720"/><w:tab w:val="left" w:pos="4680"/>'
+           '<w:tab w:val="left" w:pos="7200"/></w:tabs>'
+           '<w:spacing/><w:ind/><w:jc w:val="left"/></w:pPr>'
+           '<w:bookmarkStart w:id="1" w:name="_pic"/><w:r><w:drawing><wp:inline>'
+           '<wp:docPr id="1" name="diagram" descr="x&#10;y&#9;z"/></wp:inline></w:drawing></w:r>'
+           '<w:bookmarkEnd w:id="1"/></w:p></w:body></w:document>') % (W[1:-1], WP[1:-1])
+    files = {"word/document.xml": xml.encode()}
+    assert _lay_out_pictures(files, {"pic": ["(1)"]}) == 1
+    root = ET.fromstring(files["word/document.xml"])
+    assert descriptions(root) == ["x\ny\tz"]
+    ppr = root.find(".//" + W + "pPr")
+    assert [el.tag[len(W):] for el in ppr] == ["numPr", "pBdr", "shd", "tabs", "spacing", "ind", "jc"]
+    assert [(el.get(W + "pos"), el.get(W + "val")) for el in ppr.find(W + "tabs")] == [
+        ("720", "left"), ("4680", "center"), ("7200", "left"), ("9360", "right")]
+    # An ordinary tab run would stop at 720 or 7200 before it reached its intended position.
+    assert [el.get(W + "alignment") for el in root.iter(W + "ptab")] == ["center", "right"]
 
 
 @pytest.mark.parametrize("source", ["tex", "md", "passage"])

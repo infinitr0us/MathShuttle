@@ -193,6 +193,10 @@ def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
 
 
 _PICTURE_DPI = 300
+_DRAWING_PACKAGES = frozenset("""
+amsmath amssymb amsfonts mathtools bm mathrsfs dsfont bbm esint stmaryrd physics braket
+siunitx mhchem tikz-cd tikz xy xcolor cancel slashed tensor amscd amsbsy amstext
+""".split())
 _PICTURE_PACKAGES = ((r"\\begin\s*\{tikzcd\}", "tikz-cd", ""),
                      (r"\\(?:ce|pu)(?![A-Za-z@])", "mhchem", "version=4"),
                      (r"\\xymatrix(?![A-Za-z@])", "xy", "all"))
@@ -203,21 +207,25 @@ _FILE_COMMAND = re.compile(r"\\(?:@*input|include|subfile|import|subimport|endin
 
 
 def _picture_preamble(tex, packages, defaults):
-    """Load installed packages by name, retaining literal options and applying them before dependencies load."""
-    from .compat import _USEPACKAGE, _group_end
+    """Load installed maths packages, their literal options and the paper's TikZ libraries."""
+    from .compat import _TIKZ_LIBRARIES, _group_end, _package_requests
     names = {}
+    libraries = []
     for line in packages:
-        request = _USEPACKAGE.fullmatch(line)
-        options = (request["options"] or "") if request else ""
-        # A package is looked up in the installation, never by a path supplied by the paper.
-        for name in (request["names"] if request else line).split(","):
+        if _TIKZ_LIBRARIES.fullmatch(line):
+            if line not in libraries:
+                libraries.append(line)
+            continue
+        _, requested, options = next(_package_requests(line), ("", line, ""))
+        if options and (not re.fullmatch(r"[\w=,.\s:{}+-]+", options)
+                        or _group_end("{" + options + "}", 0) != len(options) + 2):
+            options = ""
+        for name in requested.split(","):
             name = name.strip()
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or not installed(name):
+            if name not in _DRAWING_PACKAGES or not installed(name):
                 continue
             opts = names.setdefault(name, [])
             if options and options not in opts:
-                if not re.fullmatch(r"[\w=,.\s:{}+-]*", options) or _group_end("{" + options + "}", 0) != len(options) + 2:
-                    raise PreviewError("the options for %s need more than literal names or values" % name)
                 opts.append(options)
     for pattern, name, options in _PICTURE_PACKAGES:
         if re.search(pattern, tex):
@@ -228,6 +236,8 @@ def _picture_preamble(tex, packages, defaults):
     before = [r"\PassOptionsToPackage{%s}{%s}" % (",".join(opts), name)
               for name, opts in names.items() if opts]
     loads = [r"\usepackage{%s}" % name for name in names]
+    if "tikz" in names or "tikz-cd" in names:
+        loads.extend(libraries)
     return "\n".join(before + [r"\documentclass[border=1pt,12pt]{standalone}", defaults] + loads)
 
 

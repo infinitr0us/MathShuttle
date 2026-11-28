@@ -1,6 +1,7 @@
 """LaTeX stored on shapes by the IguanaTeX and TeXPoint PowerPoint add-ins."""
 import zipfile
 import xml.etree.ElementTree as ET
+from unittest.mock import patch
 from xml.sax.saxutils import quoteattr
 
 import pytest
@@ -113,6 +114,65 @@ def test_vector_group_and_picture_in_user_group(tmp_path):
     group = shape("User group", kind="grpSp", children=shape("Nested", 2) + shape("Ordinary picture"))
     result = read_document(deck(tmp_path, [(vector + group, [{"LATEXADDIN": "$v$"}, {"LATEXADDIN": "$n$"}])]))
     assert [(f.equation.tex, f.context) for f in result.found] == [("v", "Vector"), ("n", "Nested")]
+
+
+def test_tagged_group_owns_its_children(tmp_path):
+    children = shape("Tagged stroke", 2) + native("c")
+    group = shape("Vector", 1, "grpSp", children)
+    user_group = shape("User group", 3, "grpSp", shape("Visible", 2))
+    tags = [{"LATEXADDIN": "$v$"}, {"SOURCE": "$n$"}, {"OWNER": "someone"}]
+    result = read_document(deck(tmp_path, [(group + user_group, tags)]))
+    assert [(f.equation.tex, f.context) for f in result.found] == [("v", "Vector"), ("n", "Visible")]
+    assert any("1 IguanaTeX picture, 1 TeXPoint picture" in n for n in result.notes)
+
+
+@pytest.mark.parametrize("identical", [True, False])
+def test_deck_reuses_and_batches_picture_sources(tmp_path, monkeypatch, identical):
+    from mathshuttle import documents
+    calls = []
+    run = documents._run
+
+    def counted(*args, **kwargs):
+        calls.append(args[0])
+        return run(*args, **kwargs)
+
+    monkeypatch.setattr(documents, "_run", counted)
+    formulas = ["x" if identical else "x_{%d}" % i for i in range(12)]
+    sources = [{"LATEXADDIN": document("$" + f + "$")} for f in formulas]
+    slides = [(shape("Formula", 1) + shape("Next", 2), sources[i:i + 2]) for i in range(0, 12, 2)]
+    with patch.object(documents, "_picture_equations", wraps=documents._picture_equations) as read:
+        result = read_document(deck(tmp_path, slides))
+    assert [f.equation.tex for f in result.found] == formulas
+    assert read.call_count == len(set(formulas))
+    assert len(calls) <= 1
+
+
+def test_picture_cache_keeps_template_mode_and_each_warning_location(tmp_path):
+    source = "first\tsecond\tthird\tx+y"
+    tags = [{"SOURCE": source, "TEXPOINT": "template"}, {"SOURCE": source},
+            {"SOURCE": "invalid", "TEXPOINT": "template"}]
+    shapes = shape("Template", 1) + shape("Bare", 2) + shape("First", 3) + shape("Second", 3)
+    result = read_document(deck(tmp_path, [(shapes, tags)]))
+    assert [(f.equation.tex, f.equation.display) for f in result.found] == [("x+y", False), (source, True)]
+    for name in ("First", "Second"):
+        assert any(name in note and "contains no equation" in note for note in result.notes)
+
+
+def test_embedded_macro_expansion_uses_pandoc_sandbox(tmp_path, monkeypatch):
+    from mathshuttle import compat, pandoc_engine
+    calls = []
+    run = pandoc_engine._run
+
+    def counted(args, *rest, **kwargs):
+        calls.append(args)
+        return run(args, *rest, **kwargs)
+
+    monkeypatch.setattr(pandoc_engine, "_run", counted)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "local.tex").write_text(r"\newcommand{\FromDisk}{x}")
+    assert compat._expand(r"\twice{x}", [r"\newcommand{\twice}[1]{#1+#1}"]) == "x+x"
+    assert compat._expand(r"\FromDisk", [r"\input{local.tex}"]) == r"\FromDisk"
+    assert len(calls) == 2 and all("--sandbox" in args for args in calls)
 
 
 @pytest.mark.parametrize("template", ["ignored\tignored\tignored\tx+y\tignored", "old EQUATION x+y TeMpLaTe TP end"])

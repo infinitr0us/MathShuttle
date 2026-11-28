@@ -290,8 +290,11 @@ def _collect_math(node, out: List[Equation]) -> None:
             _collect_math(v, out)
 
 
-def _read_json(fmt: str, source: bytes) -> List[Equation]:
-    out, _ = _run(["-f", fmt, "-t", "json"], source)
+def _read_json(fmt: str, source: bytes, *, sandbox: bool = False) -> List[Equation]:
+    args = ["-f", fmt, "-t", "json"]
+    if sandbox:
+        args.append("--sandbox")
+    out, _ = _run(args, source)
     eqs: List[Equation] = []
     _collect_math(json.loads(out)["blocks"], eqs)
     return eqs
