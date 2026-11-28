@@ -44,8 +44,14 @@ note says what was done.
 
 `\eqref`, `\ref`, `\cref`, `\Cref` and `\autoref` show what LaTeX prints
 ("(2)", "eq. (2)", "Section 3", "Figure 1"), and citations their numbers from the `.aux` file, or
-author and year for natbib without its `numbers` option ("(Smith et al., 2020)"). An equation that
-cannot be converted stays LaTeX text, followed by the reason. The rest is pandoc's reading of the
+author and year for natbib without its `numbers` option ("(Smith et al., 2020)"). An equation Word
+cannot take as an equation (a `tikzcd` diagram, `\ce{...}` chemistry, `xy`) goes in as a picture drawn
+by your LaTeX installation (pdfLaTeX, with Ghostscript or Poppler, both part of MiKTeX and MacTeX), with
+the paper's drawing packages and its LaTeX as the picture's alt text; a display one is centred with its
+number at the right margin, and a note says how many went in this way. Such a picture cannot be edited
+as an equation in Word, but **Compare** still knows it: a comment on it, or its deletion, is reported.
+Without LaTeX, or with `--no-pictures` on the command line, the equation stays LaTeX text, followed
+by the reason. The rest is pandoc's reading of the
 paper: figures (found as LaTeX finds them, also in `\graphicspath` folders; Word takes no PDF or EPS
 figure, so one goes in only when a PNG or JPEG of the same name is beside it, and the others are
 named), tables and sections as pandoc converts them, and a command pandoc does not know is left out,
@@ -68,18 +74,28 @@ When a co-author edits the Word file of your paper (made with **Whole file as Wo
 `mathshuttle word paper.tex -o paper.docx`) and sends it back, MathShuttle tells you what happened to
 its equations. Open the paper with **Open file…**, click **Compare with a returned Word file...** and
 choose the file that came back (or run `mathshuttle compare returned.docx paper.tex`). The list shows each
-equation that was changed, deleted or added, and each one with a comment: its number, label and section,
-the LaTeX as it is now in Word, who made the tracked changes and the comments. Select one to see the
-paper's version next to Word's. **Copy LaTeX from Word** and **Use as input** take the new version.
+equation that was changed, deleted, added or moved (with Track Changes), and each one with a comment:
+its number, label and section, the LaTeX as it is now in Word, who made the tracked changes and the
+comments. Select one to see the paper's version next to Word's. **Copy LaTeX from Word** and **Use as
+input** take the new version. Two rows need a look of your own: *Could not be read* (an equation Word
+holds in a form MathShuttle cannot read) and *Unmatched* (a repeated equation, such as `x = 1` in several
+places, whose place in the paper cannot be told for sure); neither is written into the corrected copy.
+An equation that a macro of yours writes in the prose (`\newcommand{\eps}{\ensuremath{\varepsilon}}`)
+has no LaTeX of its own in the paper: a change to it is shown with a note to change the macro.
 
 **Write a corrected copy of the paper...** (`compare ... -o paper.revised.tex`) writes a copy of the
 paper, never the paper itself, with each changed equation replaced by the LaTeX from Word, in the same
-environment and with its `\label`s put back; your macros are written back where their exact text appears
-(`\mathbb{R}` becomes `\R` again when your paper defines `\R`). A deleted equation stays, with a comment
-line above it saying who deleted it, and an added one comes as a commented block after the equation
-before it, for you to place. A `.diff` file next to the copy shows every change; an equation in an
-`\input` file goes into a copy of that file. If the paper was edited since the export and an equation
-cannot be found any more, it is left as it is and named.
+environment, rows and `\label`s kept (rows that were reordered in Word keep their own labels); your
+macros are written back where the original equation used them (`\mathbb{R}` becomes `\R` again when the
+equation had `\R`). A deleted equation stays, with a comment line above it saying who deleted it; a
+moved one stays in place with a comment saying where it went; an added one comes as a commented block
+after the equation before it, for you to place. A `.diff` file next to the copy shows every change; an
+equation in an `\input` or `\include` file goes into a copy of that file in a folder next to the
+corrected paper (`paper.revised-inputs`), and the copy's `\input` lines point there. Nothing is
+overwritten: if that `.diff` or one of those copies already exists, MathShuttle stops and names it. If
+the paper was edited since the export and an equation cannot be found any more for sure, it is left as
+it is and named. A corrected copy written to another folder than the paper's needs the paper's own
+`.sty` files and figures there to compile; a note says so.
 
 How it knows: a Word export of a whole paper marks each equation with a hidden bookmark (Word shows it
 only with *Hidden bookmarks* ticked) and keeps, in the file, the LaTeX each one came from. Word keeps

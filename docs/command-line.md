@@ -36,13 +36,16 @@ mathshuttle --version
   Standard error lists the failed equations by number and location and reports the count.
   The exit code is 1 if any equation failed or 0 on success. Use `--docx OUT` to also write
   the equations to a Word document.
-* `--macros FILE` loads LaTeX definitions for `convert`, `copy` and `extract` and can be repeated.
+* `--macros FILE` loads LaTeX definitions for `convert`, `copy`, `extract`, `word` and `compare` and can
+  be repeated.
   `--wrapper` sets the delimiters or environment for LaTeX output. With `convert` or `paste`,
   `--no-tidy` keeps texmath's original LaTeX from MathML or OMML. `--expand-macros` (for `convert`
   and `extract` with LaTeX output) writes the macros out, see
   [Expand macros](latex-input.md#expand-macros-latex-for-a-place-without-your-macro-file).
 * `word FILE -o OUT.docx` (or `-e TEXT`, or standard input) writes a passage, or a whole `.tex` / `.md`
   document, as a Word file with native equations (see [Documents](documents.md#a-passage-or-a-whole-paper-as-a-word-file)).
+  An equation Word cannot take (tikz-cd, `\ce`) goes in as a picture LaTeX draws; `--no-pictures`
+  keeps it as LaTeX text with the reason.
 * `compare RETURNED.docx PAPER.tex` lists the equations a co-author changed, deleted, added or
   commented in the Word file of the paper (`--all` shows the unchanged ones too); `-o CORRECTED.tex`
   also writes a corrected copy of the paper and a `.diff` (see

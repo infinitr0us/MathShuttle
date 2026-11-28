@@ -7,10 +7,14 @@ their SHA-256 sums and what each release was tested with.
 
 ### New
 - Compare a Word file that came back from a co-author with the paper: the equations they changed,
-  deleted, added or commented, with their LaTeX, who changed them and the comments; a corrected copy of
-  the `.tex` (labels and environments kept, your macros written back) with a `.diff`. In the window of
-  *Open file...* on a `.tex`, or `mathshuttle compare returned.docx paper.tex -o paper.revised.tex`.
-  The Word export of a whole paper marks its equations for this (hidden bookmarks).
+  deleted, added, moved or commented, with their LaTeX, who changed them and the comments; a corrected
+  copy of the `.tex` (environments, rows and labels kept, your macros written back where the equation had
+  them) with a `.diff`, never overwriting a file. In the window of *Open file...* on a `.tex`, or
+  `mathshuttle compare returned.docx paper.tex -o paper.revised.tex`. The Word export of a whole paper
+  marks its equations for this (hidden bookmarks).
+- Word export: an equation Word cannot take (tikz-cd, `\ce`, xy-pic) goes in as a picture drawn by your
+  LaTeX, with its LaTeX as alt text, centred and numbered like the others; `--no-pictures` keeps the
+  LaTeX text with the reason, as before.
 - IguanaTeX and TeXPoint pictures on slides: *Open file...* and `extract` list their LaTeX, with each
   picture's own macros written out.
 
@@ -20,6 +24,7 @@ their SHA-256 sums and what each release was tested with.
 - Tracked changes inside equations of a `.docx` are read as Word shows them with all changes accepted.
 - Two copies made at the same moment (the window and a command, say) could leave one of them out of the
   memory that brings your LaTeX back from Office (Windows).
+- *Expand macros* runs pandoc in its sandbox, so a definition cannot make it read other files.
 
 ## 0.8.0 (2026-11-28)
 
