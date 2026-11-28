@@ -11,8 +11,9 @@ Move equations between LaTeX and Word / PowerPoint, both ways, offline.
   sent and nobody edited comes back as the LaTeX you wrote.
 * **Whole papers to Word, and back.** A `.tex` or Markdown file, or a pasted chat answer, becomes a Word
   document with native equations, numbered as LaTeX numbers them, with references and citations. When a
-  co-author sends it back edited, MathShuttle lists the equations they changed, deleted, added or
-  commented, and writes a corrected copy of your `.tex`.
+  co-author sends it back edited, MathShuttle lists the equations they changed, deleted, added, moved or
+  commented, and writes a corrected copy of your `.tex`. Diagrams Word cannot take (tikz-cd, chemistry)
+  go in as pictures drawn by your LaTeX.
 * **Every equation of a file.** List, filter and export the equations of a `.docx`, `.pptx`, `.tex` or
   `.md` file, including the LaTeX inside IguanaTeX and TeXPoint pictures on slides.
 * **Other people's LaTeX.** A paper's own definitions, commands of common packages (physics, braket,
@@ -40,7 +41,8 @@ Windows and macOS. Everything runs on your computer; nothing is sent anywhere.
 With Python 3.9 or later (with tkinter): `pipx install mathshuttle` (or, straight from GitHub,
 `pipx install git+https://github.com/infinitr0us/MathShuttle`) gives the commands `mathshuttle` (the
 window without arguments, the command line with them) and `mathshuttle-gui`. No other Python packages
-are needed. A LaTeX installation (MiKTeX, TeX Live, MacTeX) turns on the LaTeX preview.
+are needed. A LaTeX installation (MiKTeX, TeX Live, MacTeX) turns on the LaTeX preview and the pictures
+in the Word export.
 
 ## Use
 
