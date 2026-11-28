@@ -42,7 +42,16 @@ jobs:
         run: |
           sudo apt-get install -y xvfb
           xvfb-run -a python -m pytest tests -v -rs -o faulthandler_timeout=240
-      - name: Tests
-        if: runner.os != 'Linux'
+      - name: Tests (Windows)
+        if: runner.os == 'Windows'
         timeout-minutes: 15
         run: python -m pytest tests -v -rs -o faulthandler_timeout=240
+      # The pasteboard tests are left out on the macOS runner: reading the pasteboard there now and then
+      # blocks Tk's event loop for good (a paste-privacy prompt nobody answers, it seems). They run on a
+      # real Mac before each release, as do the Word and PowerPoint checks.
+      - name: Tests (macOS, without the pasteboard)
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        run: >
+          python -m pytest tests -v -rs -o faulthandler_timeout=240
+          -k "not copy_for_office and not shuttle_clipboard" --ignore tests/test_clipboard_macos.py

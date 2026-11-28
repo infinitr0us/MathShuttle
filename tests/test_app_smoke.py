@@ -605,8 +605,7 @@ def test_pandoc_missing_offers_a_download(app, monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "engine_description", lambda: find() and "pandoc (test)")
     monkeypatch.setattr(pandoc_fetch, "install", install)
     monkeypatch.setattr(pandoc_engine, "reset_pandoc", reset)
-    # the start-up check that follows the install would register the system-wide hotkey again, which a
-    # macOS runner's session does not survive (Tk's update() never returned): not part of this test
+    # (the start-up check that follows the install registers the system-wide hotkey: not part of this test)
     monkeypatch.setattr(app, "_toggle_hotkey", lambda: None)
     app._startup_check()
     assert app._banner is not None and "not installed" in app._banner_text.get()
