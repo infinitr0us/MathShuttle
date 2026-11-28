@@ -94,6 +94,44 @@ class _CommandParser(argparse.ArgumentParser):
         super().error(message + "\nsee mathshuttle --help")
 
 
+def _get_pandoc(force: bool) -> int:
+    from . import pandoc_engine, pandoc_fetch
+
+    if not force:
+        try:
+            path = pandoc_engine.find_pandoc()
+        except PandocNotFound:
+            pass
+        else:
+            print(f"Pandoc is already available at {path}")
+            return 0
+
+    last = ""
+
+    def progress(done, total):
+        nonlocal last
+        amount = f"{done * 100 // total}%" if total else f"{done / 1_000_000:.1f} MB"
+        if amount != last:
+            print(f"\rDownloading pandoc: {amount}", file=sys.stderr, end="", flush=True)
+            last = amount
+
+    try:
+        path = pandoc_fetch.install(progress=progress)
+    except (pandoc_fetch.FetchError, KeyboardInterrupt) as exc:
+        if last:
+            print(file=sys.stderr)
+        if isinstance(exc, KeyboardInterrupt):
+            print("Pandoc installation cancelled.", file=sys.stderr)
+            return 130
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if last:
+        print(file=sys.stderr)
+    pandoc_engine.reset_pandoc()
+    print(f"Installed pandoc {pandoc_fetch.PANDOC_VERSION} at {path}")
+    return 0
+
+
 def _cli(argv: list[str]) -> int:
     _utf8_stdio()
     parser = _CommandParser(
@@ -106,6 +144,7 @@ def _cli(argv: list[str]) -> int:
   mathshuttle copy -e 'x^2'
   mathshuttle paste --wrapper bare
   mathshuttle extract paper.tex -t typst
+  mathshuttle get-pandoc
   mathshuttle --version""",
     )
     version_help = "Show the MathShuttle, pandoc and texmath versions."
@@ -130,6 +169,8 @@ def _cli(argv: list[str]) -> int:
                     "and each equation a native Word equation. A .tex file gets its own definitions, and the "
                     "equation numbers of its .aux file at the right margin.")
     command("version", version_help)
+    get_cmd = command("get-pandoc", "Download and install pandoc for this user.")
+    get_cmd.add_argument("--force", action="store_true", help="download even if pandoc is already available")
 
     word_input = word_cmd.add_mutually_exclusive_group()
     word_input.add_argument("-e", "--expr", metavar="TEXT", help="use TEXT instead of a file or standard input")
@@ -183,6 +224,8 @@ def _cli(argv: list[str]) -> int:
             print(f"MathShuttle {__version__}")
             print(engine_report())
             return 0
+        if args.cmd == "get-pandoc":
+            return _get_pandoc(args.force)
         if args.cmd in ("convert", "copy", "extract", "word"):
             for path in args.macros:
                 if not os.path.isfile(path):

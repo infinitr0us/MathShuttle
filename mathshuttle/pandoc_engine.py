@@ -44,7 +44,9 @@ WRITE_FORMATS = ("latex", "mathml", "omml", "eqn", "typst")
 
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 _EXE = "pandoc.exe" if sys.platform == "win32" else "pandoc"
-INSTALL_HINT = "brew install pandoc" if sys.platform == "darwin" else "winget install JohnMacFarlane.Pandoc"
+INSTALL_HINT = {"darwin": "brew install pandoc", "win32": "winget install JohnMacFarlane.Pandoc"}.get(
+    sys.platform, "your system's package manager")
+_DOWNLOAD_HINT = "Click Download in the MathShuttle window or run mathshuttle get-pandoc."
 # An app started from the Finder or the Dock gets launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin), not
 # the shell's: Homebrew's bin (Apple silicon, Intel) is searched too, and is where pandoc's own
 # installer puts it (/usr/local/bin).
@@ -71,6 +73,13 @@ _pandoc_version: Optional[str] = None
 _texmath_version: Optional[str] = None
 _api_version: Optional[list] = None
 _mathml_flag: Optional[str] = None
+
+
+def reset_pandoc() -> None:
+    """Look up the executable, its versions and supported options again on next use."""
+    global _pandoc_path, _pandoc_version, _texmath_version, _api_version, _mathml_flag
+    _pandoc_path = _pandoc_version = _texmath_version = None
+    _api_version = _mathml_flag = None
 
 
 def _env_pandoc() -> "tuple[str, Optional[str]]":
@@ -101,6 +110,10 @@ def _candidate_paths():
     if sys.platform == "darwin":
         for d in _MACOS_DIRS:
             yield os.path.join(d, "pandoc")
+    from .pandoc_fetch import installed_pandoc
+    installed = installed_pandoc()
+    if installed:
+        yield installed
 
 
 def find_pandoc() -> str:
@@ -108,15 +121,16 @@ def find_pandoc() -> str:
     if _pandoc_path is None:
         name, env = _env_pandoc()
         if env and not os.path.isfile(env):  # a typo must not silently select some other pandoc
-            raise PandocNotFound("%s is set to %r, which is not an existing file." % (name, env))
+            raise PandocNotFound(f"{name} is set to {env!r}, which is not an existing file. "
+                                 f"Correct or unset {name}. {_DOWNLOAD_HINT}")
         for p in _candidate_paths():
             if p and os.path.isfile(p):
                 _pandoc_path = p
                 break
         else:
             raise PandocNotFound(
-                "%s was not found. Install it with  %s\n"
-                "(or set MATHSHUTTLE_PANDOC to the full path of %s)." % (_EXE, INSTALL_HINT, _EXE))
+                f"{_EXE} was not found. {_DOWNLOAD_HINT}\n"
+                f"You can also install it with {INSTALL_HINT} or set MATHSHUTTLE_PANDOC to the full path of {_EXE}.")
     return _pandoc_path
 
 
@@ -182,8 +196,12 @@ def engine_description() -> str:
 
 def engine_report() -> str:
     """`engine_description()` plus the executable in use (and the binary behind a shim)."""
+    from .pandoc_fetch import installed_pandoc
     command, binary = find_pandoc(), pandoc_binary()
     lines = [engine_description(), command if binary == command else "%s  ->  %s" % (command, binary)]
+    installed = installed_pandoc()
+    if installed and os.path.normcase(os.path.realpath(binary)) == os.path.normcase(os.path.realpath(installed)):
+        lines.append("Installed by MathShuttle.")
     if not texmath_version():
         lines.append("texmath version unknown: %s carries no texmath package id (a launcher?). "
                      "Set MATHSHUTTLE_PANDOC to the real %s to inspect it." % (os.path.basename(binary), _EXE))
