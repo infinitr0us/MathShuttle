@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mathshuttle"
 dynamic = ["version"]
-description = "Local LaTeX / MathML / OMML equation converter with Word and PowerPoint clipboard exchange (texmath via pandoc)"
+description = "Move equations between LaTeX and Word / PowerPoint, both ways, offline (texmath via pandoc)"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -24,6 +24,9 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/infinitr0us/MathShuttle"
+Documentation = "https://github.com/infinitr0us/MathShuttle#documentation"
+Changelog = "https://github.com/infinitr0us/MathShuttle/blob/main/CHANGELOG.md"
+Issues = "https://github.com/infinitr0us/MathShuttle/issues"
 
 [project.scripts]
 # without arguments the window, with them the command line (python -m mathshuttle)
@@ -35,6 +38,10 @@ mathshuttle-gui = "mathshuttle.app:main"
 
 [tool.setuptools]
 packages = ["mathshuttle"]
+
+[tool.setuptools.package-data]
+# the Sun Valley ttk theme (Tcl files, pictures, its MIT licence)
+mathshuttle = ["sv_theme/*.tcl", "sv_theme/LICENSE", "sv_theme/theme/*.tcl", "sv_theme/theme/*.png"]
 
 [tool.setuptools.dynamic]
 version = { attr = "mathshuttle.__version__" }

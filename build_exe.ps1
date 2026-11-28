@@ -28,6 +28,7 @@ Write-Host "Running PyInstaller..." -ForegroundColor Cyan
 & $py -m PyInstaller --noconfirm --clean --windowed --name MathShuttle `
     --icon assets\icon.ico --distpath dist --workpath build `
     --exclude-module numpy --exclude-module PIL --exclude-module pytest `
+    --add-data "mathshuttle\sv_theme;mathshuttle\sv_theme" `
     launcher.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 

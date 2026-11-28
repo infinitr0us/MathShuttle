@@ -54,6 +54,7 @@ echo "Running PyInstaller (MathShuttle $VERSION)..."
     --icon assets/icon.icns --osx-bundle-identifier io.github.infinitr0us.mathshuttle \
     --distpath dist --workpath build \
     --exclude-module numpy --exclude-module PIL --exclude-module pytest \
+    --add-data "mathshuttle/sv_theme:mathshuttle/sv_theme" \
     launcher.py
 
 APP=dist/MathShuttle.app

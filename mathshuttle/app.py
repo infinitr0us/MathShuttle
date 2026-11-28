@@ -16,7 +16,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from typing import Optional
 
-from . import __version__, clipboard, compat, hotkeys, latex_wrap, preview
+from . import __version__, clipboard, compat, hotkeys, latex_wrap, preview, theme
 from .convert import FORMAT_LABELS, MODES, Result, convert, input_equations, macro_notes, office_copy
 from .latex_wrap import WRAPPERS
 from .pandoc_engine import (INSTALL_HINT, READ_FORMATS, WRITE_FORMATS, ConversionError, Equation, PandocNotFound,
@@ -142,7 +142,7 @@ def _enable_dpi_awareness() -> None:
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("MathShuttle  -  LaTeX / MathML / OMML converter")
+        self.title("MathShuttle")
         self._seq = 0
         self._after_id: Optional[str] = None
         self._results: "queue.Queue[tuple]" = queue.Queue()
@@ -180,7 +180,16 @@ class App(tk.Tk):
             self.mono = tkfont.Font(family="Consolas", size=11)
             ui.configure(size=10)
         self.option_add("*Font", ui)
-        ttk.Style(self).configure("TButton", padding=(8, 3))
+        self.theme_mode = theme.apply(self, self.settings.get("theme"))
+        self.palette = theme.palette(self.theme_mode)
+        style = ttk.Style(self)
+        style.configure("TButton", padding=(10, 4))
+        style.configure("Accent.TButton", padding=(12, 4))
+        style.configure("Caption.TLabel", foreground=self.palette["muted"])
+        style.configure("Status.TLabel", padding=(10, 3))
+        style.configure("Engine.TLabel", padding=(10, 3), foreground=self.palette["muted"])
+        if self.theme_mode == "dark":
+            theme.dark_title_bar(self, True)
 
     def _build(self) -> None:
         pad = {"padx": 4, "pady": 3}
@@ -190,6 +199,7 @@ class App(tk.Tk):
         self.wrapper_var = tk.StringVar(value="auto")
         self.annotate_var = tk.BooleanVar(value=False)
         self.tidy_var = tk.BooleanVar(value=True)
+        self.expand_var = tk.BooleanVar(value=False)
         self.auto_var = tk.BooleanVar(value=True)
         self.hotkey_var = tk.BooleanVar(value=True)
         self.preview_var = tk.BooleanVar(value=True)
@@ -199,93 +209,106 @@ class App(tk.Tk):
         self.macro_files: list = []  # macro files and extra definitions for LaTeX input (Macros...)
         self.macro_text = ""
 
-        # --- option rows (fixed height) ---
-        top = ttk.Frame(self)
-        top.pack(fill="x", padx=6, pady=(6, 0))
-        top.columnconfigure(4, weight=1)
+        # --- formats and options (fixed height) ---
+        top = ttk.Frame(self, padding=(10, 8, 10, 0))
+        top.pack(fill="x")
+        self._top = top
+        formats = ttk.Frame(top)
+        formats.pack(fill="x")
+        ttk.Label(formats, text="From").pack(side="left")
+        self.src_box = self._combo(formats, [(k, FORMAT_LABELS[k]) for k in READ_FORMATS], self.src_var, 18)
+        self.src_box.pack(side="left", padx=(8, 6))
+        ttk.Button(formats, text="⇄", width=3, command=self.swap).pack(side="left")
+        ttk.Label(formats, text="To").pack(side="left", padx=(10, 0))
+        self.dst_box = self._combo(formats, [(k, FORMAT_LABELS[k]) for k in WRITE_FORMATS], self.dst_var, 18)
+        self.dst_box.pack(side="left", padx=(8, 20))
+        ttk.Label(formats, text="Mode").pack(side="left")
+        self.mode_box = self._combo(formats, MODES, self.mode_var, 9)
+        self.mode_box.pack(side="left", padx=(8, 0))
+        ttk.Button(formats, text="?", width=3, command=self.show_help).pack(side="right")
+        self.macros_button = ttk.Button(formats, text="Macros...", command=self.edit_macros)
+        self.macros_button.pack(side="right", padx=(0, 8))
 
-        ttk.Label(top, text="From:").grid(row=0, column=0, sticky="w", **pad)
-        self.src_box = self._combo(top, [(k, FORMAT_LABELS[k]) for k in READ_FORMATS], self.src_var, 18)
-        self.src_box.grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(top, text="Mode:").grid(row=0, column=2, sticky="w", **pad)
-        self.mode_box = self._combo(top, MODES, self.mode_var, 9)
-        self.mode_box.grid(row=0, column=3, sticky="w", **pad)
-        inputs = ttk.Frame(top)  # what applies to the input: LaTeX macros, tidying of Office's LaTeX
-        inputs.grid(row=0, column=4, sticky="w")
-        self.macros_button = ttk.Button(inputs, text="Macros...", command=self.edit_macros)
-        self.macros_button.pack(side="left", padx=(12, 4))
-        self.tidy_chk = ttk.Checkbutton(inputs, text="Tidy LaTeX from Office", variable=self.tidy_var,
+        # what the conversion does: the LaTeX wrapper and the options of one direction or format
+        conversion = ttk.Frame(top)
+        conversion.pack(fill="x", pady=(8, 0))
+        ttk.Label(conversion, text="LaTeX wrapper").pack(side="left")
+        self.wrapper_box = self._combo(conversion, WRAPPERS, self.wrapper_var, 34)
+        self.wrapper_box.pack(side="left", padx=(8, 14))
+        self.expand_chk = ttk.Checkbutton(conversion, text="Expand macros", variable=self.expand_var,
+                                          command=self._schedule)
+        self.expand_chk.pack(side="left", padx=(0, 10))
+        self.tidy_chk = ttk.Checkbutton(conversion, text="Tidy LaTeX from Office", variable=self.tidy_var,
                                         command=self._schedule)
-        self.tidy_chk.pack(side="left", padx=(12, 4))
-        ttk.Button(top, text="\u21c4 Swap", command=self.swap, width=8).grid(row=0, column=5, rowspan=2, padx=8)
-        ttk.Button(top, text="?", width=3, command=self.show_help).grid(row=0, column=6, rowspan=2, padx=(8, 0))
-
-        ttk.Label(top, text="To:").grid(row=1, column=0, sticky="w", **pad)
-        self.dst_box = self._combo(top, [(k, FORMAT_LABELS[k]) for k in WRITE_FORMATS], self.dst_var, 18)
-        self.dst_box.grid(row=1, column=1, sticky="w", **pad)
-        ttk.Label(top, text="LaTeX wrapper:").grid(row=1, column=2, sticky="w", **pad)
-        opts = ttk.Frame(top)
-        opts.grid(row=1, column=3, columnspan=2, sticky="w")
-        self.wrapper_box = self._combo(opts, WRAPPERS, self.wrapper_var, 32)
-        self.wrapper_box.pack(side="left", **pad)
-        self.annotate_chk = ttk.Checkbutton(opts, text="TeX annotation", variable=self.annotate_var,
+        self.tidy_chk.pack(side="left", padx=(0, 10))
+        self.annotate_chk = ttk.Checkbutton(conversion, text="TeX annotation", variable=self.annotate_var,
                                             command=self._schedule)
-        self.annotate_chk.pack(side="left", padx=(12, 4))
+        self.annotate_chk.pack(side="left")
 
-        # third row: how the app works (the button bar below keeps only actions, so that it fits)
-        ttk.Label(top, text="Options:").grid(row=2, column=0, sticky="w", **pad)
+        # how the app works (the button bar below keeps only actions, so that it fits)
         switches = ttk.Frame(top)
-        switches.grid(row=2, column=1, columnspan=5, sticky="w")
-        ttk.Checkbutton(switches, text="Auto-convert", variable=self.auto_var, command=self._schedule).pack(side="left", **pad)
+        switches.pack(fill="x", pady=(2, 0))
+        ttk.Checkbutton(switches, text="Auto-convert", variable=self.auto_var, command=self._schedule).pack(side="left")
         self.preview_chk = ttk.Checkbutton(switches, text="LaTeX preview", variable=self.preview_var,
                                            command=self._toggle_preview, state="disabled")
-        self.preview_chk.pack(side="left", padx=(14, 4))
+        self.preview_chk.pack(side="left", padx=(10, 0))
         self.hotkey_chk = ttk.Checkbutton(switches, variable=self.hotkey_var, command=self._toggle_hotkey)
-        self.hotkey_chk.pack(side="left", padx=(14, 4))
+        self.hotkey_chk.pack(side="left", padx=(10, 0))
 
         # --- status bar and button bar are packed before the panes so they always stay visible ---
         # Two panes: conversion progress / messages on the left, the engine version (pandoc +
         # texmath) permanently on the right, so the messages never hide it.
         bar = ttk.Frame(self)
         bar.pack(fill="x", side="bottom")
+        ttk.Separator(bar).pack(fill="x", side="top")
         self.engine_var = tk.StringVar(value="")
-        ttk.Label(bar, textvariable=self.engine_var, relief="sunken", padding=(6, 2)).pack(side="right")
+        ttk.Label(bar, textvariable=self.engine_var, style="Engine.TLabel").pack(side="right")
         self.status_var = tk.StringVar(value="")
-        self.status_label = ttk.Label(bar, textvariable=self.status_var, anchor="w", relief="sunken", padding=(6, 2))
+        self.status_label = ttk.Label(bar, textvariable=self.status_var, anchor="w", style="Status.TLabel")
         self.status_label.pack(side="left", fill="x", expand=True)
 
-        bottom = ttk.Frame(self)
-        bottom.pack(fill="x", side="bottom", padx=6, pady=(0, 4))
+        bottom = ttk.Frame(self, padding=(10, 4, 10, 8))
+        bottom.pack(fill="x", side="bottom")
         self._bottom_bar = bottom
-        ttk.Button(bottom, text="Convert", command=self.convert_now).pack(side="left", **pad)
-        ttk.Button(bottom, text="Clear", command=self.clear).pack(side="left", padx=(10, 4))
-        ttk.Button(bottom, text="Open file...", command=self.open_document).pack(side="left", padx=(10, 4))
-        ttk.Button(bottom, text="Save as Word...", command=self.save_as_word).pack(side="left", padx=4)
+        ttk.Button(bottom, text="Open file...", command=self.open_document).pack(side="left")
+        ttk.Button(bottom, text="Save as Word...", command=self.save_as_word).pack(side="left", padx=(6, 0))
+        ttk.Button(bottom, text="Clear", command=self.clear).pack(side="left", padx=(6, 0))
 
         # --- the LaTeX preview (above the buttons; shown when a LaTeX installation is found) ---
-        self.preview_frame = tk.Frame(self, bg="white", height=10, highlightthickness=1, highlightbackground="#c8c8c8")
-        self.preview_label = tk.Label(self.preview_frame, bg="white", anchor="w", justify="left", padx=8, pady=6)
+        paper = self.palette["preview"]
+        self.preview_frame = tk.Frame(self, bg=paper, height=10, highlightthickness=1,
+                                      highlightbackground=self.palette["border"])
+        self.preview_label = tk.Label(self.preview_frame, bg=paper, anchor="w", justify="left", padx=10, pady=6)
         self.preview_label.pack(fill="x")
         self._preview_image = None  # keeps the PhotoImage alive
         self._preview_seq = 0
         self._last_result: Optional[tuple] = None  # (Result, conversion args) of the output on show
-        ttk.Button(bottom, text="Paste from Word/PowerPoint", command=self.paste_from_office).pack(side="right", **pad)
-        self.copy_button = ttk.Button(bottom, text="Copy for Word/PowerPoint", command=self.copy_for_office)
-        self.copy_button.pack(side="right", **pad)
-        ttk.Button(bottom, text="Copy output", command=self.copy_output).pack(side="right", **pad)
+        ttk.Button(bottom, text="Paste from Word/PowerPoint", command=self.paste_from_office,
+                   style=self._accent()).pack(side="right")
+        self.copy_button = ttk.Button(bottom, text="Copy for Word/PowerPoint", command=self.copy_for_office,
+                                      style=self._accent())
+        self.copy_button.pack(side="right", padx=(0, 6))
+        ttk.Button(bottom, text="Copy output", command=self.copy_output).pack(side="right", padx=(0, 6))
+        ttk.Button(bottom, text="Convert", command=self.convert_now).pack(side="right", padx=(0, 6))
 
         # --- input / output panes (take the remaining space) ---
         paned = ttk.PanedWindow(self, orient="horizontal")
-        paned.pack(fill="both", expand=True, padx=6, pady=6)
-        self.input = self._text(paned)
-        self.output = self._text(paned)
+        paned.pack(fill="both", expand=True, padx=10, pady=(8, 6))
+        self.input_caption = tk.StringVar(value="Input")
+        self.output_caption = tk.StringVar(value="Output")
+        self.input = self._text(paned, self.input_caption)
+        self.output = self._text(paned, self.output_caption)
         paned.add(self.input.master, weight=1)
         paned.add(self.output.master, weight=1)
-        self.output.tag_configure("error", foreground="#b00020")
+        self.output.tag_configure("error", foreground=self.palette["error"])
 
         for var in (self.src_var, self.dst_var, self.mode_var, self.wrapper_var):
             var.trace_add("write", lambda *_: self._on_option_change())
         self.input.bind("<<Modified>>", self._on_input_modified)
+
+    def _accent(self) -> str:
+        """The style of the main actions: the theme's accent button (Tk's own look has none)."""
+        return "Accent.TButton" if self.theme_mode in ("light", "dark") else "TButton"
 
     def _combo(self, parent, items, var, width):
         keys = [k for k, _ in items]
@@ -302,9 +325,12 @@ class App(tk.Tk):
         sync_from_var()
         return box
 
-    def _text(self, parent) -> tk.Text:
-        frame = ttk.Frame(parent)
-        text = tk.Text(frame, wrap="word", undo=True, font=self.mono, padx=6, pady=6, width=40, height=8)
+    def _text(self, parent, caption: Optional[tk.StringVar] = None) -> tk.Text:
+        frame = ttk.Frame(parent, padding=(0, 0, 4, 0))
+        if caption is not None:
+            ttk.Label(frame, textvariable=caption, style="Caption.TLabel").pack(side="top", anchor="w", pady=(0, 4))
+        text = tk.Text(frame, wrap="word", undo=True, font=self.mono, padx=8, pady=8, width=40, height=8)
+        theme.style_text(text, self.theme_mode)
         scroll = ttk.Scrollbar(frame, command=text.yview)
         text.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -439,9 +465,13 @@ class App(tk.Tk):
         self._schedule()
 
     def _update_option_states(self) -> None:
-        self.wrapper_box.configure(state="readonly" if self.dst_var.get() == "latex" else "disabled")
-        self.annotate_chk.configure(state="normal" if self.dst_var.get() == "mathml" else "disabled")
-        self.tidy_chk.configure(state="normal" if self.src_var.get() != "latex" else "disabled")
+        src, dst = self.src_var.get(), self.dst_var.get()
+        self.wrapper_box.configure(state="readonly" if dst == "latex" else "disabled")
+        self.annotate_chk.configure(state="normal" if dst == "mathml" else "disabled")
+        self.tidy_chk.configure(state="normal" if src != "latex" else "disabled")
+        self.expand_chk.configure(state="normal" if src == dst == "latex" else "disabled")
+        self.input_caption.set("Input: %s" % FORMAT_LABELS.get(src, src))
+        self.output_caption.set("Output: %s" % FORMAT_LABELS.get(dst, dst))
 
     def _macro_key(self) -> tuple:
         """The macro files (with their modification times: an edited file gives another result), the text."""
@@ -719,7 +749,7 @@ class App(tk.Tk):
         if self._latex_found and self.preview_var.get():
             if not self.preview_frame.winfo_ismapped():
                 # packed after the button bar (both at the bottom): it sits above the buttons
-                self.preview_frame.pack(fill="x", side="bottom", padx=6, pady=(0, 2), after=self._bottom_bar)
+                self.preview_frame.pack(fill="x", side="bottom", padx=10, pady=(0, 2), after=self._bottom_bar)
             if self._last_result is not None and self._shown_args == self._last_result[1]:
                 self._start_preview(*self._last_result)  # the result on show (not converted again: it may be edited)
         else:
@@ -940,13 +970,12 @@ class App(tk.Tk):
 
     def edit_macros(self) -> None:
         """Macro files and extra definitions applied to every LaTeX input."""
-        win = tk.Toplevel(self)
-        win.title("MathShuttle - macros")
-        win.transient(self)
-        pad = {"padx": 8, "pady": 4}
+        win = self._dialog("MathShuttle macros")
+        pad = {"padx": 10, "pady": 4}
         ttk.Label(win, text="Macro files (definitions are read from them; everything else is ignored):").pack(anchor="w", **pad)
         files = list(self.macro_files)
         listbox = tk.Listbox(win, height=5, width=90, font=self.mono)
+        theme.style_text(listbox, self.theme_mode)
         listbox.pack(fill="x", **pad)
         for f in files:
             listbox.insert("end", f)
@@ -971,7 +1000,8 @@ class App(tk.Tk):
         ttk.Button(row, text="Add files...", command=add).pack(side="left")
         ttk.Button(row, text="Remove", command=remove).pack(side="left", padx=6)
         ttk.Label(win, text="More definitions (\\newcommand, \\def, \\let, \\DeclareMathOperator, \\DeclarePairedDelimiter):").pack(anchor="w", **pad)
-        text = tk.Text(win, height=8, width=90, font=self.mono, undo=True)
+        text = tk.Text(win, height=8, width=90, font=self.mono, undo=True, padx=6, pady=6)
+        theme.style_text(text, self.theme_mode)
         text.insert("1.0", self.macro_text)
         text.pack(fill="both", expand=True, **pad)
         info = tk.StringVar()
@@ -1007,14 +1037,33 @@ class App(tk.Tk):
             engine = engine_report()
         except (PandocNotFound, ConversionError) as e:
             engine = str(e)
-        win = tk.Toplevel(self)
-        win.title("MathShuttle - help")
-        txt = tk.Text(win, wrap="word", font=self.mono, padx=10, pady=10, width=92, height=32)
+        win = self._dialog("MathShuttle help")
+        buttons = ttk.Frame(win, padding=(10, 6, 10, 10))
+        buttons.pack(fill="x", side="bottom")
+        txt = tk.Text(win, wrap="word", font=self.mono, padx=12, pady=10, width=92, height=32)
+        theme.style_text(txt, self.theme_mode)
         txt.insert("1.0", HELP + "\nENGINE\n" + "".join("  %s\n" % line for line in engine.splitlines()))
         txt.configure(state="disabled")
-        txt.pack(fill="both", expand=True)
-        ttk.Button(win, text="Close", command=win.destroy).pack(pady=6)
+        txt.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+
+        def copy_details():
+            self.clipboard_clear()
+            self.clipboard_append(bug_report_details(self))
+            done.set("Copied: paste it into the issue on GitHub.")
+
+        done = tk.StringVar(win)
+        ttk.Button(buttons, text="Close", command=win.destroy).pack(side="right")
+        ttk.Button(buttons, text="Copy details for a bug report", command=copy_details).pack(side="left")
+        ttk.Label(buttons, textvariable=done, style="Caption.TLabel").pack(side="left", padx=10)
+
+    def _dialog(self, title: str) -> tk.Toplevel:
+        """A window of the app's own (help, macros): in front of the main window, in its colours."""
+        win = tk.Toplevel(self)
+        win.title(title)
         win.transient(self)
+        if self.theme_mode == "dark":
+            theme.dark_title_bar(win, True)
+        return win
 
     # ---- helpers --------------------------------------------------------------------------------
     def _set_output(self, text: str, error: bool = False) -> None:
@@ -1024,7 +1073,34 @@ class App(tk.Tk):
 
     def _set_status(self, text: str, error: bool = False) -> None:
         self.status_var.set(text)
-        self.status_label.configure(foreground="#b00020" if error else "")
+        self.status_label.configure(foreground=self.palette["error"] if error else "")
+
+
+def bug_report_details(app: Optional["App"] = None) -> str:
+    """What an issue on GitHub needs to know: versions of MathShuttle, the system, Python, Tk and the
+    engine. Paths under the home folder are written from ~, so the user name stays out of a public issue."""
+    import platform
+    lines = ["MathShuttle %s (%s)" % (__version__, "app" if getattr(sys, "frozen", False) else "Python source")]
+    if MAC:
+        lines.append("macOS %s (%s)" % (platform.mac_ver()[0], platform.machine()))
+    else:
+        lines.append("%s (%s)" % (platform.platform(), platform.machine()))
+    tk_version = app.tk.call("info", "patchlevel") if app is not None else tk.TkVersion
+    lines.append("Python %s, Tk %s%s" % (platform.python_version(), tk_version,
+                                        ", %s look" % app.theme_mode if app is not None else ""))
+    try:
+        lines += engine_report().splitlines()
+    except (PandocNotFound, ConversionError) as e:
+        lines.append("pandoc: %s" % str(e).splitlines()[0])
+    if app is not None:
+        lines.append("LaTeX preview: %s" % {True: "on", False: "no LaTeX installation found",
+                                            None: "not checked"}[app._latex_found])
+    lines.append("Word / PowerPoint version: (please add: File > Account > About)")
+    home = os.path.expanduser("~")
+    text = "\n".join(lines)
+    if len(home) > 3:  # not a bare drive or "/"
+        text = text.replace(home, "~")
+    return text + "\n"
 
 
 class Toast(tk.Toplevel):
@@ -1068,6 +1144,8 @@ class EquationList(tk.Toplevel):
         self.app, self.doc = app, doc
         self.title("Equations in %s" % os.path.basename(doc.path))
         self.transient(app)
+        if app.theme_mode == "dark":
+            theme.dark_title_bar(self, True)
         pad = {"padx": 6, "pady": 4}
         self.info = tk.StringVar(self)
         ttk.Label(self, textvariable=self.info, wraplength=900, justify="left").pack(anchor="w", **pad)

@@ -103,11 +103,14 @@ def notices(target: str) -> str:
         where_tcl = "the Tcl / Tk libraries and scripts in MathShuttle.app"
         launcher = "MathShuttle.app's launcher"
     parts = ["MathShuttle includes the following third-party software in this build.\n"
-             "pandoc is NOT included: install it separately (%s); it is GPL-2.0-or-later.\n" % install]
+             "pandoc is NOT included: the window offers to download pandoc's own release, or install it "
+             "yourself (%s); it is GPL-2.0-or-later.\n" % install]
     for title, path in (
             ("Python %s (%s)" % (platform.python_version(), where_python), python),
             ("Tcl %s (%s)" % (tcl_version, where_tcl), tcl),
             ("Tk %s (%s)" % (tcl_version, where_tcl), tk),
+            ("Sun Valley ttk theme 2.6.1 by rdbende (mathshuttle/sv_theme: the look of the window on Windows "
+             "and Linux)", os.path.join(ROOT, "mathshuttle", "sv_theme", "LICENSE")),
             ("PyInstaller %s bootloader (%s): GPL 2.0 with the PyInstaller exception, which allows "
              "distributing it with programs under any licence" % (pyinstaller_version, launcher), pyinstaller)):
         with open(path, encoding="utf-8", errors="replace") as f:
