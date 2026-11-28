@@ -154,10 +154,14 @@ PowerPoint unedited (pasted, then copied again) comes back as the LaTeX you wrot
 so. This works in the window, with the hotkey and with `mathshuttle paste`. Each *Copy for
 Word/PowerPoint* notes what the equation shows and the LaTeX it came from in `copied.json`, next to
 `settings.json` (the newest 300 equations, on your computer only). What Word itself changes does
-not count as an edit (bold made bold italic, brackets made a stretchy pair, spaces); a changed symbol,
-script or font does, and then the equation is converted from Office's MathML as usual. Set the
-environment variable `MATHSHUTTLE_RECALL_PATH` to another file to keep the notes there, or to an
-empty value to turn this off.
+not count as an edit (bold made bold italic, ℓ made 𝓁, accents written with other characters,
+brackets made a stretchy pair, spaces: checked on 99 equations pasted into Word 16.0.20527 and copied
+back); a changed symbol, accent, script, matrix shape or font does, and then the equation is converted
+from Office's MathML as usual. So does an equation you copied twice with different `\label`s, since
+which one came back is not known. Recall needs the equation itself selected in Word (a sentence
+around it comes back through Word's HTML, converted as usual), and it is off with *Tidy LaTeX* off.
+Set the environment variable `MATHSHUTTLE_RECALL_PATH` to another file to keep the notes there, or to
+an empty value to turn this off.
 
 **LaTeX preview.** With a LaTeX installation on `PATH` (MiKTeX or TeX Live: `latex` and `dvipng`),
 a strip above the buttons shows the equation as LaTeX sets it: what you typed when converting from
@@ -204,12 +208,20 @@ Markdown notes or a piece of LaTeX, as a Word document: its prose, headings, lis
 they are, and each equation a native Word equation, made as *Copy for Word/PowerPoint* makes it (your
 macros, the built-in packs). On the command line, `mathshuttle word FILE -o OUT.docx` does the same for a
 passage. For a whole `.tex` or `.md` file, **Whole file as Word...** in the window of **Open file...** (or
-`mathshuttle word paper.tex -o paper.docx`) writes the document: with the paper's own definitions,
-and with the `.aux` file LaTeX wrote next to it, each numbered equation's number at the right margin as
-Word numbers equations itself (`\tag{..}` too), and `\eqref`, `\ref` and numeric `\cite` showing their
-numbers. An equation that cannot be converted stays LaTeX text, followed by the reason. The rest is
-pandoc's reading of the paper: figures, tables and sections as pandoc converts them, and a command
-pandoc does not know is left out, as in pandoc's own conversions.
+`mathshuttle word paper.tex -o paper.docx`) writes the document: its title, authors and abstract,
+with the paper's own definitions, and each numbered equation's number at the right margin as Word
+numbers equations itself. The numbers are the ones LaTeX gives: counted as LaTeX counts them
+(`equation` and `multline` one number, `align`, `gather`, `eqnarray`, `flalign` and `alignat` one per
+row, `\nonumber`, `\notag`, `\tag` and starred environments as LaTeX has them) when the paper numbers
+equations (1), (2)... in order, and checked against the `.aux` file LaTeX wrote next to it when there
+is one. A paper that numbers equations by chapter or section (a thesis, `\numberwithin`) or sets the
+counter itself gets the `.aux` numbers of its labelled equations (so compile it once first), and a
+note says what was done. `\eqref`, `\ref`, `\cref`, `\Cref` and `\autoref` show what LaTeX prints
+("(2)", "eq. (2)", "Section 3", "Figure 1"), and citations their numbers from the `.aux` file, or
+author and year for natbib without its `numbers` option ("(Smith et al., 2020)"). An equation that
+cannot be converted stays LaTeX text, followed by the reason. The rest is pandoc's reading of the
+paper: figures (found next to the paper), tables and sections as pandoc converts them, and a command
+pandoc does not know is left out, as in pandoc's own conversions (`\pageref` and `\nameref` among them).
 
 MathML input may also come from elsewhere: prefixed elements (`<mml:math>`, as written by
 Word's XSLT, MathType or JATS journal XML), named entities (`&InvisibleTimes;`, from
@@ -425,7 +437,13 @@ Word pastes from the plain-text clipboard format, not from the registered `MathM
 Microsoft documents as taking priority: with the text `x` next to the MathML it inserts the text x,
 and with LaTeX there it runs its own LaTeX import. So *Copy for Word/PowerPoint* puts the MathML
 in the plain-text format too. Equation arrays need `columnspacing="0em"` (how Word exports them),
-otherwise a table pastes as a centred matrix.
+otherwise a table pastes as a centred matrix. Every `<mspace>` becomes one ordinary space, while
+Unicode spaces are kept; a comma or semicolon between brackets becomes the separator of a bracket
+group (nested groups come out wrong) unless it says `separator="false"`. What Word copies back for an
+equation it was given, without any edit (`tests/fixtures/recall`): bold letters bold italic,
+sans-serif letters sans-serif italic, `ℓ` as `𝓁`, `ϕ` as `φ`, `*` as `∗`, a combining hat as `^`, an
+overline as `-`, brackets as a stretchy pair with a script on a closing bracket moved to the whole
+group, `1.5` as three tokens, `\qquad` as two em spaces.
 
 ## Layout
 
