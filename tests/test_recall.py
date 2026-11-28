@@ -167,3 +167,33 @@ def test_two_processes_lose_nothing(store):
     entries = json.load(open(str(store), encoding="utf-8"))
     assert len(entries) == 60
     assert recall.recall(office_copy("x_{c7}", "latex").mathml) == ("x_{c7}", True)
+
+
+_MATHML = '<math xmlns="http://www.w3.org/1998/Math/MathML"><msub><mi>x</mi><mn>1</mn></msub></math>'
+
+
+def test_a_lock_still_being_deleted_is_waited_for(store, monkeypatch):
+    # Windows refuses to create a file of the same name while the last holder's lock is being deleted
+    real_open, calls = os.open, []
+
+    def denied_once(path, flags, *rest):
+        if str(path).endswith(".lock") and not calls:
+            calls.append(path)
+            raise PermissionError(13, "Access is denied", path)
+        return real_open(path, flags, *rest)
+
+    monkeypatch.setattr(recall.os, "open", denied_once)
+    recall.remember(_MATHML, "x_1", True)
+    assert calls and recall.recall(_MATHML) == ("x_1", True)
+
+
+def test_a_folder_that_is_always_denied_gives_up_soon(store, monkeypatch):
+    import time
+
+    def denied(path, flags, *rest):
+        raise PermissionError(13, "Access is denied", path)
+
+    monkeypatch.setattr(recall.os, "open", denied)
+    start = time.time()
+    recall.remember(_MATHML, "x_1", True)
+    assert time.time() - start < 1.5 and not store.exists()

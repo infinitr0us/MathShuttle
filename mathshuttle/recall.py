@@ -231,6 +231,7 @@ def _locked(path: str) -> Iterator[bool]:
     whether it got the lock within about 2 s (a lock left by a crashed process is taken after 10 s)."""
     lock = path + ".lock"
     got = False
+    denied = 0
     for _ in range(100):
         try:
             os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
@@ -243,6 +244,13 @@ def _locked(path: str) -> Iterator[bool]:
                     continue
             except OSError:
                 pass
+            time.sleep(0.02)
+        except PermissionError:
+            # Windows: the last holder's lock is still being deleted (or a scanner has it open for a
+            # moment). A folder that cannot be written at all gives up after about half a second.
+            denied += 1
+            if denied > 25:
+                break
             time.sleep(0.02)
         except OSError:
             break
