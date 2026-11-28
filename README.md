@@ -2,6 +2,8 @@
 
 Move equations between LaTeX and Word / PowerPoint, both ways, offline.
 
+![The MathShuttle window: LaTeX in, Office Math out, with the LaTeX preview below](https://raw.githubusercontent.com/infinitr0us/MathShuttle/main/docs/images/window.png)
+
 * **LaTeX to Word and PowerPoint.** Copy LaTeX, with your paper's macros, and paste it into Word or
   PowerPoint as a native, editable equation. Aligned blocks arrive lined up at the `=` signs.
 * **Word and PowerPoint to LaTeX.** Copy an equation in Office and get LaTeX you can put in a paper

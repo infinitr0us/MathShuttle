@@ -3,15 +3,25 @@
 What changed in each release of MathShuttle. The release pages on GitHub have the download files,
 their SHA-256 sums and what each release was tested with.
 
-## Unreleased
+## 0.8.0 (2026-11-28)
 
 ### New
-- The window offers to download pandoc when it is not installed (pandoc's own release, checked against
-  its SHA-256), and so does `mathshuttle get-pandoc` on the command line.
+- No terminal needed for pandoc: when it is not installed, the window offers to download it (pandoc's own
+  release from GitHub, its size and SHA-256 checked, installed for you only), and so does
+  `mathshuttle get-pandoc` on the command line.
+- A Windows 11 look, light or dark as the system is set (the Sun Valley theme), with a calmer layout;
+  the Mac keeps its own look.
 - *Expand macros*: LaTeX output with your macros, the input's and the document's definitions and the
-  built-in packs written out, for places that do not have your macro file (`--expand-macros`).
-- A shorter README, with the reference in `docs/`; this changelog; issue templates.
-- Tests run on GitHub Actions on Windows, macOS and Linux.
+  built-in packs written out, for a place without your macro file: a web page, a chat, a submission form
+  (`--expand-macros` for `convert` and `extract`).
+- Help > *Copy details for a bug report*, issue templates, a shorter README with the reference in
+  `docs/`, and this changelog.
+- `pipx install mathshuttle` (on PyPI from this release on).
+- Tests run on GitHub Actions on Windows, macOS and Linux for every change.
+
+### Fixed
+- In `.md` files, `\DeclarePairedDelimiter` definitions now apply to the equations.
+- A macro named by one character (`\newcommand{\1}{\mathbf 1}`) is now read from macro files.
 
 ## 0.7.0 (2026-11-28)
 
