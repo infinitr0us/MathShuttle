@@ -197,6 +197,10 @@ def _cli(argv: list[str]) -> int:
     for p in (convert_cmd, copy_cmd, extract_cmd):
         p.add_argument("--macros", action="append", default=[], metavar="FILE",
                        help="load LaTeX macro definitions from FILE (repeatable)")
+    for p in (convert_cmd, extract_cmd):
+        p.add_argument("--expand-macros", action="store_true",
+                       help="write LaTeX with the macros of --macros, the input and the document written out "
+                            "(only for LaTeX input and -t latex)")
     for p in (convert_cmd, paste_cmd):
         p.add_argument("--no-tidy", dest="tidy", action="store_false",
                        help="keep texmath's original LaTeX when reading MathML or OMML")
@@ -241,7 +245,7 @@ def _cli(argv: list[str]) -> int:
         elif args.cmd == "convert":
             source = _read_source(args.file, args.expr, args.cmd)
             result = convert(source, args.src, args.dst, args.mode, args.wrapper, args.annotate,
-                             macros=load_macros(args.macros), tidy=args.tidy)
+                             macros=load_macros(args.macros), tidy=args.tidy, expand_macros=args.expand_macros)
             sys.stdout.write(result.text + "\n")
             for note in result.notes:
                 sys.stderr.write(note + "\n")
@@ -271,18 +275,25 @@ def _cli(argv: list[str]) -> int:
             for note in result.notes:  # e.g. several equations in the copied text
                 sys.stderr.write(note + "\n")
         elif args.cmd == "extract":
-            doc = read_document(args.file)
+            expand = args.expand_macros and args.dst == "latex"
+            doc = read_document(args.file, expand_macros=expand)
             macros = load_macros(args.macros)
             notes = list(doc.notes) + macro_notes(macros)
             rows = doc.rows(args.display, args.unique, args.match)
             if args.docx:  # first, and said at once: an equation that -t cannot write below does not stop it
                 from .documents import write_docx
-                written = write_docx(doc, args.docx, macros, rows)  # (as listed: their places, LaTeX numbers)
+                word_doc = read_document(args.file) if expand and doc.source == "latex" else doc
+                word_rows = word_doc.rows(args.display, args.unique, args.match) if word_doc is not doc else rows
+                written = write_docx(word_doc, args.docx, macros, word_rows)
                 sys.stderr.write("".join(n + "\n" for n in written) + "written to %s\n" % args.docx)
                 sys.stderr.flush()
             own = doc.macros(macros)  # a document's own LaTeX: the macro files and its own definitions
             failures = []
-            converted = convert_equations([row.found.equation for row in rows], args.dst, args.wrapper, own)
+            equations = [row.found.equation for row in rows]
+            if expand and doc.source == "latex":
+                converted = convert_equations(equations, args.dst, args.wrapper, own, expand_macros=True)
+            else:
+                converted = convert_equations(equations, args.dst, args.wrapper, own)
             for row, result in zip(rows, converted):
                 # Keep the original one-space comments unless we have a new number or count to show.
                 enhanced = bool(row.count or row.where != row.found.where)

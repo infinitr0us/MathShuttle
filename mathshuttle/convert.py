@@ -4,12 +4,13 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import compat, diagnose as _diagnose, latex_wrap, tidy as _tidy
 from .pandoc_engine import (READ_FORMATS, WRITE_FORMATS, ConversionError, Equation,  # noqa: F401
-                            drop_annotations, looks_like_markdown, mathml_elements, parse_mathml, read_equations,
-                            read_latex_text, readable_mathml, strip_tex, write_equation, write_equations, write_mathml)
+                            _has_math_delimiters, drop_annotations, looks_like_markdown, mathml_elements, parse_mathml,
+                            read_equations, read_latex_text, readable_mathml, strip_tex, write_equation, write_equations,
+                            write_mathml)
 
 FORMAT_LABELS = {
     "latex": "LaTeX",
@@ -96,7 +97,7 @@ _MARKDOWN_CODE = re.compile(r"^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*$|(?:(?<=\n
 
 
 def input_macros(macros: Optional[compat.Macros], text: str, src: str,
-                 as_markdown: bool = False) -> Optional[compat.Macros]:
+                 as_markdown: bool = False, preamble: Optional[str] = None) -> Optional[compat.Macros]:
     """The macros plus what LaTeX input defines outside its equations that pandoc's reader drops
     (\\DeclarePairedDelimiter above $\\abs{x}$, as Open file's Use writes it) and the packages it loads;
     in text read as Markdown (a chat answer), not from its code."""
@@ -104,8 +105,13 @@ def input_macros(macros: Optional[compat.Macros], text: str, src: str,
         return macros
     # (also when both readings agreed and the LaTeX one was kept: the code is still no preamble)
     markdown = as_markdown or ("\\" in text and looks_like_markdown(text))
-    return compat.with_document(macros, compat.pandoc_leftovers(_MARKDOWN_CODE.sub(" ", text) if markdown
-                                                                else text))
+    leftovers = compat.pandoc_leftovers(_MARKDOWN_CODE.sub(" ", text) if markdown else text)
+    if preamble is None:
+        return compat.with_document(macros, leftovers)
+    document = [macros.document] if macros is not None else []
+    document.append(leftovers)
+    return compat.with_document(macros, "\n".join(part for part in document if part),
+                                macros.labels if macros is not None else None, preamble=preamble)
 
 
 def _read(text: str, src: str, mode: str, tidy: bool) -> List[Equation]:
@@ -124,15 +130,40 @@ _MARKDOWN_NOTE = ("Read as Markdown text (a chat answer, notes): % is a percent 
                   "the equations are those in $...$, $$...$$, \\(...\\) and \\[...\\].")
 
 
+def _read_for_expansion(text: str, mode: str,
+                        macros: Optional[compat.Macros]) -> Tuple[List[Equation], bool, Optional[compat.Macros]]:
+    """Keep preamble macro calls in the equations so the LaTeX writer can expand and report them."""
+    masked = None
+    if looks_like_markdown(text):
+        masked = _MARKDOWN_CODE.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
+    body, preamble = compat.before_equations(text, masked)
+    if preamble and not _has_math_delimiters(body):
+        body, preamble = text, ""  # a bare equation keeps its own definitions
+    equations, markdown = read_latex_text(body, default_display=(mode != "inline"))
+    if preamble and _has_math_delimiters(preamble):
+        # A macro in prose may supply a whole equation. Let pandoc find those too.
+        full, _ = compat.before_equations(text, masked, defer=False)
+        try:
+            complete, as_markdown = read_latex_text(full, default_display=(mode != "inline"))
+        except ConversionError:
+            pass  # expand each recovered equation separately
+        else:
+            if [e.display for e in complete] != [e.display for e in equations]:
+                equations, markdown = complete, as_markdown
+    return apply_mode(equations, mode), markdown, input_macros(macros, body, "latex", markdown, preamble)
+
+
 def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "auto",
-            annotate: bool = False, macros: Optional[compat.Macros] = None, tidy: bool = True) -> Result:
+            annotate: bool = False, macros: Optional[compat.Macros] = None, tidy: bool = True, *,
+            expand_macros: bool = False) -> Result:
     """Convert `text` from format `src` to format `dst`.
 
     mode     "auto" (as detected from the input; bare LaTeX counts as display),
              "display" or "inline" - the mode used for the *output*.
     wrapper  how LaTeX output is delimited (see latex_wrap.WRAPPERS); ignored otherwise.
     annotate keep the TeX source as an <annotation> inside MathML output.
-    macros   definitions applied to LaTeX input (:class:`compat.Macros`); LaTeX -> LaTeX keeps the macros.
+    macros   definitions applied to LaTeX input (:class:`compat.Macros`).
+    expand_macros  also write out the macros when converting LaTeX to LaTeX.
     tidy     write LaTeX from MathML / OMML input as an author would (:mod:`tidy`).
     """
     if src not in READ_FORMATS:
@@ -140,8 +171,12 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
     if dst not in WRITE_FORMATS:
         raise ValueError("cannot write format %r" % dst)
 
-    eqs, as_markdown = _read_text(text, src, mode, tidy)
-    macros = input_macros(macros, text, src, as_markdown)
+    expand = expand_macros and src == dst == "latex"
+    if expand:
+        eqs, as_markdown, macros = _read_for_expansion(text, mode, macros)
+    else:
+        eqs, as_markdown = _read_text(text, src, mode, tidy)
+        macros = input_macros(macros, text, src, as_markdown)
     notes: List[str] = [_MARKDOWN_NOTE] if as_markdown else []
     if len(eqs) > 1:
         notes.append("%d equations found in the input; each was converted separately." % len(eqs))
@@ -151,6 +186,10 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
     for i, eq in enumerate(eqs):
         if dst == "latex":
             display = not latex_wrap.wrapper_is_inline(wrapper, eq.display)
+            if expand:
+                tex, new = compat.expand_macros(eq.tex, macros)
+                eq = Equation(tex, eq.display)
+                _add(notes, new)
             if tidy and src != "latex":
                 # for the mode of the output (\limits stays in $...$); bare: the equation's own mode
                 eq = tidied(eq, eq.display if wrapper == "bare" else display)
@@ -172,11 +211,11 @@ def convert(text: str, src: str, dst: str, mode: str = "auto", wrapper: str = "a
     if numbering_conflict:
         notes.append("\\tag / \\label commands were kept, but LaTeX allows no \\tag and at most one "
                      "\\label in this wrapper - edit them, or choose the align wrapper.")
-    if src == "latex" and dst != "latex":
+    if src == "latex" and (dst != "latex" or expand):
         _add(notes, macro_notes(macros))
     if src == "mathml" and "annotation" in text:
         _add(notes, annotation_notes(text, macros))
-    return Result(eqs, outputs, notes)
+    return Result(eqs, outputs, compat.merge_notes(notes) if expand else notes)
 
 
 # ---- a TeX annotation that does not show what its MathML shows -----------------------------------
@@ -347,20 +386,22 @@ def annotation_notes(text: str, macros: Optional[compat.Macros] = None) -> List[
 
 
 def convert_equation(eq: Equation, dst: str, wrapper: str = "auto", macros: Optional[compat.Macros] = None,
-                     annotate: bool = False) -> "tuple[str, List[str]]":
+                     annotate: bool = False, *, expand_macros: bool = False) -> "tuple[str, List[str]]":
     """One equation given as LaTeX (a document's, or tidied from Office) in format `dst`, and notes."""
     if dst == "latex":
         display = not latex_wrap.wrapper_is_inline(wrapper, eq.display)
-        return latex_wrap.wrap(eq.tex, wrapper, display), []
+        tex, notes = compat.expand_macros(eq.tex, macros) if expand_macros else (eq.tex, [])
+        return latex_wrap.wrap(tex, wrapper, display), notes
     prepared, notes = for_texmath(eq, "latex", macros, dst)
     return _write(prepared, dst, eq, annotate=annotate, source=eq.tex), notes
 
 
 def convert_equations(eqs: List[Equation], dst: str, wrapper: str = "auto",
-                      macros: Optional[compat.Macros] = None) -> list[tuple[str, List[str]] | ConversionError]:
+                      macros: Optional[compat.Macros] = None, *,
+                      expand_macros: bool = False) -> list[tuple[str, List[str]] | ConversionError]:
     """Document equations in order, with the same notes or error as converting each separately."""
     if dst == "latex":
-        return [convert_equation(eq, dst, wrapper, macros) for eq in eqs]
+        return [convert_equation(eq, dst, wrapper, macros, expand_macros=expand_macros) for eq in eqs]
     keys = [(eq.tex, eq.display) for eq in eqs]
     results = {}
     pending = []

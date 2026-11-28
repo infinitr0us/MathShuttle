@@ -4,8 +4,7 @@ slashed, and siunitx quantities with units written as letters.
 They are applied by :func:`compat.for_texmath` after the user's and the document's own macros, and only
 to commands that neither defines (an author's own ``\\abs`` wins).  A command whose name also means
 something standard (physics' ``\\div``, ``\\grad`` with ``\\div`` is ÷ in LaTeX) is rewritten only when
-the document loads the package.  Each rewrite gives LaTeX that texmath reads; LaTeX -> LaTeX output
-keeps what the author wrote.
+the document loads the package. The LaTeX writer can also use the packs to write out their commands.
 """
 from __future__ import annotations
 
@@ -20,10 +19,11 @@ from .compat import _CS, _GAP, _argument, _find, _group_end, _optional, _unbrace
 class _Args:
     """What follows a command: a star, [options] and {arguments}, or a delimited argument (\\qty(...))."""
 
-    def __init__(self, tex: str, pos: int):
+    def __init__(self, tex: str, pos: int, for_latex: bool = False):
         self.tex = tex
         self.end = pos
         self.star = False
+        self.for_latex = for_latex
 
     def take_star(self) -> bool:
         i = _GAP.match(self.tex, self.end).end()
@@ -373,6 +373,8 @@ def _slashed(a: _Args, _p) -> Optional[str]:
     x = x.strip()
     if re.fullmatch(r"[A-Za-z]", x):
         return "{\\not %s}" % x  # a slash through the letter (texmath: U+0338)
+    if a.for_latex:
+        return "{\\not{%s}}" % x
     return "\\cancel{%s}" % x
 
 
@@ -416,6 +418,19 @@ def _literal_unit(unit: str) -> Optional[str]:
     return "\\mathrm{%s}" % unit
 
 
+def _si_latex(command: str) -> str:
+    """Let texmath read this siunitx number or unit and return its ordinary LaTeX spelling."""
+    from .pandoc_engine import Equation, read_mathml, write_mathml
+    return read_mathml(write_mathml(Equation(command)), tidy=False)[0].tex
+
+
+def _number(value: str, for_latex: bool) -> str:
+    if for_latex and re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value):
+        return value
+    command = "\\num{%s}" % value
+    return _si_latex(command) if for_latex else command
+
+
 def _quantity(a: _Args, _p) -> Optional[str]:  # \qty{12}{kHz}, \SI{12}{kHz}
     start = a.end
     a.option()
@@ -426,9 +441,11 @@ def _quantity(a: _Args, _p) -> Optional[str]:  # \qty{12}{kHz}, \SI{12}{kHz}
         return None
     written = _literal_unit(unit)
     if written is None:
+        if a.for_latex:
+            return _si_latex("\\SI" + a.tex[start:a.end])
         a.end = start
         return None
-    return "\\num{%s}\\,%s" % (number, written)
+    return "%s\\,%s" % (_number(number, a.for_latex), written)
 
 
 def _unit(a: _Args, _p) -> Optional[str]:  # \si{kHz}, \unit{kHz}
@@ -437,6 +454,8 @@ def _unit(a: _Args, _p) -> Optional[str]:  # \si{kHz}, \unit{kHz}
     unit = a.brace()
     written = None if unit is None else _literal_unit(unit)
     if written is None:
+        if a.for_latex and unit is not None:
+            return _si_latex("\\si" + a.tex[start:a.end])
         a.end = start
         return None
     return written
@@ -447,7 +466,7 @@ def _numlist(a: _Args, _p) -> Optional[str]:  # texmath writes \numlist{1;2;3} a
     x = a.brace()
     if x is None:
         return None
-    items = ["\\num{%s}" % i.strip() for i in x.split(";")]
+    items = [_number(i.strip(), a.for_latex) for i in x.split(";")]
     if len(items) == 1:
         return items[0]
     return ", ".join(items[:-1]) + "\\text{ and }" + items[-1]
@@ -556,7 +575,7 @@ def packages_for(tex: str, defined: Set[str], packages: Set[str]) -> List[str]:
     return sorted(needed)
 
 
-def apply(tex: str, defined: Set[str], packages: Set[str], used: List[str]) -> str:
+def apply(tex: str, defined: Set[str], packages: Set[str], used: List[str], for_latex: bool = False) -> str:
     """`tex` with the commands of the built-in packs written out; `defined`: names the input or the
     user's / document's macros define (left alone); `packages`: what the document loads; `used`
     collects "package: \\name" for the note."""
@@ -574,10 +593,10 @@ def apply(tex: str, defined: Set[str], packages: Set[str], used: List[str]) -> s
             break
         name = m.group(1)
         package, handler, _ = PACKS[name]
-        args = _Args(tex, m.end())
+        args = _Args(tex, m.end(), for_latex)
         new = handler(args, packages)
         if new is None and name in _QUANTITY_NAMES:  # \qty{12}{kHz}: siunitx with a literal unit
-            args = _Args(tex, m.end())
+            args = _Args(tex, m.end(), for_latex)
             new = _quantity(args, packages)
             package = "siunitx"
         if new is None:

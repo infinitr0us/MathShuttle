@@ -653,7 +653,7 @@ def _front_matter(preamble: str) -> str:
     return "\n".join(found)
 
 
-def read_text_document(path: str, fmt: str) -> DocumentEquations:
+def read_text_document(path: str, fmt: str, expand_macros: bool = False) -> DocumentEquations:
     """A .tex file (\\input and \\include found next to it) or a .md file, read by pandoc: each
     equation as LaTeX, with the heading above it and its \\label; pandoc's warnings (a file that
     \\input names but that is not there) become notes.  A .tex file also gets its own definitions and
@@ -665,15 +665,41 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
     # a .md file: pandoc's Markdown, where \[1\] is an escaped bracket (pandoc writes [1] so), not maths
     # as in pasted chat text (MARKDOWN); raw TeX environments in it are read all the same
     markdown = fmt == "markdown"
+    raw_equations: List[Equation] = []
     if markdown:  # (with money before maths read right: "$5.00 ($p$ after tax)")
         blocks, err = markdown_blocks(text, "markdown", folder)
     else:
-        blocks, err, preamble = _read_latex_blocks(text, folder, result.notes)
+        read_text = text
+        if expand_macros and "\\DeclareMathOperator" in text:
+            read_text, _ = compat.before_equations(text, defer=False)
+        blocks, err, preamble = _read_latex_blocks(read_text, folder, result.notes)
         # what pandoc did not apply (\DeclarePairedDelimiter...); with the body read alone, also the whole
         # preamble's definitions, which pandoc did not see
         result.definitions = compat.pandoc_leftovers(_local_sources(path, text))
         if preamble is not None:
             result.definitions = _local_sources(path, preamble) + "\n" + result.definitions
+        if expand_macros and preamble is None:
+            begin, end = _document_bounds(text)
+            body, leading = compat.before_equations(text[begin:end])
+            if begin is not None:
+                local = _local_sources(path, text[:begin])
+                top = [d.source for d in compat.parse_definitions(local, document=True)[0]
+                       if not compat._depth(local, d.span[0])]
+                leading = "\n".join(top + [leading])
+            if leading.strip():
+                # Keep the raw macro calls for the LaTeX writer. Some macros produce whole
+                # equations in prose, so use the full reading if the body alone loses any.
+                result.definitions = leading + "\n" + result.definitions
+                try:
+                    raw_blocks, _, _ = _read_latex_blocks(body, folder, [])
+                except ConversionError:
+                    pass
+                else:
+                    original = []
+                    _collect_math(blocks, original)
+                    _collect_math(raw_blocks, raw_equations)
+                    if [eq.display for eq in original] != [eq.display for eq in raw_equations]:
+                        raw_equations = []
         result.labels = _aux_labels(path)
     result.notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
                      if line.startswith("[WARNING]")]
@@ -697,12 +723,14 @@ def read_text_document(path: str, fmt: str) -> DocumentEquations:
         for eq in eqs:
             label = re.search(r"\\label\{([^{}]*)\}", eq.tex)
             where = (heading or "(before the first heading)") + ("  [%s]" % label.group(1) if label else "")
+            if raw_equations:
+                eq = raw_equations[len(result.found)]
             result.found.append(Found(eq, where, "" if eq.display else context))
     return result
 
 
-def read_document(path: str) -> DocumentEquations:
-    """Every equation in a .docx, .pptx, .tex or .md file, in document order."""
+def read_document(path: str, *, expand_macros: bool = False) -> DocumentEquations:
+    """Every equation in document order. For expanded LaTeX, retain preamble macros for the writer."""
     ext = os.path.splitext(path)[1].lower()
     if ext not in READABLE:
         raise ConversionError("Cannot read %s files (only %s)." % (ext or "these", ", ".join(READABLE)))
@@ -711,7 +739,7 @@ def read_document(path: str) -> DocumentEquations:
             return read_docx(path)
         if ext == ".pptx":
             return read_pptx(path)
-        return read_text_document(path, "latex" if ext == ".tex" else "markdown")
+        return read_text_document(path, "latex" if ext == ".tex" else "markdown", expand_macros)
     except OSError as e:
         raise ConversionError("Cannot read %s: %s" % (path, e.strerror or e))
     except (zipfile.BadZipFile, KeyError, ET.ParseError, UnicodeDecodeError) as e:

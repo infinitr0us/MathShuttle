@@ -10,7 +10,7 @@ plain-TeX font switches (``{\\rm OOD}``, ``\\cal L``), commands from other packa
    like TeX does; ``\\DeclarePairedDelimiter`` is expanded here (pandoc does not know it);
 2. rewrites what is left into constructs texmath parses.
 
-Only the TeX handed to texmath is rewritten: LaTeX -> LaTeX output keeps the user's source.
+LaTeX output can write out the macros alone, with :func:`expand_macros`.
 Rewrites that lose something (a colour, a strut) are reported as notes.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import AbstractSet, Dict, List, Optional, Sequence, Tuple
 
 # a control word, a control symbol, a comment, a brace, &, $; \begin / \end with their argument
 _TOKEN = re.compile(r"\\(?P<be>begin|end)\s*\{(?P<env>[^{}]*)\}|\\[a-zA-Z@]+|\\.|%[^\n]*|[{}&$]", re.S)
@@ -742,26 +742,53 @@ def file_stamps(files: Sequence[str]) -> tuple:
 
 
 def load_macros(files: Sequence[str] = (), text: str = "", document: str = "",
-                labels: Optional[Dict[str, str]] = None) -> Optional[Macros]:
+                labels: Optional[Dict[str, str]] = None, *, preamble: str = "") -> Optional[Macros]:
     """A Macros object for these files and text (None for neither), re-read only when a file changes;
     `document` and `labels`: a document's own definitions and label numbers (see :class:`Macros`)."""
     files = [f for f in files if f]
-    if not files and not text.strip() and not document.strip() and not labels:
+    if not files and not text.strip() and not document.strip() and not labels and not preamble:
         return None
-    key = (file_stamps(files), text, document, tuple(sorted((labels or {}).items())))
+    key = (file_stamps(files), text, document, tuple(sorted((labels or {}).items())), preamble)
     if key not in _MACRO_CACHE:
         if len(_MACRO_CACHE) > 16:
             _MACRO_CACHE.clear()
-        _MACRO_CACHE[key] = Macros(files, text, document, labels)
+        loaded = Macros(files, text, document, labels)
+        if preamble:
+            loaded._add(preamble)  # pasted definitions take precedence, just as they do in bare equations
+        _MACRO_CACHE[key] = loaded
     return _MACRO_CACHE[key]
 
 
-def with_document(macros: Optional[Macros], document: str, labels: Optional[Dict[str, str]] = None) -> Optional[Macros]:
+def with_document(macros: Optional[Macros], document: str, labels: Optional[Dict[str, str]] = None,
+                  *, preamble: str = "") -> Optional[Macros]:
     """The user's macros plus a document's own definitions and label numbers (which win)."""
-    if not document.strip() and not labels:
+    if not document.strip() and not labels and not preamble:
         return macros
     return load_macros(macros.files if macros is not None else (), macros.text if macros is not None else "",
-                       document, labels)
+                       document, labels, preamble=preamble)
+
+
+def before_equations(text: str, masked: Optional[str] = None, defer: bool = True) -> Tuple[str, str]:
+    """Prepare a LaTeX read. Defer preamble macros and keep the limits of operator declarations."""
+    from .pandoc_engine import _has_math_delimiters
+    plain = without_verbatim(masked if masked is not None else text)
+    definitions, _ = parse_definitions(plain)
+    keep, out = [], []
+    end = previous = 0
+    for d in definitions:
+        start, stop = d.span
+        if defer and _has_math_delimiters(plain[previous:start]):
+            defer = False
+        previous = stop
+        if defer and not _depth(plain, start):
+            keep.append(d.source)
+            if start >= end:  # an alphabet loop yields several definitions from one span
+                out.append(text[end:start])
+                end = stop
+        elif plain.startswith("\\DeclareMathOperator", start):
+            out.extend((text[end:start], d.source))
+            end = stop
+    return "".join(out) + text[end:], "\n".join(keep)
 
 
 # ---- expansion ----------------------------------------------------------------------------------------
@@ -813,17 +840,37 @@ _PANDOC_MATH_ENVS = frozenset(
     "gather gather* multline multline*".split())
 
 
-def _expand(body: str, sources: List[str]) -> Optional[str]:
+def _expand(body: str, sources: List[str], keep_layout: bool = False) -> Optional[str]:
     """`body` with the macros of `sources` (definitions as written) expanded by pandoc's LaTeX reader;
     None if pandoc does not give back exactly one equation."""
     from .pandoc_engine import ConversionError, _read_json
     env = re.fullmatch(r"\s*\\begin\s*\{([a-zA-Z]+\*?)\}[\s\S]*\\end\s*\{\1\}\s*", body)
-    wrapped = body if env and env.group(1) in _PANDOC_MATH_ENVS else "\\[" + body + "\n\\]"
+    # Inside \[...\] pandoc preserves the layout of an align environment as well.
+    wrapped = body if not keep_layout and env and env.group(1) in _PANDOC_MATH_ENVS else "\\[" + body + "\n\\]"
     try:
         eqs = _read_json("latex", ("\n".join(sources) + "\n" + wrapped).encode("utf-8"))
     except ConversionError:
         return None
-    return eqs[0].tex if len(eqs) == 1 else None
+    if len(eqs) != 1:
+        return None
+    if keep_layout:
+        return body[:len(body) - len(body.lstrip())] + eqs[0].tex + body[len(body.rstrip()):]
+    return eqs[0].tex
+
+
+def _fraction_arguments(tex: str, names: AbstractSet[str]) -> str:
+    """Keep a macro used as a single fraction argument together when its body has several tokens."""
+    fractions = {r"\frac", r"\dfrac", r"\tfrac", r"\binom", r"\dbinom", r"\tbinom"} - names
+    out, last = [], 0
+    for m in _TOKEN.finditer(tex):
+        if m.group() in fractions:
+            end = m.end()
+            for _ in range(2):
+                start, end = _argument(tex, end)
+                if start >= last and tex[start:end] in names:
+                    out.extend((tex[last:start], "{", tex[start:end], "}"))
+                    last = end
+    return "".join(out) + tex[last:]
 
 
 _SIMPLE_DEF = re.compile(r"\s*\\(?:(?:re)?newcommand\*?|providecommand\*?|g?def)\s*\{?\s*(\\[a-zA-Z]+)\s*\}?"
@@ -856,7 +903,7 @@ def _no_argument() -> frozenset:
     return _NO_ARGUMENT[0]
 
 
-def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
+def _simple_expansion(tex: str, definitions: List[Definition], keep_layout: bool = False) -> Optional[str]:
     """`tex` with its macros expanded here, when every definition it needs is a macro without arguments
     (``\\newcommand{\\calR}{\\mathcal{R}}``: the \\foreach alphabet, \\R for \\mathbb{R}): as TeX replaces
     them, without a pandoc run per equation.  None when one is anything else (pandoc expands those)."""
@@ -871,6 +918,8 @@ def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
     if not bodies:
         return tex
     for _ in range(20):
+        if keep_layout:
+            tex = _fraction_arguments(tex, bodies.keys())
         out, last = [], 0
         for t in _TOKEN.finditer(tex):  # (whole control words; a comment is one token)
             if t.group() not in bodies:
@@ -883,6 +932,8 @@ def _simple_expansion(tex: str, definitions: List[Definition]) -> Optional[str]:
             prev = re.search(r"(\\[a-zA-Z@]+)\s*$", before or (out[-1] if out else ""))
             if prev and (prev.group(1) in _TAKES_ARGUMENT or prev.group(1) not in _no_argument()):
                 return None
+            if keep_layout and prev and not prev.group()[-1].isspace() and re.match(r"[a-zA-Z@]", body):
+                body = " " + body  # \le\res with \res defined as R: keep \le and R apart
             end = t.end()
             if t.group()[1:].isalpha():  # TeX skips the spaces after a control word (\text{\prefix Hz})
                 end = re.compile(r"[ \t]*\n?[ \t]*").match(tex, end).end()
@@ -1211,12 +1262,18 @@ def _accent_fonts(tex: str) -> str:
 
 
 def merge_notes(notes: List[str]) -> List[str]:
-    """`notes` of several equations with the built-in-pack notes merged into one (the commands of each
-    package listed once), where the first of them was."""
+    """Merge the macro notes from several equations, counting each name once."""
     prefix = _NOTES["packs"].split("%s")[0]
     by_package: Dict[str, List[str]] = {}
+    written: List[str] = []
+    macro_prefix = _NOTES["written"].split("%s")[0]
     out: List[str] = []
     for note in notes:
+        if note.startswith(macro_prefix):
+            if not written:
+                out.append(macro_prefix)
+            written.extend(n for n in note[len(macro_prefix):].split(", ") if n not in written)
+            continue
         if not note.startswith(prefix):
             if note not in out:
                 out.append(note)
@@ -1228,6 +1285,9 @@ def merge_notes(notes: List[str]) -> List[str]:
             if m:
                 names = by_package.setdefault(m.group(2), [])
                 names += [n for n in m.group(1).split(", ") if n not in names]
+    if written:
+        out[out.index(macro_prefix)] = (_NOTES["written"] % ", ".join(written) if len(written) <= 5
+                                        else "%d distinct macros written out" % len(written))
     if by_package:
         merged = _NOTES["packs"] % "; ".join("%s (%s)" % (", ".join(names), package)
                                              for package, names in by_package.items())
@@ -1276,23 +1336,21 @@ _NOTES = {
     "layout": "%s: layout-only commands were left out",
     "unexpanded": "the macros could not be expanded together with this equation; texmath was given the "
                   "definitions instead",
+    "kept": "the macros could not be expanded, so the equation was kept as written",
+    "written": "macros written out: %s",
     "packs": "written as their packages define them (built in): %s",
     "intertext": "\\intertext: written as a row of text in the equation",
 }
 
 
-def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml") -> "Tuple[str, List[str]]":
-    """`tex` rewritten for texmath, its macros expanded; plus notes on what was approximated.
-    `target`: the output format (bold letters are written as bold characters for MathML / OMML only,
-    see :func:`_bold_upright`)."""
-    notes: List[str] = []
-    own, _ = parse_definitions(tex)
+def _expand_definitions(tex: str, own: List[Definition], used: List[Definition],
+                        for_writer: bool) -> Tuple[str, bool]:
+    """Expand the equation's definitions and the file definitions it needs. Report whether it worked."""
     for d in own:
         if _depth(tex, d.span[0]):
             from .pandoc_engine import ConversionError
             raise ConversionError("%s is defined inside a group: a definition that only holds there cannot be "
                                   "expanded here - define it at the start of the equation or in Macros..." % d.name)
-    used = macros.needed(tex) if macros else []
     definitions = used + own
     # a name defined twice (two macro files, a file and the equation) has its last definition: a
     # \newcommand{\abs} after a \DeclarePairedDelimiter{\abs} (or before it) is not both
@@ -1319,32 +1377,69 @@ def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml
         except Exception:  # noqa: BLE001 - \newcommand{\foo}{\abs}: the pair is used where \foo is
             plain.append(source)
     out = _paired(_without(tex, [d.span for d in own]) if own else tex, paired)
-    simple = _simple_expansion(out, [d for d in definitions if not d.paired and d.name not in paired])
+    simple = _simple_expansion(out, [d for d in definitions if not d.paired and d.name not in paired],
+                               keep_layout=not for_writer)
     if simple is not None:  # 0-argument \newcommand only (the \foreach alphabet): no pandoc run per equation
-        out, plain = _paired(simple, paired).strip(), []
+        out, plain = _paired(simple, paired), []
+        if for_writer or own:
+            out = out.strip()
     if plain:
-        expanded = _expand(out, plain)
-        if expanded is None:
+        if not for_writer:
+            out = _fraction_arguments(out, last.keys())
+            plain = [_fraction_arguments(s, last.keys()) for s in plain]
+        expanded = _expand(out, plain, not for_writer)
+        if expanded is None and for_writer:
             # a style file's machinery (\let to internals, \expandafter, \csname...) can stop pandoc:
             # once more with the plain definitions alone
             simple = [s for s in plain if not re.search(r"\\(?:let|expandafter|csname|if[a-z]*|@)" + _CS + "|@", s)]
             expanded = _expand(out, simple) if simple and len(simple) < len(plain) else None
         if expanded is None:
-            notes.append(_NOTES["unexpanded"])
-            out = "\n".join(plain) + "\n" + out
-        else:
-            out = _paired(expanded, paired)
+            return ("\n".join(plain) + "\n" + out if for_writer else tex), False
+        out = _paired(expanded, paired)
+    return out, True
 
-    hits: List[str] = []
-    resized: List[str] = []
-    layout: List[str] = []
+
+def _expand_packs(out: str, tex: str, macros: Optional[Macros], own: List[Definition],
+                  pack_hits: List[str], for_latex: bool = False) -> str:
     # (a Macros with no definitions is falsy: it may still hold packages and labels)
-    out = _refs(out, macros.labels if macros is not None else {})
     from . import packs
     defined = set(macros.definitions if macros is not None else ()) | {d.name for d in own}
     packages = (macros.packages if macros is not None else set()) | packages_in(tex)
+    return packs.apply(out, defined, packages, pack_hits, for_latex)
+
+
+def expand_macros(tex: str, macros: Optional[Macros] = None) -> Tuple[str, List[str]]:
+    """Write out the macros of an equation for LaTeX output and say which ones were used."""
+    from .pandoc_engine import ConversionError
+    own, skipped = parse_definitions(tex)
+    body = _without(tex, [d.span for d in own]) if own else tex
+    names = {m.group() for m in _TOKEN.finditer(body)}
+    comments = [m.span() for m in _TOKEN.finditer(tex) if m.group().startswith("%")]
+    used = macros.needed(_without(tex, comments)) if macros else []
+    defined = {d.name for d in used + own}
+    try:
+        out, ok = _expand_definitions(tex, own, used, for_writer=False)
+        if skipped or not ok or any(m.group() in defined for m in _TOKEN.finditer(out)):
+            return tex, [_NOTES["kept"]]
+        hits: List[str] = []
+        out = _expand_packs(out, tex, macros, own, hits, for_latex=True)
+    except ConversionError:
+        return tex, [_NOTES["kept"]]
+    written = sorted((names & defined) | {h.split(": ", 1)[1] for h in hits})
+    return out, [_NOTES["written"] % ", ".join(written)] if written else []
+
+
+def for_texmath(tex: str, macros: Optional[Macros] = None, target: str = "mathml") -> "Tuple[str, List[str]]":
+    """Rewrite `tex` for texmath, with notes on what was approximated."""
+    own, _ = parse_definitions(tex)
+    out, ok = _expand_definitions(tex, own, macros.needed(tex) if macros else [], for_writer=True)
+    notes = [] if ok else [_NOTES["unexpanded"]]
+    out = _refs(out, macros.labels if macros is not None else {})
     pack_hits: List[str] = []
-    out = packs.apply(out, defined, packages, pack_hits)
+    out = _expand_packs(out, tex, macros, own, pack_hits)
+    hits: List[str] = []
+    resized: List[str] = []
+    layout: List[str] = []
     rows: List[str] = []
     out = _standard(out, rows)
     if rows:
