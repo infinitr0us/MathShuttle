@@ -9,9 +9,12 @@ Move equations between LaTeX and Word / PowerPoint, both ways, offline.
 * **Word and PowerPoint to LaTeX.** Copy an equation in Office and get LaTeX you can put in a paper
   (`\mathrm{OOD}`, `\operatorname{softmax}`, `\boldsymbol{\theta}`, `cases`, `a &= b`). An equation you
   sent and nobody edited comes back as the LaTeX you wrote.
-* **Whole papers to Word.** A `.tex` or Markdown file, or a pasted chat answer, becomes a Word document
-  with native equations, numbered as LaTeX numbers them, with references and citations. Every equation of
-  a `.docx`, `.pptx`, `.tex` or `.md` file can be listed, filtered and exported.
+* **Whole papers to Word, and back.** A `.tex` or Markdown file, or a pasted chat answer, becomes a Word
+  document with native equations, numbered as LaTeX numbers them, with references and citations. When a
+  co-author sends it back edited, MathShuttle lists the equations they changed, deleted, added or
+  commented, and writes a corrected copy of your `.tex`.
+* **Every equation of a file.** List, filter and export the equations of a `.docx`, `.pptx`, `.tex` or
+  `.md` file, including the LaTeX inside IguanaTeX and TeXPoint pictures on slides.
 * **Other people's LaTeX.** A paper's own definitions, commands of common packages (physics, braket,
   siunitx...) and old TeX font switches are handled. An equation that still fails says why, in plain words.
 * **Also:** LaTeX, MathML and OMML conversion with Typst and eqn output (a local stand-in for the

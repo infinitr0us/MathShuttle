@@ -50,3 +50,39 @@ paper: figures (found as LaTeX finds them, also in `\graphicspath` folders; Word
 figure, so one goes in only when a PNG or JPEG of the same name is beside it, and the others are
 named), tables and sections as pandoc converts them, and a command pandoc does not know is left out,
 as in pandoc's own conversions (`\pageref` and `\nameref` among them).
+
+## Slides made with IguanaTeX or TeXPoint
+
+Many lecture decks hold their equations as pictures made by the PowerPoint add-ins IguanaTeX or
+TeXPoint, which keep the LaTeX source inside the slide. **Open file…** on such a `.pptx` (or
+`mathshuttle extract deck.pptx`) lists those equations too, with the native ones, in slide order, located
+as "slide 3: Title (IguanaTeX)". Each equation comes with the macros of its own picture written out
+(IguanaTeX keeps a whole LaTeX document per picture, its `\newcommand`s included), so it can be copied
+into Word or PowerPoint as a native equation, or exported, without that preamble. A note says how many
+such pictures the deck has, and names any whose LaTeX could not be read. LaTeXiT pictures and
+MathType objects cannot be read.
+
+## A Word file that came back: compare it with the paper
+
+When a co-author edits the Word file of your paper (made with **Whole file as Word...** or
+`mathshuttle word paper.tex -o paper.docx`) and sends it back, MathShuttle tells you what happened to
+its equations. Open the paper with **Open file…**, click **Compare with a returned Word file...** and
+choose the file that came back (or run `mathshuttle compare returned.docx paper.tex`). The list shows each
+equation that was changed, deleted or added, and each one with a comment: its number, label and section,
+the LaTeX as it is now in Word, who made the tracked changes and the comments. Select one to see the
+paper's version next to Word's. **Copy LaTeX from Word** and **Use as input** take the new version.
+
+**Write a corrected copy of the paper...** (`compare ... -o paper.revised.tex`) writes a copy of the
+paper, never the paper itself, with each changed equation replaced by the LaTeX from Word, in the same
+environment and with its `\label`s put back; your macros are written back where their exact text appears
+(`\mathbb{R}` becomes `\R` again when your paper defines `\R`). A deleted equation stays, with a comment
+line above it saying who deleted it, and an added one comes as a commented block after the equation
+before it, for you to place. A `.diff` file next to the copy shows every change; an equation in an
+`\input` file goes into a copy of that file. If the paper was edited since the export and an equation
+cannot be found any more, it is left as it is and named.
+
+How it knows: a Word export of a whole paper marks each equation with a hidden bookmark (Word shows it
+only with *Hidden bookmarks* ticked) and keeps, in the file, the LaTeX each one came from. Word keeps
+both when the file is edited and saved, with or without Track Changes. A Word file made by MathShuttle
+0.8.0 or earlier has no marks: its equations are matched with the paper's by order and by what they show.
+Tracked changes are read as the co-author left them: what Word shows with all changes accepted.

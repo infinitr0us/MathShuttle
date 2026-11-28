@@ -3,6 +3,22 @@
 What changed in each release of MathShuttle. The release pages on GitHub have the download files,
 their SHA-256 sums and what each release was tested with.
 
+## Unreleased
+
+### New
+- Compare a Word file that came back from a co-author with the paper: the equations they changed,
+  deleted, added or commented, with their LaTeX, who changed them and the comments; a corrected copy of
+  the `.tex` (labels and environments kept, your macros written back) with a `.diff`. In the window of
+  *Open file...* on a `.tex`, or `mathshuttle compare returned.docx paper.tex -o paper.revised.tex`.
+  The Word export of a whole paper marks its equations for this (hidden bookmarks).
+- IguanaTeX and TeXPoint pictures on slides: *Open file...* and `extract` list their LaTeX, with each
+  picture's own macros written out.
+
+### Fixed
+- An equation numbered at the right margin in Word (as the Word export writes them) read back as an
+  `array` with `#(1)` in it; its number is now taken off and shown with its location.
+- Tracked changes inside equations of a `.docx` are read as Word shows them with all changes accepted.
+
 ## 0.8.0 (2026-11-28)
 
 ### New

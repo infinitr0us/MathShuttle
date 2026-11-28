@@ -10,6 +10,7 @@ mathshuttle copy -e 'x^2'
 mathshuttle paste --wrapper bare
 mathshuttle extract paper.tex -t typst
 mathshuttle extract thesis.tex --display --match Method --unique
+mathshuttle compare returned.docx paper.tex -o paper.revised.tex
 mathshuttle get-pandoc
 mathshuttle --version
 ```
@@ -42,6 +43,10 @@ mathshuttle --version
   [Expand macros](latex-input.md#expand-macros-latex-for-a-place-without-your-macro-file).
 * `word FILE -o OUT.docx` (or `-e TEXT`, or standard input) writes a passage, or a whole `.tex` / `.md`
   document, as a Word file with native equations (see [Documents](documents.md#a-passage-or-a-whole-paper-as-a-word-file)).
+* `compare RETURNED.docx PAPER.tex` lists the equations a co-author changed, deleted, added or
+  commented in the Word file of the paper (`--all` shows the unchanged ones too); `-o CORRECTED.tex`
+  also writes a corrected copy of the paper and a `.diff` (see
+  [Documents](documents.md#a-word-file-that-came-back-compare-it-with-the-paper)).
 * `--version` and `version` both show the MathShuttle, pandoc and texmath versions and the pandoc path.
 * `get-pandoc` downloads pandoc's own release for this system from GitHub, checks its size and
   SHA-256 against the values MathShuttle carries, and installs the program for this user only
