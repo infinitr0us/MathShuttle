@@ -85,7 +85,7 @@ def test_diagram_with_paper_definition_arrows_and_label(tmp_path, monkeypatch, u
     assert int(extent.get("cy")) / 914400 == pytest.approx(height / 300, abs=0.005)
     # Both letters alone would also give a non-blank PNG. Check for the shaft
     # between them and for the label above the shaft, independent of margins.
-    from PIL import Image
+    Image = pytest.importorskip("PIL.Image", reason="Pillow (a development package) reads the picture's pixels")
     with Image.open(io.BytesIO(pngs[0])) as im:
         rgba = im.convert("RGBA")
         white = Image.new("RGBA", im.size, "white")

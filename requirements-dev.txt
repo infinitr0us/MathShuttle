@@ -1,5 +1,5 @@
 # Runtime needs only the Python standard library + pandoc (winget install JohnMacFarlane.Pandoc).
 pytest
 pyinstaller
-pillow          # tools/make_icon.py
+pillow          # tools/make_icon.py, tests/test_word_pictures.py (pixels of a picture)
 pywin32         # tests/office_smoke.py (Word / PowerPoint COM automation)
