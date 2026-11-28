@@ -1,0 +1,52 @@
+# Documents
+
+## Open file: the equations of a document
+
+**Open file…** lists the equations in a `.docx`, `.pptx`, `.tex` or `.md` file
+with the surrounding sentence and location (heading, slide title or LaTeX label). If a matching
+`.aux` file is available, the location also shows the equation number LaTeX assigned.
+Type in **Filter** to search the LaTeX or location, ignoring case. **Display only** starts checked
+for documents with more than 200 equations. **Distinct only** groups matching occurrences with
+identical LaTeX, showing the first occurrence and the count.
+
+Select a row to use it as input or copy it for Word / PowerPoint or as LaTeX. Use Ctrl (Cmd on
+macOS) or Shift to select several rows. **Export selected as .tex…** writes those rows in document
+order with their original positions. Use and Copy act on the first selected row. The two **Export
+all** options write the entire document to a LaTeX file or to a Word document containing native
+equations under their locations.
+Office equations go through the same Tidy LaTeX as a pasted one. A `.tex` file is read with its
+`\input` / `\include` files, and its own definitions apply to its equations without a macro file:
+those pandoc expands itself and those it does not (`\DeclarePairedDelimiter`, xparse's
+`\NewDocumentCommand`, the `\foreach \x in {A,...,Z}` loop that defines `\calA`...`\calZ`), also from
+a `.sty` next to it. With the `.aux` file LaTeX wrote next to it, `\eqref{eq:loss}` inside an equation
+shows its number, (2.1). When pandoc cannot read the preamble at all (a conference style file it trips
+over), the body is read alone, with the preamble's definitions, and a note says so. An equation that
+still cannot be converted is listed with its reason; in the Word export it is kept as LaTeX text
+under its line, with the reason. Equations made with the old Equation Editor 3.0 or MathType (objects
+without Office Math inside) cannot be read; their number is reported.
+
+## A passage or a whole paper as a Word file
+
+**Save as Word...** writes the input, a chat answer,
+Markdown notes or a piece of LaTeX, as a Word document: its prose, headings, lists, tables and code as
+they are, and each equation a native Word equation, made as *Copy for Word/PowerPoint* makes it (your
+macros, the built-in packs). On the command line, `mathshuttle word FILE -o OUT.docx` does the same for a
+passage. For a whole `.tex` or `.md` file, **Whole file as Word...** in the window of **Open file...** (or
+`mathshuttle word paper.tex -o paper.docx`) writes the document: its title, authors and abstract,
+with the paper's own definitions, and each numbered equation's number at the right margin as Word
+numbers equations itself. The numbers are the ones LaTeX gives: counted as LaTeX counts them
+(`equation` and `multline` one number, `align`, `gather`, `eqnarray`, `flalign` and `alignat` one per
+row, `\nonumber`, `\notag`, `\tag` and starred environments as LaTeX has them) when the paper numbers
+equations (1), (2)... in order, and checked against the `.aux` file LaTeX wrote next to it when there
+is one. A paper that numbers equations by chapter or section (a thesis, `\numberwithin`) or sets the
+counter itself gets the `.aux` numbers of its labelled equations (so compile it once first), and a
+note says what was done.
+
+`\eqref`, `\ref`, `\cref`, `\Cref` and `\autoref` show what LaTeX prints
+("(2)", "eq. (2)", "Section 3", "Figure 1"), and citations their numbers from the `.aux` file, or
+author and year for natbib without its `numbers` option ("(Smith et al., 2020)"). An equation that
+cannot be converted stays LaTeX text, followed by the reason. The rest is pandoc's reading of the
+paper: figures (found as LaTeX finds them, also in `\graphicspath` folders; Word takes no PDF or EPS
+figure, so one goes in only when a PNG or JPEG of the same name is beside it, and the others are
+named), tables and sections as pandoc converts them, and a command pandoc does not know is left out,
+as in pandoc's own conversions (`\pageref` and `\nameref` among them).

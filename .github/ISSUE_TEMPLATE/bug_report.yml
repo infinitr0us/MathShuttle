@@ -1,0 +1,40 @@
+name: Something went wrong
+description: An equation converts wrongly, Word or PowerPoint gets something odd, or the app fails.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time. The more exactly we can repeat what you saw, the faster it gets fixed.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: For example "Copy for Word gave a matrix instead of aligned lines".
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: The input
+      description: |
+        The LaTeX you typed or pasted (with the macros it uses, if any), or a description of the equation
+        you copied in Word or PowerPoint. Leave out anything private; a smaller example that shows the same
+        problem is just as good.
+      render: latex
+  - type: textarea
+    id: output
+    attributes:
+      label: What MathShuttle gave
+      description: The output, the message in the status bar, or a screenshot.
+  - type: textarea
+    id: details
+    attributes:
+      label: Versions
+      description: |
+        In the window: Help (? or F1) > *Copy details for a bug report*, then paste here.
+        On the command line: `mathshuttle --version`. Please also give your Word / PowerPoint version if
+        Office is involved (File > Account > About).
+      render: text
+    validations:
+      required: true

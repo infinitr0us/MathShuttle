@@ -1,0 +1,20 @@
+name: An idea
+description: Something MathShuttle could do for your work with equations.
+labels: [idea]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you are trying to do
+      description: The task, as you would do it today (for example "send my supervisor a Word version of chapter 3").
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How MathShuttle could help
+  - type: textarea
+    id: example
+    attributes:
+      label: An example
+      description: A piece of LaTeX, a description of the Word document or slide, or a small file.
