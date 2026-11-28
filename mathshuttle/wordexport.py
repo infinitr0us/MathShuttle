@@ -11,7 +11,7 @@ counted out; checked against a real LaTeX run) in a document that numbers equati
 order, and checked against the .aux file LaTeX wrote next to it when there is one.  A document that
 numbers them by chapter or section, or sets the counter itself, gets the .aux numbers of its labelled
 equations only.  \\eqref, \\ref, \\cref, \\Cref, \\autoref and citations show what LaTeX prints for them.
-An equation that texmath cannot write stays LaTeX text, with the reason after it.
+An equation that texmath cannot write goes in as a picture if LaTeX can draw it, else as text with the reason.
 """
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ import re
 import tempfile
 import time
 import zipfile
+from dataclasses import dataclass
+from itertools import groupby
 from typing import Dict, List, Optional, Tuple
 
 from . import compat
@@ -91,11 +93,12 @@ def passage_blocks(text: str) -> Tuple[list, bool]:
     return json.loads(_run(["-f", "latex", "-t", "json"], text.encode("utf-8"))[0])["blocks"], False
 
 
-def passage_to_word(text: str, path: str, macros: Optional[compat.Macros] = None) -> List[str]:
+def passage_to_word(text: str, path: str, macros: Optional[compat.Macros] = None, *, pictures: bool = True) -> List[str]:
     """The window's input (`text`, LaTeX or a chat answer / Markdown) as a Word document at `path`."""
     from .convert import input_macros
     blocks, as_markdown = passage_blocks(text)
-    return write_word(blocks, path, input_macros(macros, text, "latex", as_markdown), markdown=as_markdown)
+    return write_word(blocks, path, input_macros(macros, text, "latex", as_markdown), markdown=as_markdown,
+                      pictures=pictures, passage=text)
 
 
 def _local_class(source: str, text: str) -> str:
@@ -121,7 +124,7 @@ def _cite_style(sources: str) -> str:
     return "numeric" if numbers else "authoryear"
 
 
-def document_to_word(source: str, path: str, macros: Optional[compat.Macros] = None) -> List[str]:
+def document_to_word(source: str, path: str, macros: Optional[compat.Macros] = None, *, pictures: bool = True) -> List[str]:
     """A whole .tex or .md file as a Word document at `path`; a .tex file with its own definitions, its
     equation numbers and the numbers of its .aux file."""
     from . import documents
@@ -169,7 +172,7 @@ def document_to_word(source: str, path: str, macros: Optional[compat.Macros] = N
     notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
               if line.startswith("[WARNING]") and "Could not convert TeX math" not in line]
     return write_word(blocks, path, own, labels, notes, folder, markdown=ext == ".md", meta=meta, plans=plans,
-                      source_path=source)
+                      source_path=source, pictures=pictures)
 
 
 _PICTURES = ("", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".svg", ".emf", ".wmf")
@@ -457,6 +460,18 @@ def _numbering_changed(sources: str) -> bool:
 
 
 # ---- preparing the blocks -----------------------------------------------------------------------------
+@dataclass
+class _Equation:
+    node: dict
+    tex: str
+    prepared: str
+    macros: Optional[compat.Macros]  # the definitions in scope at this point in the passage
+
+    @property
+    def display(self):
+        return self.node["c"][0]["t"] == "DisplayMath"
+
+
 class _Prepare:
     """Walks pandoc JSON: raw TeX (in Markdown) read as LaTeX, each Math prepared for texmath with its
     numbers marked by sentinels, references and citations replaced by what LaTeX prints."""
@@ -474,7 +489,7 @@ class _Prepare:
         self.raw_kept = 0
         self.raw_dropped: Dict[str, int] = {}
         self.numbers: Dict[int, str] = {}       # sentinel id -> "(2.1)"
-        self.maths: List[Tuple[dict, str, str]] = []  # (Math node, original TeX, prepared TeX)
+        self.maths: List[_Equation] = []
         self.notes: List[str] = []
         self.definitions: List[str] = []        # raw TeX definitions so far (Markdown)
         self.read: Dict[str, bytes] = {}
@@ -498,7 +513,7 @@ class _Prepare:
             read = self.after_definitions(raw)
         except ConversionError:
             read = [{"t": "CodeBlock", "c": [["", [], []], raw]}]
-        if re.search(r"\\(?:input|include)(?![a-zA-Z@])", raw) or _MACRO_DEF.search(raw) or \
+        if re.search(r"\\(?:input|include|usepackage|RequirePackage)(?![a-zA-Z@])", raw) or _MACRO_DEF.search(raw) or \
                 re.search(r"\\(?:DeclareMathOperator|let)(?![a-zA-Z@])", raw):
             self.definitions.append(raw)
             # for the Markdown maths after it too ($\R$), which pandoc expands only from definitions written
@@ -553,7 +568,7 @@ class _Prepare:
         if t is None:  # the metadata (title, abstract: its citations and maths as the text's), a MetaMap's
             return {k: self.node(v) for k, v in node.items()}
         if t == "Math":
-            self.math(node)
+            node = self.math(node)
             if self.bookmark:
                 # Let pandoc put the bookmark in the right story, including a footnote or table.
                 return {"t": "Span", "c": [[self.bookmark + str(len(self.maths)), [], []], [node]]}
@@ -606,7 +621,7 @@ class _Prepare:
             return {"t": "Span", "c": [["", [], []], self.as_latex(read[0]["c"])]}
         return code
 
-    def math(self, node: dict) -> None:
+    def math(self, node: dict) -> dict:
         kind, tex = node["c"]
         marked = tex
         if kind["t"] == "DisplayMath":
@@ -616,8 +631,9 @@ class _Prepare:
             self.notes += [n for n in notes if n not in self.notes]
         except ConversionError:
             prepared = tex
-        node["c"] = [kind, prepared]
-        self.maths.append((node, tex, prepared))
+        node = dict(node, c=[kind, prepared])
+        self.maths.append(_Equation(node, tex, prepared, self.macros))
+        return node
 
     def mark_numbers(self, tex: str, plan: Optional[List[Optional[str]]] = None) -> str:
         """Each numbered row of a display with a sentinel at its end: its \\tag, its number counted as LaTeX
@@ -654,11 +670,12 @@ class _Prepare:
 def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
                labels: Optional[Dict[str, str]] = None, notes: Optional[List[str]] = None,
                folder: Optional[str] = None, markdown: bool = False, meta: Optional[dict] = None,
-               plans: Optional[Dict[int, List[Optional[str]]]] = None, source_path=None) -> List[str]:
+               plans: Optional[Dict[int, List[Optional[str]]]] = None, source_path=None, *, pictures: bool = True,
+               passage: str = "") -> List[str]:
     """`blocks` (pandoc JSON; read from Markdown when `markdown`; `meta`: its title, authors, abstract) as a
     Word document at `path`, written next to it first and then put in its place, with figures found from
     `folder`.  Returns notes (what was approximated, what could not be converted, numbers)."""
-    from . import diagnose, documents, wordmarks
+    from . import diagnose, documents, preview, wordmarks
     bookmark = wordmarks.temporary_prefix() if source_path else ""
     prep = _Prepare(macros, labels or {}, folder, markdown, plans, bookmark)
     meta = prep.node(meta or {})
@@ -679,26 +696,49 @@ def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
             path.write(data)
         return err
 
-    failed: Dict[int, str] = {}
+    picture_kinds = []
+    picture_errors = []
     try:
+        originals = wordmarks.sources(source_path, prep) if source_path and prep.maths else []
         if not memory:
             target = os.path.abspath(path)
             handle, part = tempfile.mkstemp(dir=os.path.dirname(target), prefix="." + os.path.basename(target) + ".",
                                             suffix=".part")
             os.close(handle)
         err = render()
-        failed = documents._unconverted(err, [p for _, _, p in prep.maths])
-        if failed:  # again, each such equation as its LaTeX (without sentinels) and the reason after it
+        failed = documents._unconverted(err, [eq.prepared for eq in prep.maths])
+        if failed:
+            displays = set()
+            alternatives = [o.body for o in originals]
+            if pictures and passage and compat.parse_definitions(passage)[0]:
+                raw, _ = wordmarks.raw_equations(passage, MARKDOWN if markdown else "latex")
+                alternatives = [eq.tex for eq in wordmarks.match_sources(prep.maths, raw)]
             for count, i in enumerate(sorted(failed), 1):
-                node, original, prepared = prep.maths[i - 1]
-                words = diagnose.explain(original, prepared, failed[i], short=True) if count <= 50 else []
-                node["c"] = [node["c"][0], original]
-                node["reason"] = words[0] if words else failed[i]
-            meta = _with_reasons(meta)
-            blocks = _with_reasons(blocks)
+                eq = prep.maths[i - 1]
+                if pictures:
+                    alt = alternatives[i - 1] if alternatives else eq.tex
+                    try:
+                        image = _equation_picture(eq, alt)
+                    except (preview.PreviewError, OSError) as exc:
+                        reason = str(exc).split(" (at: ", 1)[0]
+                        if reason not in picture_errors:
+                            picture_errors.append(reason)
+                    else:
+                        eq.node["picture"] = image
+                        if eq.display:
+                            displays.add(id(image))
+                        if originals:
+                            originals[i - 1].picture = True
+                        picture_kinds.append(_picture_kind(eq.tex, failed[i]))
+                        continue
+                words = diagnose.explain(eq.tex, eq.prepared, failed[i], short=True) if count <= 50 else []
+                eq.node["c"][1] = eq.tex
+                eq.node["reason"] = words[0] if words else failed[i]
+            meta = _with_fallbacks(meta, displays)
+            blocks = _with_fallbacks(blocks, displays)
             err = render()
         missing = sorted({m.group(1) for m in re.finditer(r"Could not fetch resource '?([^'\n]+?)'?(?::|\n|$)", err)})
-        numbered = _finish_docx(path if memory else part, prep, source_path)
+        numbered = _finish_docx(path if memory else part, prep, source_path, originals)
         for attempt in range(0 if memory else 5):
             try:
                 os.replace(part, target)
@@ -715,10 +755,19 @@ def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
                 os.remove(part)
             except OSError:
                 pass
-    if failed:
+    if picture_kinds:
+        kinds = ", ".join(dict.fromkeys(picture_kinds))
+        notes.append("1 equation went in as a picture (%s). It cannot be edited as an equation in Word." % kinds
+                     if len(picture_kinds) == 1 else
+                     "%d equations went in as pictures (%s). They cannot be edited as equations in Word." %
+                     (len(picture_kinds), kinds))
+    if picture_errors:
+        notes.append("Could not draw an equation picture: " + " / ".join(picture_errors))
+    as_text = len(failed) - len(picture_kinds)
+    if as_text:
         notes.append("%d equation%s could not be converted; %s in the file as LaTeX text with the reason after "
-                     "%s." % (len(failed), "" if len(failed) == 1 else "s", "it is" if len(failed) == 1 else "they are",
-                              "it" if len(failed) == 1 else "them"))
+                     "%s." % (as_text, "" if as_text == 1 else "s", "it is" if as_text == 1 else "they are",
+                              "it" if as_text == 1 else "them"))
     if missing:
         notes.append("Not found, so left out: %s." % ", ".join(missing[:5] + (["..."] if len(missing) > 5 else [])))
     if numbered:
@@ -756,23 +805,97 @@ def _inline_text(nodes) -> str:
     return "".join(words)
 
 
-def _with_reasons(node):
-    """The failed Math nodes (marked with "reason") followed by their reason, in bold."""
+def _equation_picture(eq, alt):
+    from . import packs, preview
+    definitions = preview.definitions_for(eq.tex, eq.macros)
+    loaded = eq.macros.packages if eq.macros is not None else set()
+    defined = set(eq.macros.definitions) if eq.macros is not None else set()
+    packages = list(eq.macros.package_lines) if eq.macros is not None else []
+    packages.extend(packs.packages_for(eq.tex, defined, loaded))
+    png, width, height = preview.render_picture(eq.tex, eq.display, definitions, packages)
+    attrs = [["width", "%.6fin" % width], ["height", "%.6fin" % height]]
+    return {"t": "Image", "c": [["", [], attrs], [{"t": "Str", "c": alt}], [png, ""]]}
+
+
+def _picture_kind(tex, reason):
+    env = re.search(r"\\begin\s*\{(tikzcd|tikzpicture|xy|CD|pspicture)\}", tex)
+    command = re.search(r"\\(?:ce|pu|xymatrix)(?![A-Za-z@])", tex) or re.search(r"\\[A-Za-z@]+", reason)
+    return env[1] if env else command[0] if command else "LaTeX"
+
+
+def _with_fallbacks(node, displays):
+    """Replace failed maths wherever pandoc put it, including table cells and footnotes."""
     if isinstance(node, list):
         out = []
         for n in node:
-            out.append(_with_reasons(n))
+            item = _with_fallbacks(n, displays)
+            if displays and isinstance(item, dict) and item.get("t") in ("Para", "Plain", "Header"):
+                out.extend(_picture_paragraphs(item, displays))
+            else:
+                out.append(item)
             if isinstance(n, dict) and n.get("t") == "Math" and n.get("reason"):
                 out += [{"t": "Space"}, {"t": "Strong", "c": [{"t": "Str", "c": "[not converted: %s]" % n["reason"]}]}]
         return out
     if isinstance(node, dict):
-        clean = {k: v for k, v in node.items() if k != "reason"}
+        if node.get("t") == "Math" and "picture" in node:
+            return node["picture"]
+        clean = dict(node)
+        if clean.get("t") == "Math":
+            clean.pop("reason", None)
         if "c" in clean:
-            clean["c"] = _with_reasons(clean["c"])
+            clean["c"] = _with_fallbacks(clean["c"], displays)
         elif "t" not in clean:  # the meta mapping
-            clean = {k: _with_reasons(v) for k, v in clean.items()}
+            clean = {k: _with_fallbacks(v, displays) for k, v in clean.items()}
         return clean
     return node
+
+
+_INLINE_CONTENT = {"Emph": None, "Strong": None, "Underline": None, "Strikeout": None, "Superscript": None,
+                   "Subscript": None, "SmallCaps": None, "Span": 1, "Link": 1, "Quoted": 1, "Cite": 1}
+
+
+def _picture_groups(inlines, displays):
+    """Group surrounding prose while keeping each display picture in its own group, including inside a span."""
+    def pieces():
+        for n in inlines:
+            if id(n) in displays or n["t"] not in _INLINE_CONTENT:
+                yield id(n) if id(n) in displays else None, n
+                continue
+            index = _INLINE_CONTENT[n["t"]]
+            children = n["c"] if index is None else n["c"][index]
+            groups = _picture_groups(children, displays)
+            if not any(key for key, _ in groups):
+                yield None, n
+                continue
+            for i, (key, group) in enumerate(groups):
+                content = group if index is None else list(n["c"])
+                if index is not None:
+                    content[index] = group
+                    if i and n["t"] in ("Span", "Link"):
+                        content[0] = ["", *content[0][1:]]  # retain the identifier only once
+                yield key, {"t": n["t"], "c": content}
+    return [(key, [n for _, n in group]) for key, group in groupby(pieces(), key=lambda item: item[0])]
+
+
+def _picture_paragraphs(block, displays):
+    """Split at each display picture, preserving paragraph styles and Word's equation bookmarks."""
+    heading = block["t"] == "Header"
+    parts = _picture_groups(block["c"][2] if heading else block["c"], displays)
+    if not any(display for display, _ in parts):
+        return [block]
+    blocks = []
+    for display, inlines in parts:
+        while inlines and inlines[-1]["t"] in ("Space", "SoftBreak"):
+            inlines.pop()
+        start = next((i for i, n in enumerate(inlines) if n["t"] not in ("Space", "SoftBreak")), len(inlines))
+        if start == len(inlines):
+            continue
+        if heading and not display:
+            blocks.append({"t": "Header", "c": [*block["c"][:2], inlines[start:]]})
+            heading = False
+        else:
+            blocks.append({"t": "Plain" if block["t"] == "Plain" and not display else "Para", "c": inlines[start:]})
+    return blocks
 
 
 # ---- numbers in the written file -------------------------------------------------------------------------
@@ -782,7 +905,7 @@ _ALIGN = "<m:r><m:t>&amp;</m:t></m:r>"
 _PARTS = ("word/document.xml", "word/footnotes.xml", "word/endnotes.xml")
 
 
-def _finish_docx(docx, prep, source_path) -> int:
+def _finish_docx(docx, prep, source_path, originals) -> int:
     """Finish the equation numbers and the source records of a whole-document export."""
     from . import wordmarks
     numbers = prep.numbers
@@ -805,7 +928,7 @@ def _finish_docx(docx, prep, source_path) -> int:
             if "QQMSN" in xml:
                 files[part] = re.sub(r"<m:oMath>([\s\S]*?)</m:oMath>", omath, xml).encode("utf-8")
     if source_path:
-        wordmarks.mark_export(files, source_path, prep)
+        wordmarks.mark_export(files, source_path, prep.bookmark, originals)
     if isinstance(docx, io.BytesIO):
         docx.seek(0)
         docx.truncate()

@@ -8,6 +8,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from collections import deque
 from dataclasses import dataclass, field
+from itertools import count
 from pathlib import Path
 from typing import Optional
 
@@ -261,9 +262,14 @@ def compare(returned_docx, paper_tex, macros=None) -> CompareResult:
             originals = wordmarks.manifest(z)
             if originals is None:
                 exported = io.BytesIO()
-                document_to_word(paper, exported, macros)
+                document_to_word(paper, exported, macros, pictures=False)
                 with zipfile.ZipFile(exported) as baseline:
                     originals = wordmarks.manifest(baseline)
+                pictures = wordmarks.picture_bookmarks(z)
+                numbers = (n for n in count(1) if n not in pictures)
+                for original in originals:
+                    original.n = next(numbers)
+            originals = [eq for eq in originals if not eq.picture]
             returned = _read_returned(z, originals)
     except ConversionError:
         raise

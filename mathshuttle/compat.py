@@ -608,16 +608,17 @@ def parse_definitions(text: str, document: bool = False) -> "Tuple[List[Definiti
         pos = d.span[1]
 
 
-_USEPACKAGE = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}")
+_USEPACKAGE = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[(?P<options>[^\]]*)\])?\s*\{(?P<names>[^{}]*)\}")
+
+
+def _package_requests(text: str):
+    """Package declarations in source order, with the options LaTeX will need."""
+    return (m for m in _USEPACKAGE.finditer(text) if not _in_comment(text, m.start()))
 
 
 def packages_in(text: str) -> set:
     """The packages that LaTeX source loads (\\usepackage{a,b})."""
-    names: set = set()
-    for m in _USEPACKAGE.finditer(text):
-        if not _in_comment(text, m.start()):
-            names.update(p.strip() for p in m.group(1).split(",") if p.strip())
-    return names
+    return {p.strip() for m in _package_requests(text) for p in m["names"].split(",") if p.strip()}
 
 
 _VERBATIM = re.compile(r"\\begin\s*\{(verbatim\*?|Verbatim\*?|lstlisting|minted|comment|BVerbatim|LVerbatim)\}"
@@ -670,7 +671,7 @@ def pandoc_leftovers(text: str) -> str:
             break
         names |= more
     keep = [d.source for d in defs if d.paired or d.loop or d.name in names or _in(hooks, d.span[0])]
-    keep += ["\\usepackage{%s}" % p for p in sorted(packages_in(text))]
+    keep.extend(m[0] for m in _package_requests(text))
     return "\n".join(keep)
 
 
@@ -690,6 +691,7 @@ class Macros:
         self.skipped: List[str] = []
         self.errors: List[str] = []
         self.packages: set = set()
+        self.package_lines: List[str] = []
         self.labels: Dict[str, str] = dict(labels or {})
         for path in self.files:
             try:
@@ -710,7 +712,9 @@ class Macros:
             self.order.append(d)
         if not document:  # (a document's own skipped definitions are pandoc's business)
             self.skipped += skipped
-        self.packages |= packages_in(text)
+        for request in _package_requests(text):
+            self.packages.update(p.strip() for p in request["names"].split(",") if p.strip())
+            self.package_lines.append(request[0])
 
     def __len__(self) -> int:
         return len(self.definitions)

@@ -176,7 +176,8 @@ def _cli(argv: list[str]) -> int:
         "word", "Write a passage or a whole .tex / .md document as a Word file with native equations.",
         description="Write a passage (a chat answer, Markdown notes, LaTeX text: a file, -e TEXT or standard "
                     "input) or a whole .tex / .md document as a Word file: its prose, headings, lists and tables, "
-                    "and each equation a native Word equation. A .tex file gets its own definitions, and the "
+                    "and native Word equations. Equations Word cannot convert go in as pictures if LaTeX can "
+                    "draw them, or as text with the reason. A .tex file gets its own definitions, and the "
                     "equation numbers of its .aux file at the right margin.")
     command("version", version_help)
     get_cmd = command("get-pandoc", "Download and install pandoc for this user.")
@@ -187,6 +188,8 @@ def _cli(argv: list[str]) -> int:
     word_input.add_argument("file", nargs="?", metavar="FILE",
                             help="a .tex or .md document, or a text file with a passage (default: standard input)")
     word_cmd.add_argument("-o", "--output", required=True, metavar="OUT", help="the Word file to write (.docx)")
+    word_cmd.add_argument("--no-pictures", action="store_true",
+                          help="keep equations Word cannot convert as LaTeX text with the reason")
     word_cmd.add_argument("--macros", action="append", default=[], metavar="FILE",
                           help="load LaTeX macro definitions from FILE (repeatable)")
 
@@ -277,10 +280,12 @@ def _cli(argv: list[str]) -> int:
         elif args.cmd == "word":
             from . import wordexport
             if args.file and os.path.splitext(args.file)[1].lower() in (".tex", ".md"):
-                notes = wordexport.document_to_word(args.file, args.output, load_macros(args.macros))
+                notes = wordexport.document_to_word(args.file, args.output, load_macros(args.macros),
+                                                    pictures=not args.no_pictures)
             else:
                 source = _read_source(args.file, args.expr, args.cmd)
-                notes = wordexport.passage_to_word(source, args.output, load_macros(args.macros))
+                notes = wordexport.passage_to_word(source, args.output, load_macros(args.macros),
+                                                   pictures=not args.no_pictures)
             sys.stderr.write("".join(n + "\n" for n in notes) + "written to %s\n" % args.output)
         elif args.cmd == "convert":
             source = _read_source(args.file, args.expr, args.cmd)

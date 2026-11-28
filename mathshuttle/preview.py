@@ -10,11 +10,12 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import time
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 _FLAGS = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
 PACKAGES = r"\usepackage{amsmath,amssymb,amsfonts,mathtools,bm}"
@@ -60,32 +61,34 @@ def _tex_env(latex: str) -> Optional[dict]:
 
 
 def tools() -> Optional[dict]:
-    """{"latex": path, "dvipng": path, "miktex": bool, "packages": preamble, "env": for subprocess} or None
-    without LaTeX."""
+    """The available LaTeX engines, PNG converters and preamble, or None without a rendering route."""
     global _tools
     if _tools is None:
         latex, dvipng = _which("latex"), _which("dvipng")
-        if not latex or not dvipng:
+        pdflatex = _which("pdflatex")
+        gs = next((path for name in ("mgs", "gs", "gswin64c", "gswin32c") if (path := _which(name))), None)
+        cairo, ppm = _which("pdftocairo"), _which("pdftoppm")
+        if not ((latex and dvipng) or (pdflatex and (gs or cairo or ppm))):
             _tools = {}
         else:
-            env = _tex_env(latex)
+            env = _tex_env(latex or pdflatex)
             try:
-                version = subprocess.run([latex, "--version"], capture_output=True, timeout=20,
+                version = subprocess.run([latex or pdflatex, "--version"], capture_output=True, timeout=20,
                                          creationflags=_FLAGS, env=env).stdout.decode("utf-8", "replace")
             except (OSError, subprocess.TimeoutExpired):
                 version = ""
+            miktex = "MiKTeX" in version or "miktex" in (latex or pdflatex).lower()
+            if miktex:
+                env = dict(env or os.environ, MIKTEX_MPM_AUTOINSTALL="0")
+            # MiKTeX's kpsewhich may install a missing package. Its native findtexmf
+            # only looks up files unless explicitly called with -must-exist.
+            lookup = _which("findtexmf" if miktex else "kpsewhich")
             packages = PACKAGES
-            kpsewhich = _which("kpsewhich")
             for name in OPTIONAL_PACKAGES:
-                try:
-                    found = kpsewhich and subprocess.run([kpsewhich, name + ".sty"], capture_output=True,
-                                                         timeout=20, creationflags=_FLAGS, env=env).stdout.strip()
-                except (OSError, subprocess.TimeoutExpired):
-                    found = False
-                if found:
+                if _has_package(lookup, name, env):
                     packages += "\n\\usepackage{%s}" % name
-            _tools = {"latex": latex, "dvipng": dvipng, "miktex": "MiKTeX" in version, "packages": packages,
-                      "env": env}
+            _tools = {"latex": latex, "dvipng": dvipng, "pdflatex": pdflatex, "gs": gs, "cairo": cairo, "ppm": ppm,
+                      "miktex": miktex, "packages": packages, "lookup": lookup, "env": env}
     return _tools or None
 
 
@@ -146,26 +149,31 @@ def latex_command(t: dict, name: str) -> List[str]:
     "restricted"), and no MiKTeX package-install dialog."""
     args = [t["latex"], "-interaction=nonstopmode", "-halt-on-error", "-no-shell-escape"]
     if t["miktex"]:
-        args.append("-disable-installer")
+        args.append("--disable-installer")
     return args + [name]
 
 
 _INSTALLED: dict = {}
 
 
+def _has_package(lookup, package, env):
+    if not lookup:
+        return False
+    try:
+        p = subprocess.run([lookup, package + ".sty"], cwd=tempfile.gettempdir(), capture_output=True, timeout=20,
+                           creationflags=_FLAGS, env=env)
+        return p.returncode == 0 and os.path.isfile(os.fsdecode(p.stdout.strip()))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+
 def installed(package: str) -> bool:
-    """Whether the LaTeX installation has `package` (kpsewhich; remembered)."""
+    """Whether the LaTeX installation already has the package, remembered between renders."""
     t = tools()
     if t is None:
         return False
     if package not in _INSTALLED:
-        kpsewhich = _which("kpsewhich")
-        try:
-            _INSTALLED[package] = bool(kpsewhich and subprocess.run(
-                [kpsewhich, package + ".sty"], capture_output=True, timeout=20, creationflags=_FLAGS,
-                env=t.get("env")).stdout.strip())
-        except (OSError, subprocess.TimeoutExpired):
-            _INSTALLED[package] = False
+        _INSTALLED[package] = _has_package(t["lookup"], package, t.get("env"))
     return _INSTALLED[package]
 
 
@@ -176,24 +184,117 @@ def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
     installation has them.  Cached by content."""
     t = tools()
     if t is None:
-        raise PreviewError("no LaTeX installation (latex and dvipng) on PATH")
-    work = work or cache_dir()
+        raise PreviewError("no LaTeX installation for drawing a preview was found")
     lines = [_LINE % math_line(eq.tex, eq.display) for eq in equations]
     body = lines[0] if len(lines) == 1 else "\\begin{tabular}{@{}c@{}}%s\\end{tabular}" % "\\\\[8pt]\n".join(lines)
     extra = "".join("\n\\usepackage{%s}" % p for p in packages if installed(p))
     source = TEMPLATE % {"packages": t["packages"] + extra, "definitions": "\n".join(definitions), "body": body}
-    key = hashlib.sha1(("%d\0%s" % (dpi, source)).encode("utf-8")).hexdigest()[:20]
+    return _render_source(t, source, dpi, work or cache_dir(), pdf=not (t["latex"] and t["dvipng"]))
+
+
+_PICTURE_DPI = 300
+_PICTURE_PACKAGES = ((r"\\begin\s*\{tikzcd\}", "tikz-cd", ""),
+                     (r"\\(?:ce|pu)(?![A-Za-z@])", "mhchem", "version=4"),
+                     (r"\\xymatrix(?![A-Za-z@])", "xy", "all"))
+_FILE_COMMAND = re.compile(r"\\(?:@*input|include|subfile|import|subimport|endinput|InputIfFileExists|IfFileExists|"
+                           r"includegraphics|verbatiminput|lstinputlisting|openin|openout|read|write|"
+                           r"pdf[a-z]*(?:file|image)[a-z]*|usepackage|RequirePackage|catcode|csname)"
+                           r"(?![A-Za-z@])|\^\^")
+
+
+def _picture_preamble(tex, packages, defaults):
+    """Load installed packages by name, retaining literal options and applying them before dependencies load."""
+    from .compat import _USEPACKAGE, _group_end
+    names = {}
+    for line in packages:
+        request = _USEPACKAGE.fullmatch(line)
+        options = (request["options"] or "") if request else ""
+        # A package is looked up in the installation, never by a path supplied by the paper.
+        for name in (request["names"] if request else line).split(","):
+            name = name.strip()
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or not installed(name):
+                continue
+            opts = names.setdefault(name, [])
+            if options and options not in opts:
+                if not re.fullmatch(r"[\w=,.\s:{}+-]*", options) or _group_end("{" + options + "}", 0) != len(options) + 2:
+                    raise PreviewError("the options for %s need more than literal names or values" % name)
+                opts.append(options)
+    for pattern, name, options in _PICTURE_PACKAGES:
+        if re.search(pattern, tex):
+            if not installed(name):
+                raise PreviewError("the LaTeX package %s is missing" % name)
+            if not names.get(name):
+                names[name] = [options] if options else []
+    before = [r"\PassOptionsToPackage{%s}{%s}" % (",".join(opts), name)
+              for name, opts in names.items() if opts]
+    loads = [r"\usepackage{%s}" % name for name in names]
+    return "\n".join(before + [r"\documentclass[border=1pt,12pt]{standalone}", defaults] + loads)
+
+
+def render_picture(tex: str, display: bool, definitions: Sequence[str] = (), packages: Sequence[str] = (),
+                   work: Optional[str] = None) -> Tuple[str, float, float]:
+    """A print-resolution PNG and its width and height in inches, including diagram arrows and labels."""
+    t = tools()
+    if t is None:
+        raise PreviewError("no LaTeX installation was found")
+    if not (t["pdflatex"] and (t["gs"] or t["cairo"] or t["ppm"])):
+        raise PreviewError("drawing a picture needs pdfLaTeX and Ghostscript or Poppler")
+    used = "\n".join([*definitions, tex])
+    if _FILE_COMMAND.search(used):
+        raise PreviewError("the equation needs a file or a command that cannot be used in a picture")
+    preamble = _picture_preamble(used, packages, t["packages"])
+    source = "\n".join([preamble, *definitions, r"\begin{document}", math_line(tex, display), r"\end{document}"])
+    png = _render_source(t, source, _PICTURE_DPI, work or cache_dir(), pdf=True)
+    width, height = _png_size(png)
+    return png, width / _PICTURE_DPI, height / _PICTURE_DPI
+
+
+def _png_size(path):
+    with open(path, "rb") as f:
+        header = f.read(24)
+    if len(header) != 24 or header[:8] != b"\x89PNG\r\n\x1a\n" or header[12:16] != b"IHDR":
+        raise PreviewError("the converter did not write a PNG")
+    return struct.unpack(">II", header[16:])
+
+
+def _pdf_to_png(t, dpi, job):
+    """Rasterise the cropped PDF page, trying the other installed converter if the first fails."""
+    commands = []
+    if t["gs"]:
+        commands.append([t["gs"], "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dFirstPage=1", "-dLastPage=1",
+                         "-sDEVICE=png16m", "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4", "-r%d" % dpi,
+                         "-sOutputFile=eq.png", "eq.pdf"])
+    for converter in (t["cairo"], t["ppm"]):
+        if converter:
+            commands.append([converter, "-png", "-singlefile", "-r", str(dpi), "-f", "1", "-l", "1", "eq.pdf", "eq"])
+    for args in commands:
+        try:
+            p = subprocess.run(args, cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS, env=t.get("env"))
+            if p.returncode == 0 and all(_png_size(os.path.join(job, "eq.png"))):
+                return
+        except (OSError, subprocess.TimeoutExpired, PreviewError):
+            continue
+    raise PreviewError("the PDF could not be drawn as a PNG by Ghostscript or Poppler")
+
+
+def _render_source(t, source, dpi, work, pdf):
+    key = hashlib.sha1(("%s\0%d\0%s" % ("pdf" if pdf else "dvi", dpi, source)).encode("utf-8")).hexdigest()[:20]
     png = os.path.join(work, key + ".png")
     if os.path.exists(png):
         return png
     # each job in a folder of its own (two renders of the same equation must not delete each other's
     # files); the finished picture is moved into the cache in one step
     job = tempfile.mkdtemp(prefix="job-", dir=work)
-    with open(os.path.join(job, "eq.tex"), "w", encoding="utf-8") as f:
-        f.write(source)
     try:
-        p = subprocess.run(latex_command(t, "eq.tex"), cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS,
-                           env=t.get("env"))
+        with open(os.path.join(job, "eq.tex"), "w", encoding="utf-8") as f:
+            f.write(source)
+        engine = dict(t, latex=t["pdflatex"]) if pdf else t
+        env = t.get("env")
+        if pdf:
+            env = dict(env or os.environ, openin_any="p", openout_any="p",
+                       MIKTEX_CORE_ALLOWUNSAFEINPUTFILES="false", MIKTEX_CORE_ALLOWUNSAFEOUTPUTFILES="false")
+        p = subprocess.run(latex_command(engine, "eq.tex"), cwd=job, capture_output=True, timeout=40,
+                           creationflags=_FLAGS, env=env)
         if p.returncode:
             log = p.stdout.decode("utf-8", "replace")
             errors = [ln for ln in log.splitlines() if ln.startswith("!")]
@@ -202,10 +303,14 @@ def render(equations: Sequence, definitions: Sequence[str] = (), dpi: int = 130,
             at = at.replace("\\MathShuttleEdge", "").replace("\\hspace{1pt}", "").replace("$\\displaystyle ", "$")
             raise PreviewError("LaTeX: " + (errors[0][2:] if errors else "failed") +
                                (" (at: %s)" % at.strip()[-60:] if at.strip() else ""))
-        p = subprocess.run([t["dvipng"], "-D", str(dpi), "-T", "tight", "-bg", "White", "-q", "-o", "eq.png",
-                            "eq.dvi"], cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS, env=t.get("env"))
-        if p.returncode or not os.path.exists(os.path.join(job, "eq.png")):
-            raise PreviewError("dvipng failed: " + p.stderr.decode("utf-8", "replace").strip()[-200:])
+        if pdf:
+            _pdf_to_png(t, dpi, job)
+        else:
+            p = subprocess.run([t["dvipng"], "-D", str(dpi), "-T", "tight", "-bg", "White", "-q", "-o", "eq.png",
+                                "eq.dvi"], cwd=job, capture_output=True, timeout=40, creationflags=_FLAGS,
+                               env=t.get("env"))
+            if p.returncode or not os.path.exists(os.path.join(job, "eq.png")):
+                raise PreviewError("dvipng failed: " + p.stderr.decode("utf-8", "replace").strip()[-200:])
         for attempt in range(5):
             try:
                 os.replace(os.path.join(job, "eq.png"), png)

@@ -27,6 +27,15 @@ class Original:
     labels: list[str] = field(default_factory=list)
     numbers: list[str] = field(default_factory=list)
     key: str = ""
+    picture: bool = False
+
+    @property
+    def body(self):
+        tex = self.tex.strip()
+        for opening, closing, _ in _DELIMITERS:
+            if tex.startswith(opening) and tex.endswith(closing):
+                return tex[len(opening):-len(closing)].strip()
+        return tex
 
     @property
     def number(self):
