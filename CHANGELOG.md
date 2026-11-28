@@ -18,6 +18,8 @@ their SHA-256 sums and what each release was tested with.
 - An equation numbered at the right margin in Word (as the Word export writes them) read back as an
   `array` with `#(1)` in it; its number is now taken off and shown with its location.
 - Tracked changes inside equations of a `.docx` are read as Word shows them with all changes accepted.
+- Two copies made at the same moment (the window and a command, say) could leave one of them out of the
+  memory that brings your LaTeX back from Office (Windows).
 
 ## 0.8.0 (2026-11-28)
 
