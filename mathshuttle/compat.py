@@ -614,13 +614,19 @@ _LIBRARY_NAME = r"[a-zA-Z0-9]+(?:[._-][a-zA-Z0-9]+)*"
 _TIKZ_LIBRARIES = re.compile(r"\\usetikzlibrary\s*\{\s*" + _LIBRARY_NAME + r"(?:\s*,\s*" + _LIBRARY_NAME + r")*\s*\}")
 
 
+# a colour the paper defines for its diagrams: literal names and values only
+COLOR_LINE = re.compile(r"\\definecolor\s*\{[\w.:-]+\}\s*\{[\w/,]+\}\s*\{[\w.,\s!-]+\}"
+                        r"|\\colorlet\s*\{[\w.:-]+\}\s*\{[\w.!\s-]+\}")
+
+
 def _library_lines(text: str):
-    """Literal TikZ library declarations outside comments and verbatim examples."""
-    if r"\usetikzlibrary" in text:
+    """Literal TikZ library declarations and colour definitions outside comments and verbatim examples."""
+    if r"\usetikzlibrary" in text or r"\definecolor" in text or r"\colorlet" in text:
         text = without_verbatim(text)
-        for match in _TIKZ_LIBRARIES.finditer(text):
-            if not _in_comment(text, match.start()):
-                yield match[0]
+        for pattern in (_TIKZ_LIBRARIES, COLOR_LINE):
+            for match in pattern.finditer(text):
+                if not _in_comment(text, match.start()):
+                    yield match[0]
 
 
 def _package_requests(text: str):

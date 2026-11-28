@@ -188,12 +188,14 @@ def test_a_lock_still_being_deleted_is_waited_for(store, monkeypatch):
 
 
 def test_a_folder_that_is_always_denied_gives_up_soon(store, monkeypatch):
-    import time
+    attempts = []
 
     def denied(path, flags, *rest):
+        attempts.append(path)
         raise PermissionError(13, "Access is denied", path)
 
     monkeypatch.setattr(recall.os, "open", denied)
-    start = time.time()
+    monkeypatch.setattr(recall.time, "sleep", lambda s: None)
     recall.remember(_MATHML, "x_1", True)
-    assert time.time() - start < 1.5 and not store.exists()
+    # far fewer tries than waiting out another process's lock (100 of them, about 2 s)
+    assert 1 < len(attempts) <= 30 and not store.exists()

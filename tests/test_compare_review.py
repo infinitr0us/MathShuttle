@@ -392,9 +392,26 @@ def test_reordered_labels(tmp_path):
     assert r"b&=2\label{b}\\a&=1\label{a}" in compact(text)
 
 
-def test_ambiguous_labels_reported(tmp_path):
+def test_identical_rows_edited_in_place_keep_their_places(tmp_path):
     paper, docx = export(tmp_path, r"\begin{align}x&=1\label{a}\\x&=1\label{b}\end{align}")
     text, notes = corrected(tmp_path, paper, edit(docx, lambda r: change_text(r, "1", "2")))
+    assert not notes and r"x&=2\label{a}\\x&=1\label{b}" in compact(text)
+
+
+def test_ambiguous_labels_reported(tmp_path):
+    # rows swapped and both edited: which label goes where cannot be told
+    paper, docx = export(tmp_path, r"\begin{align}x&=1\label{a}\\y&=1\label{b}\\z&=1\label{c}\end{align}")
+
+    def swap_and_edit(root):
+        array = next(root.iter(M + "eqArr"))
+        first, second = array.findall(M + "e")[:2]
+        array.remove(second)
+        array.insert(list(array).index(first), second)
+        for t in root.iter(M + "t"):
+            if t.text == "1" and len([x for x in root.iter(M + "t") if x.text == "2"]) < 2:
+                t.text = "2"
+
+    text, notes = corrected(tmp_path, paper, edit(docx, swap_and_edit))
     assert notes and text == paper.read_text()
 
 

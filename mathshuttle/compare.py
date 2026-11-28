@@ -270,11 +270,20 @@ def _match(originals, returned):
 def _align_gap(originals, keys, a, b, pairs, uncertain, unplaced):
     before, after = [originals[i].key for i in a], [keys[j] for j in b]
     counts = Counter(after)
-    for value, count in Counter(before).items():
-        if count > 1 and counts[value] != count and any(_ratio(value, key) >= 0.5 for key in after):
-            uncertain.update(a)
-            unplaced.update(b)
-            return
+    doubtful = {value for value, count in Counter(before).items()
+                if count > 1 and counts[value] != count and any(_ratio(value, key) >= 0.5 for key in after)}
+    if doubtful:
+        # A repeated equation (x = 1 twice) added, deleted or changed once: which occurrence it was is
+        # not known. Only those are left undecided; the others are still aligned.
+        known = set(before) - doubtful
+        out_a = {i for i in a if originals[i].key in doubtful}
+        out_b = {j for j in b if keys[j] in doubtful
+                 or (keys[j] not in known and any(_ratio(value, keys[j]) >= 0.5 for value in doubtful))}
+        uncertain.update(out_a)
+        unplaced.update(out_b)
+        a = [i for i in a if i not in out_a]
+        b = [j for j in b if j not in out_b]
+        before, after = [originals[i].key for i in a], [keys[j] for j in b]
     matcher = difflib.SequenceMatcher(None, before, after, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":

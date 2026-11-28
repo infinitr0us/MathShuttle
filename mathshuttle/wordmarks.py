@@ -1,6 +1,7 @@
 """Write and read the equation source records in a Word document's custom XML part."""
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -119,6 +120,9 @@ def _trace_sources(tree, maths, raw):
                 offset = a + end.start()
             insert(path, offset, (path, (a, b), ""))
         for definition in compat.parse_definitions(source)[0]:
+            if re.fullmatch(r"\}?\s*(?:\[[^\]]*\]\s*)*\{?\s*\\(?:end\s*\{[^{}]+\}|\]|\))\s*\}?\s*",
+                            compat._after_name(definition)):
+                continue  # a shorthand that only closes an equation (\ee): the maths is the paper's own
             # Label maths created in prose, where there are no literal delimiters at the call.
             ends = [b - (2 if definition.source.startswith("$$", a) else 1)
                     for a, b in _dollar_spans(definition.source).items()]
@@ -146,15 +150,25 @@ def _trace_sources(tree, maths, raw):
         return {}
     _split_grouped(blocks)
     _collect_math([meta, blocks], traced)
-    if len(traced) != len(maths) or any(eq.display != actual.display or
-            _same_source(mark.sub("", eq.tex)) != _same_source(actual.tex) for eq, actual in zip(traced, maths)):
-        return {}
+    # Pair the traced formulas with the export's by content: the export leaves out some that tracing
+    # sees (`\cite[Theorem $3.1$]{x}` is printed as a citation), which must not cost the others.
+    seen = [(eq.display, _same_source(mark.sub("", eq.tex))) for eq in traced]
+    wanted = [(eq.display, _same_source(eq.tex)) for eq in maths]
+    if seen == wanted:
+        pairs = list(enumerate(range(len(traced))))
+    else:
+        matcher = difflib.SequenceMatcher(None, seen, wanted, autojunk=False)
+        pairs = [(j, i) for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag == "equal"
+                 for i, j in zip(range(i1, i2), range(j1, j2))]
+    traced = {j: traced[i] for j, i in pairs}
+    # An equation's own mark ends it (it was put before the closing delimiter); a mark in the middle
+    # belongs to a formula nested in it (`\text{for $x$}` in a display made by \be ... \ee).
+    own = re.compile(prefix + r"(\d+)Z\s*(?:\\end\s*\{[^{}]+\}\s*)*$")
     result = {}
-    for i, eq in enumerate(traced):
-        marks = [origins[int(n)] for n in mark.findall(eq.tex)]
-        literal = [origin for origin in marks if origin[0] is not None]
-        if len(literal or marks) == 1:
-            result[i] = (literal or marks)[0]
+    for i, eq in traced.items():
+        last = own.search(eq.tex)
+        if last:
+            result[i] = origins[int(last[1])]
     return result
 
 

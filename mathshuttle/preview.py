@@ -208,13 +208,17 @@ _FILE_COMMAND = re.compile(r"\\(?:@*input|include|subfile|import|subimport|endin
 
 def _picture_preamble(tex, packages, defaults):
     """Load installed maths packages, their literal options and the paper's TikZ libraries."""
-    from .compat import _TIKZ_LIBRARIES, _group_end, _package_requests
+    from .compat import _TIKZ_LIBRARIES, COLOR_LINE, _group_end, _package_requests
     names = {}
-    libraries = []
+    libraries, colors = [], []
     for line in packages:
         if _TIKZ_LIBRARIES.fullmatch(line):
             if line not in libraries:
                 libraries.append(line)
+            continue
+        if COLOR_LINE.fullmatch(line):
+            if line not in colors:
+                colors.append(line)
             continue
         _, requested, options = next(_package_requests(line), ("", line, ""))
         if options and (not re.fullmatch(r"[\w=,.\s:{}+-]+", options)
@@ -238,6 +242,8 @@ def _picture_preamble(tex, packages, defaults):
     loads = [r"\usepackage{%s}" % name for name in names]
     if "tikz" in names or "tikz-cd" in names:
         loads.extend(libraries)
+    if colors and names.keys() & {"tikz", "tikz-cd", "xcolor"}:
+        loads.extend(colors)  # the paper's own colours, used by its diagrams' arrows
     return "\n".join(before + [r"\documentclass[border=1pt,12pt]{standalone}", defaults] + loads)
 
 

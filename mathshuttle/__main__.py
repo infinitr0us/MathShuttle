@@ -248,7 +248,7 @@ def _cli(argv: list[str]) -> int:
         if args.cmd == "compare":
             from .compare import compare, write_corrected
             result = compare(args.returned, args.paper, load_macros(args.macros))
-            originals = {row.original.n: row.original for row in result.rows if row.original}
+            originals = {o.n: o for o in result.originals} or {r.original.n: r.original for r in result.rows if r.original}
             for row in result.rows:
                 if row.status == "unchanged" and not args.all and not row.comments:
                     continue  # (an unchanged equation with a co-author's comment is shown)

@@ -1571,7 +1571,8 @@ class CompareWindow(tk.Toplevel):
         self.info.set("%s compared with %s: %s%s." % (
             os.path.basename(self.paper), os.path.basename(self.returned), summary or "no equation changed",
             ", %d with comments" % commented if commented else ""))
-        originals = {r.original.n: r.original for r in rows if r.original}
+        # all of them: an unchanged picture has no row but can be the place of an added equation
+        originals = {o.n: o for o in self.result.originals} or {r.original.n: r.original for r in rows if r.original}
         for row in rows:
             if row.status == "unchanged" and not row.comments and not self.all_var.get():
                 continue

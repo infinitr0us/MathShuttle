@@ -397,10 +397,14 @@ def _replacement(original, tex, macros, notes):
         if name.startswith("alignat"):
             arg = latex_wrap._ALIGNAT_ARG_RE.match(body)
             if arg:
-                new_body = arg[0].strip() + "\n" + new_body
-                if not arg[1]:
-                    head = arg[0].strip()  # `\begin{alignat}{2}` as the author wrote it
+                # `\begin{alignat}{2}` as the author wrote it, kept out of the matching of the rows
+                head = arg[0].rstrip()
+                body = body[arg.end():]
         elif name.startswith("eqnarray"):
+            if re.search(r"\\begin\s*\{", new_body):
+                # a matrix or cases inside (or Word's one-row matrix): its & are not eqnarray's
+                notes.append("Check the columns of equation %d. Left the source as it is." % original.n)
+                return None
             new_body = re.sub(r"(?<!\\)&\s*(\\[A-Za-z]+|[=<>+\-])", r"&\1&", new_body)
     else:
         new_body = latex_wrap.plain_form(tex)
@@ -408,10 +412,6 @@ def _replacement(original, tex, macros, notes):
     if restored is None:
         return None
     restored = restored.strip()
-    if head and restored.startswith(head):
-        restored = restored[len(head):].lstrip("\n")
-    else:
-        head = ""
     # indented as the author indented the original's body
     first = next((line for line in body.splitlines() if line.strip() and not _MARKS_ONLY.fullmatch(line)), "")
     indent = first[:len(first) - len(first.lstrip())]
@@ -442,7 +442,8 @@ def _restore_rows(original, body, new_body, notes):
             row = _without_comments(row)
             for mark in marks:
                 row = row.replace(mark, "")
-            return tuple(t for t in _TOKEN.findall(row) if t != "&")
+            # braces left out: Word gives back U^2 as U^{2}
+            return tuple(t for t in _TOKEN.findall(row) if t not in ("&", "{", "}"))
 
         old = [row_key(r, m) for r, m in zip(old_rows, marks)]
         new = [row_key(r) for r in rows[::2]]
@@ -459,6 +460,17 @@ def _restore_rows(original, body, new_body, notes):
                              for i in left), reverse=True)
             if scores[0][0] >= 0.5 and scores[0][0] > scores[1][0]:
                 paired[right[0]] = scores[0][1]
+        open_rows = [j for j in range(len(new)) if j not in paired]
+        if len(old) == len(new) and open_rows and all(i == j for j, i in paired.items()):
+            # As many rows as before and none moved: rows edited in place keep their own labels, when
+            # each is at least as close to its own old row as to any other (a swap with edits is not).
+            def score(i, j):
+                return difflib.SequenceMatcher(None, old[i], new[j], autojunk=False).ratio()
+            if all(score(j, j) >= 0.5 and all(score(i, j) <= score(j, j) for i in open_rows) for j in open_rows):
+                for j in open_rows:
+                    paired[j] = j
+        right = [j for j in range(len(new)) if j not in paired]
+        left = [i for i in range(len(old)) if i not in paired.values()]
         if any(j not in paired for j in right) and any(marks[i] for i in left):
             notes.append("Cannot tell which rows of equation %d keep their labels. Left the source as it is."
                          % original.n)
@@ -478,6 +490,49 @@ def _restore_rows(original, body, new_body, notes):
     return "\\begin{%s}\n%s\n\\end{%s}" % (nested, content, nested) if nested else content
 
 
+_REFERENCE = re.compile(r"\\(eqref|ref|cref|Cref|autoref|cite[a-zA-Z]*)\s*(?:\[[^\]]*\]\s*)*\{([^{}]*)\}")
+
+
+def _restore_references(original, new, numbers, notes):
+    """The export printed `\\eqref{a}` as "(1)", which comes back from Word as text: put the reference back
+    where that is certain (once, in a text part such as `\\text{by (1)}`), and name the others."""
+    from .wordexport import _without_comments
+    body = _without_comments(original.body)
+    lost = []
+    for m in _REFERENCE.finditer(body):
+        if m[0] in new:
+            continue
+        printed = numbers.get(m[2]) if m[1] == "eqref" else None
+        places = [i for i in (j.start() for j in re.finditer(re.escape(printed), new))
+                  if any(a <= i < b for a, b in compat._text_spans(new))] if printed else []
+        if len(places) == 1 and new.count(printed) == 1 and body.count(m[0]) == 1:
+            new = new[:places[0]] + m[0] + new[places[0] + len(printed):]
+        elif m[0] not in lost:
+            lost.append(m[0])
+    if lost:
+        notes.append("Equation %d had %s, which Word shows as plain text: put %s back in the corrected copy."
+                     % (original.n, ", ".join(lost), "it" if len(lost) == 1 else "them"))
+    return new
+
+
+_AMSMATH = re.compile(r"\\begin\s*\{([pbBvV]?matrix|smallmatrix|cases|aligned|gathered|split|alignedat)\}"
+                      r"|\\(text|operatorname|dfrac|tfrac|binom|boldsymbol|substack|overset|underset)(?![A-Za-z])")
+_AMSMATH_LOADED = re.compile(r"\\usepackage\s*(?:\[[^\]]*\]\s*)?\{[^{}]*\b(?:amsmath|mathtools|physics)\b"
+                             r"|\\documentclass\s*(?:\[[^\]]*\]\s*)?\{(?:ams\w+|acmart)\}"
+                             r"|\\begin\s*\{(?:align|gather|multline|flalign|alignat|[pbBvV]matrix|cases)\*?\}"
+                             r"|\\(?:text|eqref|operatorname|tag)\s*\{")
+
+
+def _check_amsmath(tree, original, new, notes):
+    """A note when the new LaTeX of an equation needs amsmath (Word's matrices come back as pmatrix) and
+    nothing in the paper shows that it is loaded."""
+    used = {m[1] or m[2] for m in _AMSMATH.finditer(new)} - {m[1] or m[2] for m in _AMSMATH.finditer(original.body)}
+    if not used or any(_AMSMATH_LOADED.search(text) for text in tree.mask.values()):
+        return
+    notes.append("Equation %d now uses %s, which needs the amsmath package; the paper does not seem to load it."
+                 % (original.n, ", ".join(sorted(used))))
+
+
 def _edits(result, tree, notes):
     """Collect edits against a single snapshot, so duplicates and insertions keep their places."""
     originals = {o.n: o for o in result.originals} or {r.original.n: r.original for r in result.rows if r.original}
@@ -485,6 +540,8 @@ def _edits(result, tree, notes):
     edits = defaultdict(list)
     changes = defaultdict(list)
     filename = " ".join(result.returned_docx.name.splitlines())
+    # what the export printed for \eqref{label}: the number of an equation with one label and one number
+    numbers = {o.labels[0]: o.numbers[0] for o in originals.values() if len(o.labels) == len(o.numbers) == 1}
 
     def not_found(eq):
         note = "Equation %d not found in %s. Left the source as it is." % (eq.n, eq.file or tree.paper.name)
@@ -541,6 +598,8 @@ def _edits(result, tree, notes):
                 if len(notes) == before:
                     notes.append("Could not restore the delimiters of equation %d." % row.original.n)
             else:
+                new = _restore_references(row.original, new, numbers, notes)
+                _check_amsmath(tree, row.original, new, notes)
                 edits[path].append((start, end, new))
         elif row.status == "deleted":
             people = [", ".join(" ".join(s.splitlines()) for s in (r.author, r.date) if s) for r in row.revisions]
