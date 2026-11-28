@@ -50,6 +50,8 @@ def test_homebrew_is_searched_without_it_on_path(monkeypatch):
     # an app started from the Finder has launchd's PATH, without Homebrew's bin
     monkeypatch.delenv("MATHSHUTTLE_PANDOC", raising=False)
     monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    from mathshuttle import pandoc_fetch  # (a copy get-pandoc installed comes after them: not here)
+    monkeypatch.setattr(pandoc_fetch, "installed_pandoc", lambda: None)
     candidates = list(pe._candidate_paths())
     assert candidates[-2:] == ["/opt/homebrew/bin/pandoc", "/usr/local/bin/pandoc"]
     assert not any(p.endswith(".exe") for p in candidates)

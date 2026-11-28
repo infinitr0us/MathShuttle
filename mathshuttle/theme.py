@@ -97,8 +97,8 @@ def palette(mode: str) -> Dict[str, str]:
     return PALETTES.get(mode, PALETTES["native"])
 
 
-def style_text(widget: tk.Text, mode: str) -> None:
-    """A text pane in the colours of the theme, with a thin border that shows the focus."""
+def style_text(widget: tk.Widget, mode: str) -> None:
+    """A text pane (or a list) in the colours of the theme, with a thin border that shows the focus."""
     p = palette(mode)
     options = {"relief": "flat", "borderwidth": 0, "highlightthickness": 1,
                "highlightbackground": p["border"], "highlightcolor": p["focus"]}
@@ -106,7 +106,8 @@ def style_text(widget: tk.Text, mode: str) -> None:
         options.update(background=p["field"], foreground=p["fg"], insertbackground=p["fg"],
                        selectbackground=p["selbg"], selectforeground=p["selfg"],
                        inactiveselectbackground=p["selbg"])
-    widget.configure(**options)
+    known = set(widget.keys())  # a Listbox has no insertion cursor, for one
+    widget.configure(**{k: v for k, v in options.items() if k in known})
 
 
 def dark_title_bar(window: tk.Misc, dark: bool) -> None:

@@ -668,6 +668,9 @@ def read_text_document(path: str, fmt: str, expand_macros: bool = False) -> Docu
     raw_equations: List[Equation] = []
     if markdown:  # (with money before maths read right: "$5.00 ($p$ after tax)")
         blocks, err = markdown_blocks(text, "markdown", folder)
+        # what pandoc's Markdown reader does not apply either (\DeclarePairedDelimiter...), not from code
+        from .pandoc_engine import _without_code
+        result.definitions = compat.pandoc_leftovers(_without_code(text))
     else:
         read_text = text
         if expand_macros and "\\DeclareMathOperator" in text:
@@ -730,26 +733,36 @@ def read_text_document(path: str, fmt: str, expand_macros: bool = False) -> Docu
 
 
 def _shape(eq: Equation) -> tuple:
-    """What a macro does not change in an equation: inline or display, its environment (not its \\label,
-    which a macro such as \\eqlabel{...} may write)."""
+    """An equation as a macro leaves it: inline or display, its environment, and what it shows apart from
+    commands (letters and digits), which tells two equations of the same kind apart."""
     env = re.match(r"\s*\\begin\s*\{([^{}]*)\}", eq.tex)
-    return eq.display, env.group(1) if env else ""
+    return eq.display, env.group(1) if env else "", _skeleton(eq.tex)
+
+
+def _skeleton(tex: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", re.sub(r"\\(?:[a-zA-Z@]+|.)", "", tex))
 
 
 def _matched(expanded: List[Equation], raw: List[Equation]) -> "List[Optional[Equation]]":
     """For each equation of pandoc's reading (macros expanded), the same equation as written, from the
     reading without the preamble (macros kept), or None where the two do not line up: a macro in the
-    prose that makes an equation of its own is in the first reading only."""
+    prose that makes an equation of its own is in the first reading only.  Equations that differ only
+    where macros were expanded pair up when they are of the same kind and mostly show the same."""
     import difflib
     out: "List[Optional[Equation]]" = [None] * len(expanded)
-    matcher = difflib.SequenceMatcher(None, [_shape(e) for e in expanded], [_shape(e) for e in raw],
-                                      autojunk=False)
+    a, b = [_shape(e) for e in expanded], [_shape(e) for e in raw]
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal" or (tag == "replace" and i2 - i1 == j2 - j1 and
-                              all(expanded[i].display == raw[j].display
-                                  for i, j in zip(range(i1, i2), range(j1, j2)))):
-            for i, j in zip(range(i1, i2), range(j1, j2)):
-                out[i] = raw[j]
+        if tag == "equal":
+            pairs = zip(range(i1, i2), range(j1, j2))
+        elif tag == "replace" and i2 - i1 == j2 - j1:
+            pairs = ((i, j) for i, j in zip(range(i1, i2), range(j1, j2))
+                     if a[i][:2] == b[j][:2]
+                     and difflib.SequenceMatcher(None, a[i][2], b[j][2], autojunk=False).ratio() >= 0.5)
+        else:
+            continue
+        for i, j in pairs:
+            out[i] = raw[j]
     return out
 
 

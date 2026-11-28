@@ -45,9 +45,9 @@ packages are needed. A LaTeX installation (MiKTeX, TeX Live, MacTeX) turns on th
 3. Your macros: **Macros...** takes your paper's macro file or preamble, once.
 4. A whole paper: **Open file...**, then **Whole file as Word...**, or `mathshuttle word paper.tex -o paper.docx`.
 
-On the Mac, Cmd takes the place of Ctrl. The window follows the system's light or dark mode; to fix
-one, set `"theme"` to `"light"`, `"dark"` or `"native"` in `settings.json` (`%APPDATA%\MathShuttle` on
-Windows).
+On the Mac, Cmd takes the place of Ctrl. The window follows the system's light or dark mode. On
+Windows and Linux you can fix one: set `"theme"` to `"light"`, `"dark"` or `"native"` (Tk's own look) in
+`settings.json` (`%APPDATA%\MathShuttle` on Windows); on the Mac the window keeps the system's look.
 
 ### Next to Office's own LaTeX support
 

@@ -1430,9 +1430,10 @@ def _braced_arguments(tex: str, names: AbstractSet[str]) -> str:
     for t in _TOKEN.finditer(tex):
         if t.group() not in names:
             continue
-        prev = re.search(r"(\\[a-zA-Z@]+|[\^_])\s*$", tex[last:t.start()])
-        if prev and (prev.group(1) in "^_" or (prev.group(1) in _TAKES_ARGUMENT
-                                                and prev.group(1) not in _DELIMITER_SIZES)):
+        # after ^ or _, or a command that takes an argument (also after its [option]: \sqrt[3]\K)
+        prev = re.search(r"(?:(\\[a-zA-Z@]+)\s*(?:\[[^\[\]{}]*\]\s*)?|([\^_])\s*)$", tex[last:t.start()])
+        if prev and (prev.group(2) or (prev.group(1) in _TAKES_ARGUMENT
+                                       and prev.group(1) not in _DELIMITER_SIZES)):
             out += [tex[last:t.start()], "{", t.group(), "}"]
             last = t.end()
     return "".join(out) + tex[last:]

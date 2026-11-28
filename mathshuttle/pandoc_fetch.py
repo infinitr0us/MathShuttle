@@ -267,6 +267,18 @@ def _publish(source: Path, destination: Path) -> None:
     os.replace(source, destination)
 
 
+def _remove_stale_parts(folder: Path) -> None:
+    """Part files (tempfile's tmp*) that an interrupted download left behind; an hour old, so that no
+    install running at the same time loses its own."""
+    now = time.time()
+    for path in folder.glob("tmp*"):
+        try:
+            if path.is_file() and now - path.stat().st_mtime > 3600:
+                path.unlink()
+        except OSError:
+            pass
+
+
 def _prune_older(folder: Path) -> None:
     version = tuple(map(int, PANDOC_VERSION.split(".")))
     for path in folder.parent.iterdir():
@@ -283,6 +295,7 @@ def install(progress: Optional[_Progress] = None, cancel: Optional[threading.Eve
     folder = _folder()
     try:
         folder.mkdir(parents=True, exist_ok=True)
+        _remove_stale_parts(folder)
         if shutil.disk_usage(folder).free < _MIN_FREE:
             raise FetchError("Free at least 400 MB of disk space and try again.")
         with ExitStack() as cleanup:

@@ -140,16 +140,19 @@ def _read_for_expansion(text: str, mode: str,
     if preamble and not _has_math_delimiters(body):
         body, preamble = text, ""  # a bare equation keeps its own definitions
     equations, markdown = read_latex_text(body, default_display=(mode != "inline"))
-    if preamble and _has_math_delimiters(preamble):
-        # A macro in prose may supply a whole equation. Let pandoc find those too.
+    if preamble:
+        # A macro in the prose may make an equation of its own ($x$ or \ensuremath{M}): the reading with
+        # the macros applied finds it, and each equation of it is taken as written where the two line up.
         full, _ = compat.before_equations(text, masked, defer=False)
         try:
             complete, as_markdown = read_latex_text(full, default_display=(mode != "inline"))
         except ConversionError:
             pass  # expand each recovered equation separately
         else:
-            if [e.display for e in complete] != [e.display for e in equations]:
-                equations, markdown = complete, as_markdown
+            if len(complete) != len(equations) or any(a.display != b.display for a, b in zip(complete, equations)):
+                from .documents import _matched
+                equations = [raw or eq for raw, eq in zip(_matched(complete, equations), complete)]
+                markdown = as_markdown
     return apply_mode(equations, mode), markdown, input_macros(macros, body, "latex", markdown, preamble)
 
 

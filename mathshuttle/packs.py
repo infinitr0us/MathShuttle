@@ -433,11 +433,11 @@ def _number(value: str, for_latex: bool) -> str:
 
 def _quantity(a: _Args, _p) -> Optional[str]:  # \qty{12}{kHz}, \SI{12}{kHz}
     start = a.end
-    a.option()
+    options = a.option()
     number = a.brace()
     unit = a.brace()
-    if unit is None:
-        a.end = start
+    if unit is None or (options and a.for_latex):  # [round-precision=1]...: what siunitx prints is not
+        a.end = start                               # the number as written; LaTeX output keeps \qty
         return None
     written = _literal_unit(unit)
     if written is None:

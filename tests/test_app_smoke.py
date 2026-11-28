@@ -675,3 +675,18 @@ def test_expand_macros_in_the_window(app):
     app.dst_var.set("mathml")
     app.update_idletasks()
     assert str(app.expand_chk.cget("state")) == "disabled"
+
+
+def test_macros_dialog_opens_in_the_theme(app):
+    # a Listbox takes no text-cursor colours: the dialog used to stop half-built in the Sun Valley look
+    before = set(app.winfo_children())
+    app.edit_macros()
+    app.update_idletasks()
+    new = [w for w in app.winfo_children() if w not in before]
+    try:
+        assert len(new) == 1 and new[0].title() == "MathShuttle macros"
+        kinds = {w.winfo_class() for w in new[0].winfo_children()}
+        assert {"Listbox", "Text"} <= kinds
+    finally:
+        for w in new:
+            w.destroy()

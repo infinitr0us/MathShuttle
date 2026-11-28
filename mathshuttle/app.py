@@ -415,7 +415,10 @@ class App(tk.Tk):
         self.macro_text = s.get("macro_text") if isinstance(s.get("macro_text"), str) else ""
         self._update_macros_label()
         self._restore_geometry(s.get("geometry", DEFAULT_GEOMETRY))
-        self.minsize(960, 420)
+        # as wide as the rows of options and buttons need (on a 150 % screen that is more than 960 pixels),
+        # but never wider than the screen
+        self.update_idletasks()
+        self.minsize(min(max(960, self.winfo_reqwidth()), self.winfo_screenwidth() - 40), 420)
         self.input.insert("1.0", s.get("input") or SAMPLE)
         self.input.edit_modified(False)
         self._update_option_states()
@@ -447,6 +450,9 @@ class App(tk.Tk):
     def _on_close(self) -> None:
         self._save_settings()
         self._stop_hotkey()
+        if getattr(self, "_fetching", False):  # a pandoc download: stopped, its part file removed
+            self._fetch_cancel.set()
+            self._fetch_thread.join(timeout=5)
         self.destroy()
 
     # ---- events ---------------------------------------------------------------------------------
@@ -513,7 +519,8 @@ class App(tk.Tk):
             self._fetch_button.configure(state="disabled")
 
         def tick():
-            if not self._fetch_progress.winfo_exists() or cancel.is_set():
+            # (after the end, a tick still queued must not put the progress back over the message)
+            if not self._fetching or not self._fetch_progress.winfo_exists() or cancel.is_set():
                 return
             if state["total"]:
                 self._fetch_progress.configure(value=100 * state["done"] / state["total"])
@@ -541,11 +548,13 @@ class App(tk.Tk):
                 self._banner_text.set(message)
 
         self._fetching = True
+        self._fetch_cancel = cancel  # closing the window stops the download (its part file is removed)
         self._fetch_progress.configure(value=0)
         self._fetch_progress.pack(side="right", padx=(0, 10))
         self._fetch_button.configure(text="Cancel", style="TButton", command=cancel_download)
         self._banner_text.set("Downloading pandoc %s..." % pandoc_fetch.PANDOC_VERSION)
-        self._in_background(lambda: pandoc_fetch.install(progress=progress, cancel=cancel), finished)
+        self._fetch_thread = self._in_background(lambda: pandoc_fetch.install(progress=progress, cancel=cancel),
+                                                 finished)
         self.after(150, tick)
 
     def _update_option_states(self) -> None:
@@ -979,7 +988,7 @@ class App(tk.Tk):
         self._in_background(work, finished)
 
     # ---- documents ------------------------------------------------------------------------------
-    def _in_background(self, work, done, daemon: bool = True) -> None:
+    def _in_background(self, work, done, daemon: bool = True) -> threading.Thread:
         """Run `work()` in a thread; call `done(value, error)` in the Tk thread when it ends.  Not a daemon:
         work (a file being written) that the program finishes even when its window closes first."""
         result: dict = {}
@@ -1003,6 +1012,7 @@ class App(tk.Tk):
                 pass  # the window closed meanwhile (the thread still finishes its work)
 
         self.after(50, poll)
+        return thread
 
     def save_as_word(self, path: Optional[str] = None) -> None:
         """The input as a Word document: a chat answer, notes or LaTeX text with its prose, and each
@@ -1185,7 +1195,9 @@ def bug_report_details(app: Optional["App"] = None) -> str:
     home = os.path.expanduser("~")
     text = "\n".join(lines)
     if len(home) > 3:  # not a bare drive or "/"
-        text = text.replace(home, "~")
+        # as written in paths, in Python's repr (C:\\Users\\...), with forward slashes; any case on Windows
+        for form in dict.fromkeys((home, home.replace("\\", "\\\\"), home.replace("\\", "/"))):
+            text = re.sub(re.escape(form), "~", text, flags=re.IGNORECASE if sys.platform == "win32" else 0)
     return text + "\n"
 
 

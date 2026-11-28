@@ -97,6 +97,11 @@ class _CommandParser(argparse.ArgumentParser):
 def _get_pandoc(force: bool) -> int:
     from . import pandoc_engine, pandoc_fetch
 
+    name, override = pandoc_engine._env_pandoc()
+    if override and not os.path.isfile(override):  # it would still win over a downloaded copy
+        print(f"error: {name} is set to {override}, which is not a file. Unset it (or correct it); "
+              f"then mathshuttle finds pandoc by itself, and get-pandoc can install one.", file=sys.stderr)
+        return 1
     if not force:
         try:
             path = pandoc_engine.find_pandoc()
@@ -283,7 +288,11 @@ def _cli(argv: list[str]) -> int:
             if args.docx:  # first, and said at once: an equation that -t cannot write below does not stop it
                 from .documents import write_docx
                 word_doc = read_document(args.file) if expand and doc.source == "latex" else doc
-                word_rows = word_doc.rows(args.display, args.unique, args.match) if word_doc is not doc else rows
+                word_rows = rows
+                if word_doc is not doc:  # the same occurrences (filtered on the LaTeX as written), read as usual
+                    from .documents import EquationRow
+                    word_rows = [EquationRow(r.number, word_doc.found[r.number - 1], r.where, r.count)
+                                 if len(word_doc.found) == len(doc.found) else r for r in rows]
                 written = write_docx(word_doc, args.docx, macros, word_rows)
                 sys.stderr.write("".join(n + "\n" for n in written) + "written to %s\n" % args.docx)
                 sys.stderr.flush()
