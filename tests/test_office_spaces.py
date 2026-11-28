@@ -26,6 +26,21 @@ def test_a_negative_space_is_left_out_for_office():
 
 
 @pytest.mark.parametrize("tex, back", [
+    (r"e\!^{-x}", "e{}^{-x}"), (r"\!_0F_1", "{}_{0}F_{1}"), (r"\frac{a}{\!}", r"\frac{a}{}"),
+    (r"\overset{\!}{x}", r"\overset{}{x}")])
+def test_a_negative_space_that_is_an_argument_leaves_an_empty_one(tex, back):
+    # (a script on \! is a script on nothing: removing the space would leave <msup> one child short)
+    assert convert(office_copy(tex, "latex").mathml, "mathml", "latex").text == "\\[ %s \\]" % back
+
+
+@pytest.mark.parametrize("tex", [r"a\quad\,b", r"\frac{\quad}{\quad}", r"x_{\quad}^{\quad}"])
+def test_only_word_s_split_em_spaces_are_merged(tex):
+    # Word splits \qquad into two em spaces; a \quad\, or the spaces of two arguments stay as they are
+    assert convert(office_copy(tex, "latex").mathml, "mathml", "latex").text == "\\[ %s \\]" % tex.replace(
+        r"\quad\,b", r"\quad\, b")
+
+
+@pytest.mark.parametrize("tex, back", [
     (r"a\,b", r"a\, b"), (r"a\;b", r"a\; b"), (r"a\quad b", r"a\quad b"), (r"a\qquad b", r"a\qquad b"),
 ])
 def test_the_spaces_come_back(tex, back):

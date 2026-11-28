@@ -1496,9 +1496,14 @@ _SPACE_WIDTHS = {" ": 1.0, " ": 0.5, " ": 0.333, " ": 0.278, " ": 0.22
                  " ": 0.167, " ": 0.167}
 
 
+# elements whose children are arguments in place (base, script...): a child is never just removed
+_FIXED_ARITY = frozenset("msub msup msubsup munder mover munderover mfrac mroot mmultiscripts".split())
+
+
 def _office_spaces(root: ET.Element) -> None:
     """<mspace width="1.0em"/> -> <mo>U+2003</mo> (and so on) for Word / PowerPoint; a negative space,
-    which Office cannot show, is left out (Word would make it a positive one)."""
+    which Office cannot show, is left out (Word would make it a positive one): an empty <mrow/> where it
+    is an argument (\\!^{-x} is a script on the space: e\\!^{-x})."""
     for parent in list(root.iter()):
         for child in list(parent):
             if child.tag != "{%s}mspace" % MATHML_NS:
@@ -1513,7 +1518,12 @@ def _office_spaces(root: ET.Element) -> None:
                 if rest > 0.08:
                     chars += min(_SPACE_CHARS, key=lambda wc: abs(wc[0] - rest))[1]
             if not chars:
-                parent.remove(child)
+                if _local(parent.tag) in _FIXED_ARITY:
+                    empty = ET.Element("{%s}mrow" % MATHML_NS)
+                    empty.tail = child.tail
+                    parent[list(parent).index(child)] = empty
+                else:
+                    parent.remove(child)
                 continue
             mo = ET.Element("{%s}mo" % MATHML_NS)
             mo.text, mo.tail = chars, child.tail
@@ -1532,15 +1542,17 @@ def _unicode_spaces(math: ET.Element) -> None:
             el.set("width", ("%.3f" % width).rstrip("0").rstrip(".") + "em")
             converted.add(el)
     # Word writes \qquad's two em spaces as two elements: one space of their width (\qquad, not \quad\quad);
-    # only those (spaces MathML writes itself, \ \ for instance, stay as they are)
+    # only em spaces in a row of a sequence (spaces MathML writes itself, \ \ for instance, stay as they
+    # are, and so do a \quad\, and the arguments of a fraction or script, each a space of its own)
     for parent in math.iter():
+        if parent.tag in _FIXED_ARITY:
+            continue
         children = list(parent)
         for a, b in zip(children, children[1:]):
             if a in converted and b in converted and a in list(parent):
-                wa = re.fullmatch(r"(-?\d*\.?\d+)em", a.get("width") or "")
-                wb = re.fullmatch(r"(-?\d*\.?\d+)em", b.get("width") or "")
-                if wa and wb:
-                    b.set("width", ("%.3f" % (float(wa.group(1)) + float(wb.group(1)))).rstrip("0").rstrip(".") + "em")
+                wa = re.fullmatch(r"(\d+)em", a.get("width") or "")
+                if wa and int(wa.group(1)) >= 1 and b.get("width") == "1em":
+                    b.set("width", "%dem" % (int(wa.group(1)) + 1))
                     parent.remove(a)
 
 
