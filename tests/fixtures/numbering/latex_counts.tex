@@ -1,0 +1,35 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+\section{One}
+\begin{equation} a = b \label{eq:a} \end{equation}
+\begin{equation} a = b \nonumber \end{equation}
+\begin{equation} \label{eq:c} c = d \end{equation}
+\begin{align}
+  c &= d \label{al:1} \\
+  e &= f \nonumber \\
+  g &= h \tag{T} \label{al:t} \\
+  i &= j \label{al:4}
+\end{align}
+\begin{align}
+  k &= l \label{tr:1} \\
+\end{align}
+\begin{equation} m = n \label{eq:after-trailing} \end{equation}
+\begin{gather} p \label{ga:1} \\ q \notag \\ r \label{ga:3} \end{gather}
+\begin{multline} x + y \\ = z \label{mu:1} \end{multline}
+\begin{eqnarray} r &=& s \label{ea:1} \\ t &=& u \nonumber \\ v &=& w \label{ea:3} \end{eqnarray}
+\begin{equation} \begin{split} a &= b \\ &= c \end{split} \label{sp:1} \end{equation}
+\begin{equation*} w \end{equation*}
+\[ v \]
+$$ t $$
+\begin{align*} y &= z \tag{S} \label{st:1} \end{align*}
+\begin{flalign} k &= l \label{fl:1} \end{flalign}
+\begin{alignat}{2} m &= n & o &= p \label{at:1} \\ q &= r & s &= t \label{at:2} \end{alignat}
+\begin{equation} f(x) = \begin{cases} 1 & x > 0 \\ 0 & \text{else} \end{cases} \label{ca:1} \end{equation}
+\begin{align} f &= \begin{cases} 1 \\ 0 \end{cases} \label{ca:2} \\ g &= 2 \label{ca:3} \end{align}
+\begin{equation} \tag{X} e = f \label{tg:x} \end{equation}
+\begin{equation} last \label{eq:last} \end{equation}
+\appendix
+\section{App}
+\begin{equation} app \label{eq:app} \end{equation}
+\end{document}

@@ -661,16 +661,22 @@ def _without_obsidian_comments(text: str) -> str:
     return _OBSIDIAN_COMMENT.sub(drop, text)
 
 
-def markdown_blocks(text: str, fmt: str = MARKDOWN, cwd: Optional[str] = None) -> "tuple[list, str]":
-    """pandoc's JSON blocks of Markdown text and its warnings.  An inline "equation" that is money (a
-    number, then prose: "$5.00 ($p$ after tax)" gives "5.00 (") is read again with its $ escaped, so
-    that the dollar it took as its end starts the equation it belongs to."""
+def markdown_blocks(text: str, fmt: str = MARKDOWN, cwd: Optional[str] = None,
+                    meta: Optional[dict] = None) -> "tuple[list, str]":
+    """pandoc's JSON blocks of Markdown text and its warnings (`meta`, if given, gets its metadata: the
+    title and authors of its YAML header).  An inline "equation" that is money (a number, then prose:
+    "$5.00 ($p$ after tax)" gives "5.00 (") is read again with its $ escaped, so that the dollar it took
+    as its end starts the equation it belongs to."""
     _LATEX_MATHS_CACHE.clear()  # (an \input file may have changed since the last reading)
     text = _without_obsidian_comments(text)
     rounds = 8
     while True:
         out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=cwd)
-        blocks = json.loads(out)["blocks"]
+        document = json.loads(out)
+        blocks = document["blocks"]
+        if meta is not None:
+            meta.clear()
+            meta.update(document.get("meta") or {})
         maths: List[Equation] = []
         _collect_math(blocks, maths)
         escaped = text

@@ -948,6 +948,88 @@ _ACCENT_FONT = re.compile(
 _ENV_POSITION = re.compile(r"(\\begin\s*\{(?:aligned|alignedat|gathered|array|split|subarray)\})\s*\[\s*[tbc]\s*\]")
 
 
+# keys of a labels mapping (Macros.labels, a document's .aux numbers) that say how the document prints
+# references and citations: "cleveref" / "hyperref", "authoryear" / "numeric" (see documents)
+REF_STYLE, CITE_STYLE = "\x00ref-style", "\x00cite-style"
+# cleveref's default names (singular, plural; capitalised for \Cref), hyperref's \autoref names
+_CREF_NAMES = {"equation": ("eq.", "eqs."), "figure": ("fig.", "figs."), "subfigure": ("fig.", "figs."),
+               "table": ("table", "tables"), "subtable": ("table", "tables"), "section": ("section", "sections"),
+               "subsection": ("section", "sections"), "subsubsection": ("section", "sections"),
+               "chapter": ("chapter", "chapters"), "appendix": ("appendix", "appendices"),
+               "theorem": ("theorem", "theorems"), "lemma": ("lemma", "lemmas"),
+               "corollary": ("corollary", "corollaries"), "proposition": ("proposition", "propositions"),
+               "definition": ("definition", "definitions"), "remark": ("remark", "remarks"),
+               "example": ("example", "examples"), "assumption": ("assumption", "assumptions"),
+               "algorithm": ("algorithm", "algorithms"), "line": ("line", "lines"), "footnote": ("footnote", "footnotes"),
+               "enumi": ("item", "items"), "item": ("item", "items"), "page": ("page", "pages")}
+_AUTOREF_NAMES = {"equation": "Equation", "figure": "Figure", "table": "Table", "part": "Part", "appendix": "Appendix",
+                  "chapter": "chapter", "section": "section", "subsection": "subsection",
+                  "subsubsection": "subsubsection", "paragraph": "paragraph", "theorem": "Theorem",
+                  "footnote": "footnote", "Item": "item", "item": "item", "page": "page"}
+
+
+def _listed(items: List[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def reference_text(command: str, keys: List[str], labels: Dict[str, str]) -> Optional[str]:
+    """What \\eqref / \\ref / \\cref / \\Cref / \\autoref (pandoc: ref+label, ref+Label) of `keys` print,
+    from the .aux numbers in `labels`; None when one of them has no number."""
+    numbers = [labels.get(k) for k in keys]
+    if not keys or any(n is None for n in numbers):
+        return None
+    if command == "eqref":
+        return "(%s)" % ", ".join(numbers)
+    if command not in ("cref", "Cref", "autoref", "ref+label", "ref+Label"):
+        return ", ".join(numbers)
+    types = [labels.get("type:" + k) for k in keys]
+    style = ("hyperref" if command == "autoref" else "cleveref" if command in ("cref", "Cref")
+             else labels.get(REF_STYLE, "hyperref"))
+    kind = types[0] if len(set(types)) == 1 else None
+    if style == "cleveref":
+        shown = ["(%s)" % n if t == "equation" else n for n, t in zip(numbers, types)]
+        names = _CREF_NAMES.get(kind or "")
+        if not names:
+            return _listed(shown)
+        name = names[0] if len(keys) == 1 else names[1]
+        if command in ("Cref", "ref+Label"):
+            name = name[:1].upper() + name[1:]
+        return "%s %s" % (name, _listed(shown))
+    name = _AUTOREF_NAMES.get(kind or "")
+    return "%s %s" % (name, _listed(numbers)) if name else _listed(numbers)
+
+
+def citation_text(command: str, cites: List[Tuple[str, str, str]], labels: Dict[str, str]) -> Tuple[str, bool]:
+    """What \\cite, \\citep, \\citet, \\citeauthor ... (`command`, without the backslash) of `cites`
+    ((key, prefix, suffix)) print, from the .aux (numbers; natbib's authors and years for an author-year
+    document); and whether every key was found there."""
+    command = command.rstrip("*").lower()
+    found = all(("cite:" + k) in labels or ("citeauthor:" + k) in labels for k, _, _ in cites)
+    year = {k: labels.get("citeyear:" + k) for k, _, _ in cites}
+    author = {k: labels.get("citeauthor:" + k) for k, _, _ in cites}
+    if command == "citeauthor":
+        return "; ".join(author[k] or k for k, _, _ in cites), found
+    if command in ("citeyear", "citeyearpar"):
+        years = "; ".join(year[k] or k for k, _, _ in cites)
+        return ("(%s)" % years if command == "citeyearpar" else years), found
+    prefix, suffix = cites[0][1], cites[-1][2]
+    if labels.get(CITE_STYLE) == "authoryear" and all(author[k] and year[k] for k, _, _ in cites):
+        if command in ("citep", "citealp"):
+            body = "; ".join("%s, %s" % (author[k], year[k]) for k, _, _ in cites)
+            body = (prefix + " " if prefix else "") + body + (", " + suffix if suffix else "")
+            return ("(%s)" % body if command == "citep" else body), found
+        if command == "citealt":
+            return "; ".join("%s %s" % (author[k], year[k]) for k, _, _ in cites), found
+        # \citet, and \cite, which natbib prints as \citet in an author-year document
+        parts = ["%s (%s)" % (author[k], year[k]) for k, _, _ in cites]
+        if suffix:
+            parts[-1] = parts[-1][:-1] + ", " + suffix + ")"
+        return "; ".join(parts), found
+    body = ", ".join(labels.get("cite:" + k, k) for k, _, _ in cites)
+    body = (prefix + " " if prefix else "") + body + (", " + suffix if suffix else "")
+    return "[%s]" % body, found
+
+
 def _refs(tex: str, labels: Dict[str, str]) -> str:
     """\\eqref{eq:x} -> (2.1) with the number from the document's .aux file (or the label itself),
     \\ref -> 2.1, \\cite{key} -> [key]: as text in maths, as letters inside text."""
@@ -966,11 +1048,15 @@ def _refs(tex: str, labels: Dict[str, str]) -> str:
             continue
         keys = [k.strip() for k in _unbrace(tex[a0:a1]).split(",") if k.strip()]
         if m.group(1).lower().startswith("cite"):
-            shown = "[%s]" % ", ".join(keys)
-        else:  # (the .aux holds a label's number, page and title: "page:key", "title:key")
-            field = {"pageref": "page:", "nameref": "title:"}.get(m.group(1), "")
+            shown = citation_text(m.group(1), [(k, "", "") for k in keys], labels)[0]
+        elif m.group(1) in ("pageref", "nameref"):  # (the .aux holds a label's page and title too)
+            field = {"pageref": "page:", "nameref": "title:"}[m.group(1)]
             shown = ", ".join(labels.get(field + k, k) for k in keys)
-            shown = "(%s)" % shown if m.group(1) == "eqref" else shown
+        else:
+            shown = reference_text(m.group(1), keys, labels)
+            if shown is None:  # no number: the label itself, as LaTeX's ?? would not say which
+                shown = ", ".join(labels.get(k, k) for k in keys)
+                shown = "(%s)" % shown if m.group(1) == "eqref" else shown
         in_text = _in(_text_spans(tex), m.start())
         new = shown if in_text else "\\text{%s}" % shown.replace("_", "\\_")
         tex = tex[:m.start()] + new + tex[a1:]

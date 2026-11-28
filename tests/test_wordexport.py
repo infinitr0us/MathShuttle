@@ -60,11 +60,11 @@ def paper(tmp_path_factory):
 
 def test_numbers_go_where_word_puts_its_own(paper):
     notes, xml = paper
-    for shown in ("#(1)", "#(2)", "#(3)", "#(Q)"):
+    for shown in ("#(1)", "#(2)", "#(3)", "#(Q)", "#S"):
         assert "<m:t>%s</m:t>" % shown in xml
-    assert xml.count('<m:maxDist m:val="1"/>') == 3  # eq:loss, the align (one array), the tag
+    assert xml.count('<m:maxDist m:val="1"/>') == 4  # eq:loss, the align (one array), the two tags
     assert "QQMSN" not in xml
-    assert any("4 equation numbers" in n for n in notes)
+    assert any("5 equation numbers" in n for n in notes)
 
 
 def test_a_label_at_the_start_puts_the_number_at_the_end(paper):
@@ -79,9 +79,9 @@ def test_align_rows_are_numbered_each(paper):
     assert "#(3)" in array
 
 
-def test_starred_environments_get_no_number(paper):
+def test_a_starred_environment_shows_only_its_tag(paper):
     _, xml = paper
-    assert "#S" not in xml
+    assert "<m:t>#S</m:t>" in xml and "#(4)" not in xml  # \tag*{S} as LaTeX prints it; the failed one none
 
 
 def test_references_and_citations_show_their_numbers(paper):

@@ -409,11 +409,34 @@ def _inline_text(node, words: List[str]) -> None:
 
 
 _READS = re.compile(r"\\(input|include|subfile|usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]+)\}")
-# \newlabel{key}{{number}{page}{title}{anchor}{}} (hyperref); without hyperref only {number}{page}
+# \newlabel{key}{{number}{page}{title}{anchor}{}} (hyperref); without hyperref only {number}{page};
+# cleveref adds \newlabel{key@cref}{{[equation][7][]7}{[1][1][]1}}
 _NEWLABEL = re.compile(r"\\newlabel\{([^{}]+)\}\{\{((?:[^{}]|\{[^{}]*\})*)\}(?:\{((?:[^{}]|\{[^{}]*\})*)\})?"
-                       r"(?:\{((?:[^{}]|\{[^{}]*\})*)\})?")
+                       r"(?:\{((?:[^{}]|\{[^{}]*\})*)\})?(?:\{((?:[^{}]|\{[^{}]*\})*)\})?")
 _AUX_INPUT = re.compile(r"\\@input\{([^{}]+)\}")
-_BIBCITE = re.compile(r"\\bibcite\{([^{}]+)\}\{([^{}]*)\}")
+# \bibcite{key}{12}, or natbib's \bibcite{key}{{12}{2020}{{Smith et~al.}}{{Smith, Jones, and Lee}}}
+_BIBCITE = re.compile(r"\\bibcite\{([^{}]+)\}\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}")
+
+
+def _groups(text: str) -> List[str]:
+    """The contents of the top-level {...} groups of `text`, in order."""
+    groups, depth, start = [], 0, 0
+    for i, ch in enumerate(text):
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                start = i + 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if not depth:
+                groups.append(text[start:i])
+    return groups
+
+
+def _aux_text(value: str) -> str:
+    """Text from an .aux field: its braces, ~ and \\& as they print."""
+    value = value.replace("~", " ").replace("\\&", "&").replace("\\ ", " ")
+    return " ".join(value.replace("{", "").replace("}", "").split())
 
 
 def _source_text(data: bytes) -> str:
@@ -507,6 +530,13 @@ def _aux_labels(path: str) -> Dict[str, str]:
             continue
         for m in _NEWLABEL.finditer(data):
             key, number = m.group(1), m.group(2).strip()
+            if key.endswith("@cref"):  # what the label is a number of (cleveref): "type:key"
+                kind = re.match(r"\[([A-Za-z]+)\]", number)
+                if kind:
+                    labels["type:" + key[:-len("@cref")]] = kind.group(1)
+                continue
+            if number.startswith("{") and number.endswith("}") and len(_groups(number)) == 1:
+                number = number[1:-1].strip()  # a \tag{T}'s label: {T}
             if "@cref" in key or not number or number.startswith("\\"):
                 continue
             labels.setdefault(key, number)
@@ -514,23 +544,36 @@ def _aux_labels(path: str) -> Dict[str, str]:
                 value = (value or "").strip()
                 if value and "\\" not in value:
                     labels.setdefault(field + key, value)
-        for m in _BIBCITE.finditer(data):  # \bibcite{key}{12}: a numeric citation's number ("cite:key")
-            number = m.group(2).strip()
+            anchor = re.match(r"([A-Za-z]+)\.", (m.group(5) or "").strip())  # hyperref's equation.2.1
+            if anchor:
+                labels.setdefault("type:" + key, anchor.group(1))
+        for m in _BIBCITE.finditer(data):  # a citation's number ("cite:key"); natbib's author and year too
+            key, value = m.group(1), m.group(2).strip()
+            fields = _groups(value) if value.startswith("{") else [value]
+            number = fields[0].strip() if fields else ""
             if re.fullmatch(r"[\w.\-]{1,12}", number):
-                labels.setdefault("cite:" + m.group(1), number)
+                labels.setdefault("cite:" + key, number)
+            if len(fields) >= 3 and _aux_text(fields[1]) and _aux_text(fields[2]):
+                labels.setdefault("citeyear:" + key, _aux_text(fields[1]))
+                labels.setdefault("citeauthor:" + key, _aux_text(fields[2]))
         todo += [os.path.join(folder, n) for n in _AUX_INPUT.findall(data)]
     return labels
 
 
-def _read_latex_blocks(text: str, folder: str, notes: List[str], raw: bool = False) -> Tuple[list, str, Optional[str]]:
+def _read_latex_blocks(text: str, folder: str, notes: List[str], raw: bool = False,
+                       meta: Optional[dict] = None) -> Tuple[list, str, Optional[str]]:
     """pandoc's reading of a .tex file; if pandoc cannot read the file (a style file it trips over:
     "unexpected \\@ ... \\maketitle"), the body alone, whose macros then come from the preamble.
     Returns the blocks, pandoc's warnings, and the preamble when the body was read alone.  `raw`: keep
-    what the reader does not know as raw TeX (it drops it otherwise, without a word)."""
+    what the reader does not know as raw TeX (it drops it otherwise, without a word).  `meta`, if given,
+    gets pandoc's metadata (title, authors, date, abstract)."""
     fmt = "latex+raw_tex" if raw else "latex"
     try:
         out, err = _run(["-f", fmt, "-t", "json"], text.encode("utf-8"), cwd=folder)
-        return json.loads(out)["blocks"], err, None
+        document = json.loads(out)
+        if meta is not None:
+            meta.update(document.get("meta") or {})
+        return document["blocks"], err, None
     except ConversionError as e:
         begin, end = _document_bounds(text)
         if begin is None:
@@ -540,7 +583,37 @@ def _read_latex_blocks(text: str, folder: str, notes: List[str], raw: bool = Fal
         reason = next((line.strip() for line in str(e).splitlines() if line.strip() and "WARNING" not in line), "")
         notes.append("pandoc could not read the preamble (%s): the body was read alone, with the preamble's "
                      "definitions." % _shorten(reason, 120))
-        return json.loads(out)["blocks"], err, text[:begin]
+        document = json.loads(out)
+        if meta is not None:
+            meta.update(document.get("meta") or {})
+            front = _front_matter(text[:begin])
+            if front:  # the title, authors and date of the preamble pandoc could not read, read alone
+                try:
+                    meta.update(json.loads(_run(["-f", "latex", "-t", "json"], (
+                        front + "\n\\begin{document}\\end{document}").encode("utf-8"), cwd=folder)[0]).get("meta") or {})
+                except (ConversionError, ValueError):
+                    pass
+        return document["blocks"], err, text[:begin]
+
+
+_FRONT = re.compile(r"\\(title|author|date)\s*(?:\[[^\]]*\])?\s*\{")
+
+
+def _front_matter(preamble: str) -> str:
+    """The \\title{...}, \\author{...} and \\date{...} commands of a preamble (comments out)."""
+    preamble = re.sub(r"(?<!\\)%[^\n]*", "", preamble)
+    found = []
+    for m in _FRONT.finditer(preamble):
+        depth, i = 1, m.end()
+        while i < len(preamble) and depth:
+            if preamble[i] == "\\":
+                i += 2
+                continue
+            depth += {"{": 1, "}": -1}.get(preamble[i], 0)
+            i += 1
+        if not depth:
+            found.append("\\%s{%s}" % (m.group(1), preamble[m.end():i - 1]))
+    return "\n".join(found)
 
 
 def read_text_document(path: str, fmt: str) -> DocumentEquations:
