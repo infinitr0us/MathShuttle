@@ -167,6 +167,11 @@ def _cli(argv: list[str]) -> int:
     copy_cmd = command("copy", "Copy an equation to paste into Word or PowerPoint.")
     paste_cmd = command("paste", "Convert an equation copied in Office and write it to standard output.")
     extract_cmd = command("extract", "Write each equation in a document with its location.")
+    compare_cmd = command("compare", "Compare a returned Word document with its LaTeX paper.")
+    compare_cmd.add_argument("returned", metavar="RETURNED.docx")
+    compare_cmd.add_argument("paper", metavar="PAPER.tex")
+    compare_cmd.add_argument("-o", "--output", metavar="CORRECTED.tex", help="write a corrected copy and its diff")
+    compare_cmd.add_argument("--all", action="store_true", help="also show unchanged equations and their comments")
     word_cmd = command(
         "word", "Write a passage or a whole .tex / .md document as a Word file with native equations.",
         description="Write a passage (a chat answer, Markdown notes, LaTeX text: a file, -e TEXT or standard "
@@ -239,7 +244,37 @@ def _cli(argv: list[str]) -> int:
             for path in args.macros:
                 if not os.path.isfile(path):
                     raise InputError("macro file %s does not exist" % path)
-        if args.cmd == "word":
+        if args.cmd == "compare":
+            from .compare import compare, write_corrected
+            result = compare(args.returned, args.paper)
+            originals = {row.original.n: row.original for row in result.rows if row.original}
+            for row in result.rows:
+                if row.status == "unchanged" and not args.all:
+                    continue
+                eq = row.original
+                if eq:
+                    where = [eq.number or "equation %d" % eq.n, *eq.labels, eq.section]
+                else:
+                    anchor = originals.get(row.after)
+                    where = []
+                    if anchor:
+                        location = anchor.numbers[-1] if anchor.numbers else "equation %d" % anchor.n
+                        where = ["after " + location, anchor.section]
+                print(" ".join(filter(None, [row.status, *where])))
+                if eq:
+                    print("Original:", "\n".join(eq.tex.splitlines()))
+                if row.returned:
+                    print("Returned:", row.returned)
+                for r in row.revisions:
+                    print("Tracked change:", ", ".join(filter(None, (r.author, r.date))))
+                for c in row.comments:
+                    print("Comment by %s: %s" % (c.author, c.text))
+                print()
+            if args.output:
+                for note in write_corrected(result, args.output):
+                    print(note, file=sys.stderr)
+                print("Written to %s and %s.diff" % (args.output, os.path.splitext(args.output)[0]), file=sys.stderr)
+        elif args.cmd == "word":
             from . import wordexport
             if args.file and os.path.splitext(args.file)[1].lower() in (".tex", ".md"):
                 notes = wordexport.document_to_word(args.file, args.output, load_macros(args.macros))

@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
-from . import compat
+from . import compat, wordmath
 from .pandoc_engine import (MC_NS, OMML_NS, WML_NS, ConversionError, Equation, _LATEX_DOCUMENT, _api,
                             _collect_math, _has_math_delimiters, _run, _without_tex_comments, markdown_blocks,
                             markdown_maths, read_omml, split_math_paragraph, strip_tex)
@@ -52,8 +52,11 @@ class Found:
     equation: Equation
     where: str          # "Method", "slide 2: Update rule", "footnote 3", "Bounds  [eq:bound]"
     context: str = ""   # the text around it, shortened, with MARK for the equation
+    numbers: List[str] = field(default_factory=list)  # printed Word number of each numbered row
 
     def numbered_location(self, labels: Dict[str, str]) -> str:
+        if self.numbers:
+            return self.where + "  " + ", ".join(self.numbers)
         if labels and r"\label" in self.equation.tex:
             # Skip commented labels and escaped backslashes. TeX permits whitespace before the key.
             for m in re.finditer(r"%[^\n]*|\\label(?:\s|%[^\n]*\n)*\{([^{}]+)\}|\\.", self.equation.tex):
@@ -206,16 +209,19 @@ class _Collector:
 
     def __init__(self) -> None:
         self.fragments: List[ET.Element] = []
-        # An OMML fragment's place, or an equation already read from a shape's tags.
-        self.entries: List[Union[Tuple[str, str, bool], Found]] = []
+        # An OMML fragment's place (and Word's number marks it had), or an equation read from a shape's tags.
+        self.entries: List[Union[Tuple[str, str, bool, List[str]], Found]] = []
         self.legacy = 0
         self.pictures: Dict[str, int] = {}
         self.notes: List[str] = []
 
-    def add(self, math: ET.Element, where: str, context: str, display: bool = False) -> None:
+    def add(self, math: ET.Element, where: str, context: str, display: bool = False, word: bool = False) -> None:
+        if word:
+            math = wordmath.revision_view(math)
         for piece in split_math_paragraph(math):  # several equations in one math paragraph
+            numbers = wordmath.strip_numbers(piece) if word else []
             self.fragments.append(piece)
-            self.entries.append((where, context, display or piece.tag == _q(OMML_NS, "oMathPara")))
+            self.entries.append((where, context, display or piece.tag == _q(OMML_NS, "oMathPara"), numbers))
 
     def result(self, path: str) -> DocumentEquations:
         from .convert import tidied, _UNICODE_NOTE
@@ -226,14 +232,14 @@ class _Collector:
             if isinstance(entry, Found):
                 result.found.append(entry)
                 continue
-            where, context, display = entry
+            where, context, display, numbers = entry
             eq = next(native)
             if eq is None:
                 result.notes.append("an equation in %s could not be read" % where)
                 continue
             # A standalone equation on a slide is display maths even in a bare m:oMath.
             eq = tidied(Equation(eq.tex, eq.display or display))
-            result.found.append(Found(eq, where, context))
+            result.found.append(Found(eq, where, context, numbers))
             if not eq.tex.isascii() and _UNICODE_NOTE not in result.notes:
                 result.notes.append(_UNICODE_NOTE)
         if self.legacy:
@@ -307,7 +313,8 @@ def _walk_word_part(root: ET.Element, headings: set, collector: _Collector, wher
             collector.legacy += 1
         if el.tag in _MATH_TAGS:
             para = state["paras"][-1] if state["paras"] else None
-            collector.add(el, where or state["heading"] or "(before the first heading)", _context(para, WML_NS, el))
+            collector.add(el, where or state["heading"] or "(before the first heading)", _context(para, WML_NS, el),
+                          word=True)
             return False
         return True
 

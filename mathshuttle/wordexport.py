@@ -15,6 +15,7 @@ An equation that texmath cannot write stays LaTeX text, with the reason after it
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -167,7 +168,8 @@ def document_to_word(source: str, path: str, macros: Optional[compat.Macros] = N
         own = compat.with_document(macros, definitions, labels)
     notes += [" ".join(line.replace("[WARNING]", "").split()) for line in err.splitlines()
               if line.startswith("[WARNING]") and "Could not convert TeX math" not in line]
-    return write_word(blocks, path, own, labels, notes, folder, markdown=ext == ".md", meta=meta, plans=plans)
+    return write_word(blocks, path, own, labels, notes, folder, markdown=ext == ".md", meta=meta, plans=plans,
+                      source_path=source)
 
 
 _PICTURES = ("", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".svg", ".emf", ".wmf")
@@ -460,7 +462,7 @@ class _Prepare:
     numbers marked by sentinels, references and citations replaced by what LaTeX prints."""
 
     def __init__(self, macros: Optional[compat.Macros], labels: Dict[str, str], folder: Optional[str],
-                 markdown: bool = False, plans: Optional[Dict[int, List[Optional[str]]]] = None):
+                 markdown: bool = False, plans: Optional[Dict[int, List[Optional[str]]]] = None, bookmark: str = ""):
         self.macros, self.labels, self.folder = macros, labels, folder
         self.base_macros = macros
         self.ref_commands = {k[len(REF_COMMANDS):]: v.split() for k, v in labels.items() if k.startswith(REF_COMMANDS)}
@@ -468,6 +470,7 @@ class _Prepare:
         # not read (\gls{..}, a package's command): kept as code, not dropped as pandoc's docx writer would
         self.markdown = markdown
         self.plans = plans or {}
+        self.bookmark = bookmark
         self.raw_kept = 0
         self.raw_dropped: Dict[str, int] = {}
         self.numbers: Dict[int, str] = {}       # sentinel id -> "(2.1)"
@@ -551,6 +554,9 @@ class _Prepare:
             return {k: self.node(v) for k, v in node.items()}
         if t == "Math":
             self.math(node)
+            if self.bookmark:
+                # Let pandoc put the bookmark in the right story, including a footnote or table.
+                return {"t": "Span", "c": [[self.bookmark + str(len(self.maths)), [], []], [node]]}
             return node
         if t == "Link":
             attrs = dict(node["c"][0][2])
@@ -648,12 +654,13 @@ class _Prepare:
 def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
                labels: Optional[Dict[str, str]] = None, notes: Optional[List[str]] = None,
                folder: Optional[str] = None, markdown: bool = False, meta: Optional[dict] = None,
-               plans: Optional[Dict[int, List[Optional[str]]]] = None) -> List[str]:
+               plans: Optional[Dict[int, List[Optional[str]]]] = None, source_path=None) -> List[str]:
     """`blocks` (pandoc JSON; read from Markdown when `markdown`; `meta`: its title, authors, abstract) as a
     Word document at `path`, written next to it first and then put in its place, with figures found from
     `folder`.  Returns notes (what was approximated, what could not be converted, numbers)."""
-    from . import diagnose, documents
-    prep = _Prepare(macros, labels or {}, folder, markdown, plans)
+    from . import diagnose, documents, wordmarks
+    bookmark = wordmarks.temporary_prefix() if source_path else ""
+    prep = _Prepare(macros, labels or {}, folder, markdown, plans, bookmark)
     meta = prep.node(meta or {})
     blocks = prep.blocks(blocks)
     notes = list(notes or []) + prep.notes
@@ -661,16 +668,25 @@ def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
     def source() -> bytes:
         return json.dumps({"pandoc-api-version": _api(), "meta": meta, "blocks": blocks}).encode("utf-8")
 
-    target = os.path.abspath(path)
-    try:
-        handle, part = tempfile.mkstemp(dir=os.path.dirname(target), prefix="." + os.path.basename(target) + ".",
-                                        suffix=".part")
-        os.close(handle)
-    except OSError as e:
-        raise ConversionError("Could not write %s: %s" % (path, e.strerror or e))
+    memory = isinstance(path, io.BytesIO)
+    part = None
+
+    def render():
+        data, err = _run(["-f", "json", "-t", "docx", "-o", "-" if memory else part], source(), cwd=folder)
+        if memory:
+            path.seek(0)
+            path.truncate()
+            path.write(data)
+        return err
+
     failed: Dict[int, str] = {}
     try:
-        _, err = _run(["-f", "json", "-t", "docx", "-o", part], source(), cwd=folder)
+        if not memory:
+            target = os.path.abspath(path)
+            handle, part = tempfile.mkstemp(dir=os.path.dirname(target), prefix="." + os.path.basename(target) + ".",
+                                            suffix=".part")
+            os.close(handle)
+        err = render()
         failed = documents._unconverted(err, [p for _, _, p in prep.maths])
         if failed:  # again, each such equation as its LaTeX (without sentinels) and the reason after it
             for count, i in enumerate(sorted(failed), 1):
@@ -680,10 +696,10 @@ def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
                 node["reason"] = words[0] if words else failed[i]
             meta = _with_reasons(meta)
             blocks = _with_reasons(blocks)
-            _, err = _run(["-f", "json", "-t", "docx", "-o", part], source(), cwd=folder)
+            err = render()
         missing = sorted({m.group(1) for m in re.finditer(r"Could not fetch resource '?([^'\n]+?)'?(?::|\n|$)", err)})
-        numbered = _number_equations(part, prep.numbers)
-        for attempt in range(5):
+        numbered = _finish_docx(path if memory else part, prep, source_path)
+        for attempt in range(0 if memory else 5):
             try:
                 os.replace(part, target)
                 break
@@ -694,10 +710,11 @@ def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
     except OSError as e:
         raise ConversionError("Could not write %s: %s" % (path, e.strerror or e))
     finally:
-        try:
-            os.remove(part)
-        except OSError:
-            pass
+        if part:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
     if failed:
         notes.append("%d equation%s could not be converted; %s in the file as LaTeX text with the reason after "
                      "%s." % (len(failed), "" if len(failed) == 1 else "s", "it is" if len(failed) == 1 else "they are",
@@ -765,14 +782,15 @@ _ALIGN = "<m:r><m:t>&amp;</m:t></m:r>"
 _PARTS = ("word/document.xml", "word/footnotes.xml", "word/endnotes.xml")
 
 
-def _number_equations(docx: str, numbers: Dict[int, str]) -> int:
-    """Replaces the sentinels in the written file (its text, footnotes and endnotes) by Word's own
-    equation numbers; how many there are."""
-    if not numbers:
+def _finish_docx(docx, prep, source_path) -> int:
+    """Finish the equation numbers and the source records of a whole-document export."""
+    from . import wordmarks
+    numbers = prep.numbers
+    if not numbers and not source_path:
         return 0
     with zipfile.ZipFile(docx) as z:
-        files = {info: z.read(info.filename) for info in z.infolist()}
-    names = {info.filename: info for info in files}
+        infos = {info.filename: info for info in z.infolist()}
+        files = {name: z.read(name) for name in infos}
     count = [0]
 
     def omath(m: "re.Match") -> str:
@@ -782,13 +800,18 @@ def _number_equations(docx: str, numbers: Dict[int, str]) -> int:
         return "<m:oMath>%s</m:oMath>" % _numbered(body, numbers, count)
 
     for part in _PARTS:
-        if part in names:
-            xml = files[names[part]].decode("utf-8")
+        if part in files:
+            xml = files[part].decode("utf-8")
             if "QQMSN" in xml:
-                files[names[part]] = re.sub(r"<m:oMath>([\s\S]*?)</m:oMath>", omath, xml).encode("utf-8")
+                files[part] = re.sub(r"<m:oMath>([\s\S]*?)</m:oMath>", omath, xml).encode("utf-8")
+    if source_path:
+        wordmarks.mark_export(files, source_path, prep)
+    if isinstance(docx, io.BytesIO):
+        docx.seek(0)
+        docx.truncate()
     with zipfile.ZipFile(docx, "w", zipfile.ZIP_DEFLATED) as z:
-        for info, data in files.items():
-            z.writestr(info, data)
+        for name, data in files.items():
+            z.writestr(infos.get(name, name), data)
     return count[0]
 
 
