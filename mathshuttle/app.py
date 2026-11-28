@@ -121,8 +121,9 @@ def _on_a_monitor(x: int, y: int) -> bool:
         return _on_a_display_macos(x, y)
     try:
         monitor_from_point = ctypes.windll.user32.MonitorFromPoint
-    except AttributeError:  # neither Windows nor macOS: trust the saved position
-        return True
+    except AttributeError:  # neither Windows nor macOS: on the X screen (all its monitors) as Tk sees it
+        root = tk._default_root
+        return root is None or (0 <= x < root.winfo_screenwidth() and 0 <= y < root.winfo_screenheight())
     monitor_from_point.argtypes = [_POINT, ctypes.c_uint32]
     monitor_from_point.restype = ctypes.c_void_p  # HMONITOR
     return bool(monitor_from_point(_POINT(x, y), 0))  # 0 = MONITOR_DEFAULTTONULL

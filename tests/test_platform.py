@@ -126,6 +126,7 @@ def test_cli_unreadable_file_is_a_clean_error(tmp_path, capsys, content):
     assert err.startswith("error: ") and str(src) in err and "Traceback" not in err
 
 
+@pytest.mark.skipif(sys.platform not in ("win32", "darwin"), reason="no clipboard backend here")
 def test_cli_clipboard_error_is_a_clean_error(monkeypatch, capsys):
     # no clipboard access: the clipboard read is replaced by one that fails
     from mathshuttle.__main__ import main

@@ -228,6 +228,7 @@ def test_timed_out_listener_releases_the_key(monkeypatch):
     again.stop()
 
 
+@pytest.mark.skipif(sys.platform not in ("win32", "darwin"), reason="no clipboard backend here")
 def test_copy_for_office_clipboard_race():
     """A conversion does not overwrite what was copied after it read the clipboard (overwrites the clipboard)."""
     from mathshuttle import clipboard

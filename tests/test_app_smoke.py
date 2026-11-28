@@ -78,6 +78,7 @@ def test_convert_and_error_display(app):
     assert str(app.status_label.cget("foreground")) == "#b00020"  # errors in red, not like a success
 
 
+@pytest.mark.skipif(sys.platform not in ("win32", "darwin"), reason="no clipboard backend here")
 def test_copy_for_office_and_paste_back(app):
     app.src_var.set("latex")
     app.dst_var.set("omml")
@@ -508,6 +509,7 @@ def test_copy_for_office_hotkey_round_trip(app):
         app.hotkey = hotkeys.DEFAULT
 
 
+@pytest.mark.skipif(sys.platform not in ("win32", "darwin"), reason="no clipboard backend here")
 def test_shuttle_clipboard_without_the_hotkey(app):
     """What the hotkey does, called directly (there is no hotkey on macOS yet): LaTeX text becomes an
     equation for Office and back.  Overwrites the clipboard; reads only what this process wrote."""
