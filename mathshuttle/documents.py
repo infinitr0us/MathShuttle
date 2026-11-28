@@ -711,19 +711,22 @@ def _unconverted(err: str, prepared: List[str]) -> Dict[int, str]:
     return out
 
 
-def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros] = None) -> List[str]:
-    """The document's equations as a Word document (`path`), each a native equation under a line that
-    says where it was ("[3] Method"), in one pandoc run; for a collaborator who edits them in Word.
-    Macros apply to a document's own LaTeX.  Returns notes: equations that texmath cannot write are in
-    the file as LaTeX text.  The file is written next to `path` first and then put in its place, so a
-    failed export leaves an older file as it was.  An equation that texmath cannot write is in the file
-    as LaTeX text, under its line with the reason."""
+def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros] = None,
+               rows: Optional[List[EquationRow]] = None) -> List[str]:
+    """The document's equations (`rows`, all of them by default) as a Word document (`path`), each a
+    native equation under a line that says where it was, as the list shows it ("[3] Method  [eq:x]
+    (2.1)": its place in the document, its LaTeX number), in one pandoc run; for a collaborator who
+    edits them in Word.  Macros apply to a document's own LaTeX.  Returns notes: equations that texmath
+    cannot write are in the file as LaTeX text.  The file is written next to `path` first and then put
+    in its place, so a failed export leaves an older file as it was.  An equation that texmath cannot
+    write is in the file as LaTeX text, under its line with the reason."""
     own = doc.source == "latex"
     used = doc.macros(macros)
+    rows = doc.rows() if rows is None else rows
     notes: List[str] = []
     tags = False
     prepared: List[str] = []
-    for found in doc.found:
+    for found in [row.found for row in rows]:
         try:
             tex, new = compat.for_texmath(found.equation.tex, used, "omml")
         except ConversionError:  # (a definition compat cannot use): as it is, pandoc writes it as text
@@ -738,9 +741,9 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
     def source(reasons: Dict[int, str]) -> bytes:
         blocks: list = [{"t": "Header", "c": [1, ["", [], []],
                                               _inlines("Equations of " + os.path.basename(doc.path))]}]
-        for i, (found, tex) in enumerate(zip(doc.found, prepared), 1):
-            kind = "DisplayMath" if found.equation.display else "InlineMath"
-            line = [{"t": "Emph", "c": _inlines("[%d] %s" % (i, found.where))}]
+        for i, (row, tex) in enumerate(zip(rows, prepared), 1):
+            kind = "DisplayMath" if row.found.equation.display else "InlineMath"
+            line = [{"t": "Emph", "c": _inlines("[%d] %s" % (row.number, row.location))}]
             if i in reasons:
                 line += [{"t": "Space"}, {"t": "Strong", "c": _inlines(
                     "(not converted: %s; it is here as LaTeX text)" % reasons[i])}]
@@ -760,7 +763,7 @@ def write_docx(doc: DocumentEquations, path: str, macros: Optional[compat.Macros
         reasons = _unconverted(err, prepared)
         from . import diagnose
         for i in sorted(reasons)[:50]:  # in plain words (a probe each: not for hundreds of them)
-            words = diagnose.explain(doc.found[i - 1].equation.tex, prepared[i - 1], reasons[i], short=True)
+            words = diagnose.explain(rows[i - 1].found.equation.tex, prepared[i - 1], reasons[i], short=True)
             reasons[i] = words[0] if words else reasons[i]
         if reasons:  # once more, with the reason above each equation that stays LaTeX text
             _, err = _run(["-f", "json", "-t", "docx", "-o", part], source(reasons))

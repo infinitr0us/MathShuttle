@@ -210,6 +210,14 @@ $y$ $x$ \[x\]
     assert capsys.readouterr().out == "% [3] Intro  (3x)\n\\[ x \\]\n\n"
     from mathshuttle.documents import read_document
     assert len(read_document(str(word)).found) == 1
+    import zipfile
+    with zipfile.ZipFile(str(word)) as z:  # the Word file says what the listing says
+        assert "[3] Intro (3x)" in " ".join(re.sub(r"<[^>]+>", " ", z.read("word/document.xml").decode()).split())
+    whole = tmp_path / "all.docx"
+    assert main(["extract", str(path), "--docx", str(whole)]) == 0
+    capsys.readouterr()
+    with zipfile.ZipFile(str(whole)) as z:
+        assert "[7] Method [eq:loss] (2.1)" in " ".join(re.sub(r"<[^>]+>", " ", z.read("word/document.xml").decode()).split())
 
     assert main(["extract", str(path), "--display", "--match", "2.1"]) == 0
     assert capsys.readouterr().out.startswith("% [7] Method  [eq:loss]  (2.1)\n")

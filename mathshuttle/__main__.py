@@ -6,7 +6,6 @@ import os
 import re
 import shlex
 import sys
-from dataclasses import replace
 
 from . import __version__
 from .compat import load_macros, merge_notes
@@ -235,10 +234,7 @@ def _cli(argv: list[str]) -> int:
             rows = doc.rows(args.display, args.unique, args.match)
             if args.docx:  # first, and said at once: an equation that -t cannot write below does not stop it
                 from .documents import write_docx
-                export = doc
-                if args.display or args.unique or args.match:
-                    export = replace(doc, found=[replace(row.found, where=row.location) for row in rows])
-                written = write_docx(export, args.docx, macros)
+                written = write_docx(doc, args.docx, macros, rows)  # (as listed: their places, LaTeX numbers)
                 sys.stderr.write("".join(n + "\n" for n in written) + "written to %s\n" % args.docx)
                 sys.stderr.flush()
             own = doc.macros(macros)  # a document's own LaTeX: the macro files and its own definitions
