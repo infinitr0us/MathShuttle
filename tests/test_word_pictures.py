@@ -233,3 +233,26 @@ def test_picture_cannot_input_another_file(tmp_path):
         preview.render_picture(r"\target", False, [r"\newcommand{\target}{\input{" + local.as_posix() + "}}"],
                                work=str(tmp_path))
     assert list(tmp_path.iterdir()) == [local]
+
+
+
+def test_display_picture_is_centred_and_numbered(tmp_path):
+    # a numbered display picture: a centre tab before it, a right tab and its number after it (raised to
+    # its middle), as Word sets a numbered equation; the next native equation keeps the following number
+    needs_tex("tikz-cd")
+    body = ("\\begin{equation}\n" + DIAGRAM.replace("\\Obj", "A") + "\n\\label{d}\n\\end{equation}\n"
+            "and\n\\begin{equation}\nE = mc^2\n\\end{equation}")
+    source = paper(tmp_path, body, "\\usepackage{tikz-cd}")
+    out = tmp_path / "paper.docx"
+    document_to_word(str(source), str(out))
+    xml, pngs = pictures(out)
+    assert len(pngs) == 1
+    para = next(p for p in xml.iter(W + "p") if list(p.iter(WP + "docPr")))
+    tabs = [t.get(W + "val") for t in para.iter(W + "tab") if t.get(W + "val")]
+    assert tabs == ["center", "right"]
+    assert text_of(para).strip() == "(1)"
+    assert any(r.find(W + "rPr/" + W + "position") is not None for r in para.iter(W + "r"))
+    names = [b.get(W + "name", "") for b in para.iter(W + "bookmarkStart")]
+    assert all(n.startswith("_MSEq") for n in names)  # the layout's own bookmark is gone
+    with zipfile.ZipFile(out) as z:
+        assert "#(2)" in z.read("word/document.xml").decode("utf-8")

@@ -698,6 +698,8 @@ def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
 
     picture_kinds = []
     picture_errors = []
+    picture_marks: Dict[str, List[str]] = {}  # bookmark of a display picture -> its numbers
+    picture_prefix = wordmarks.temporary_prefix()
     try:
         originals = wordmarks.sources(source_path, prep) if source_path and prep.maths else []
         if not memory:
@@ -724,6 +726,13 @@ def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
                         if reason not in picture_errors:
                             picture_errors.append(reason)
                     else:
+                        if eq.display:
+                            # centred with its number at the right margin, as Word sets a numbered equation
+                            # (_lay_out_pictures): found again by a bookmark around it
+                            mark = "%sP%d" % (picture_prefix, len(picture_marks) + 1)
+                            picture_marks[mark] = [prep.numbers[int(k)] for k in re.findall(r"QQMSN(\d+)QQ", eq.prepared)
+                                                   if int(k) in prep.numbers]
+                            image = {"t": "Span", "c": [[mark, [], []], [image]]}
                         eq.node["picture"] = image
                         if eq.display:
                             displays.add(id(image))
@@ -738,7 +747,7 @@ def write_word(blocks: list, path: str, macros: Optional[compat.Macros] = None,
             blocks = _with_fallbacks(blocks, displays)
             err = render()
         missing = sorted({m.group(1) for m in re.finditer(r"Could not fetch resource '?([^'\n]+?)'?(?::|\n|$)", err)})
-        numbered = _finish_docx(path if memory else part, prep, source_path, originals)
+        numbered = _finish_docx(path if memory else part, prep, source_path, originals, picture_marks)
         for attempt in range(0 if memory else 5):
             try:
                 os.replace(part, target)
@@ -905,11 +914,11 @@ _ALIGN = "<m:r><m:t>&amp;</m:t></m:r>"
 _PARTS = ("word/document.xml", "word/footnotes.xml", "word/endnotes.xml")
 
 
-def _finish_docx(docx, prep, source_path, originals) -> int:
+def _finish_docx(docx, prep, source_path, originals, picture_marks=None) -> int:
     """Finish the equation numbers and the source records of a whole-document export."""
     from . import wordmarks
     numbers = prep.numbers
-    if not numbers and not source_path:
+    if not numbers and not source_path and not picture_marks:
         return 0
     with zipfile.ZipFile(docx) as z:
         infos = {info.filename: info for info in z.infolist()}
@@ -927,6 +936,8 @@ def _finish_docx(docx, prep, source_path, originals) -> int:
             xml = files[part].decode("utf-8")
             if "QQMSN" in xml:
                 files[part] = re.sub(r"<m:oMath>([\s\S]*?)</m:oMath>", omath, xml).encode("utf-8")
+    if picture_marks:
+        count[0] += _lay_out_pictures(files, picture_marks)
     if source_path:
         wordmarks.mark_export(files, source_path, prep.bookmark, originals)
     if isinstance(docx, io.BytesIO):
@@ -936,6 +947,69 @@ def _finish_docx(docx, prep, source_path, originals) -> int:
         for name, data in files.items():
             z.writestr(infos.get(name, name), data)
     return count[0]
+
+
+def _text_width(document_xml: str) -> int:
+    """The width between the margins of the (last) section, in twentieths of a point."""
+    size = re.search(r'<w:pgSz\b[^>]*\bw:w="(\d+)"', document_xml)
+    margins = re.search(r"<w:pgMar\b[^>]*>", document_xml)
+    if not size or not margins:
+        return 9360  # US Letter with 1 inch margins, pandoc's default
+    left = re.search(r'\bw:left="(\d+)"', margins[0])
+    right = re.search(r'\bw:right="(\d+)"', margins[0])
+    return max(2880, int(size[1]) - int(left[1] if left else 1440) - int(right[1] if right else 1440))
+
+
+def _lay_out_pictures(files: Dict[str, bytes], marks: Dict[str, List[str]]) -> int:
+    """Each display picture (found by the bookmark around it, which goes) centred by a centre tab, and
+    its number, if it has one, at the right margin by a right tab: as Word sets a numbered equation.
+    Returns how many numbers were written."""
+    width = _text_width(files.get("word/document.xml", b"").decode("utf-8"))
+    tabs = '<w:tabs><w:tab w:val="center" w:pos="%d"/><w:tab w:val="right" w:pos="%d"/></w:tabs>' % (width // 2, width)
+    numbered = 0
+    for part in _PARTS:
+        if part not in files:
+            continue
+        xml = files[part].decode("utf-8")
+        changed = False
+        for mark, shown in marks.items():
+            # (pandoc writes a span's identifier as a bookmark named with a leading "_")
+            start = re.search(r'<w:bookmarkStart w:id="(\d+)" w:name="_?%s"\s*/>' % re.escape(mark), xml)
+            if not start:
+                continue
+            p0 = max((m.start() for m in re.finditer(r"<w:p[ >]", xml[:start.start()])), default=-1)
+            p1 = xml.find("</w:p>", start.end())
+            if p0 < 0 or p1 < 0:
+                continue
+            para = re.sub(r'<w:bookmarkEnd w:id="%s"\s*/>' % start[1], "", xml[p0:p1].replace(start[0], "", 1), count=1)
+            head = re.match(r"<w:p\b[^>]*>", para)
+            body = para[head.end():]
+            ppr = re.match(r"<w:pPr>([\s\S]*?)</w:pPr>", body)
+            if ppr:
+                inner = ppr[1]
+                style = re.match(r"<w:pStyle\b[^>]*/>", inner)
+                inner = inner[:style.end()] + tabs + inner[style.end():] if style else tabs + inner
+                body = "<w:pPr>%s</w:pPr>" % inner + body[ppr.end():]
+                cut = len("<w:pPr>%s</w:pPr>" % inner)
+            else:
+                body = "<w:pPr>%s</w:pPr>" % tabs + body
+                cut = len("<w:pPr>%s</w:pPr>" % tabs)
+            number = ""
+            if shown:
+                # raised to the middle of the picture, as LaTeX centres a number on a tall display
+                # (w:position counts half points; the picture's height is in EMU, 12700 to the point)
+                extent = re.search(r'<wp:extent\b[^>]*\bcy="(\d+)"', body)
+                raise_by = max(0, round(int(extent[1]) / 12700) - 8) if extent else 0
+                props = '<w:rPr><w:position w:val="%d"/></w:rPr>' % raise_by if raise_by else ""
+                number = '<w:r><w:tab/></w:r><w:r>%s<w:t xml:space="preserve">%s</w:t></w:r>' % (props, ", ".join(
+                    s.replace("&", "&amp;").replace("<", "&lt;") for s in shown))
+                numbered += 1
+            body = body[:cut] + "<w:r><w:tab/></w:r>" + body[cut:] + number
+            xml = xml[:p0] + head[0] + body + xml[p1:]
+            changed = True
+        if changed:
+            files[part] = xml.encode("utf-8")
+    return numbered
 
 
 def _number_run(shown: str) -> str:
