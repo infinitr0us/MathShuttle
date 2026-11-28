@@ -11,10 +11,11 @@ import sys
 import threading
 import tkinter as tk
 import traceback
+import zipfile
 from tkinter import filedialog
 from tkinter import font as tkfont
 from tkinter import ttk
-from typing import Optional
+from typing import Dict, Optional
 
 from . import __version__, clipboard, compat, hotkeys, latex_wrap, preview, theme
 from .convert import FORMAT_LABELS, MODES, Result, convert, input_equations, macro_notes, office_copy
@@ -1292,6 +1293,9 @@ class EquationList(tk.Toplevel):
         if os.path.splitext(doc.path)[1].lower() in (".tex", ".md"):  # the text too (wordexport)
             ttk.Button(buttons, text="Whole file as Word...", command=self.save_document_as_word).pack(side="left")
         ttk.Button(buttons, text="Close", command=self.destroy).pack(side="right")
+        if os.path.splitext(doc.path)[1].lower() == ".tex":  # a co-author's Word file of this paper
+            ttk.Button(buttons, text="Compare with a returned Word file...",
+                       command=self.compare_with_word).pack(side="right", padx=6)
 
     def destroy(self):
         if self._refresh_id is not None:
@@ -1470,6 +1474,194 @@ class EquationList(tk.Toplevel):
                 return
             self.info.set("   ".join(["Written: %s" % os.path.basename(path)] + (notes or [])))
         self.app._in_background(lambda: document_to_word(source, path, macros), done, daemon=False)
+
+    def compare_with_word(self, path: Optional[str] = None) -> None:
+        """A Word file of this paper that came back (edited, with Track Changes, commented): which
+        equations changed, in a window of their own (compare.compare)."""
+        path = path or filedialog.askopenfilename(
+            parent=self, title="The Word file that came back", filetypes=[("Word document", "*.docx")])
+        if not path:
+            return
+        CompareWindow(self.app, path, self.doc.path)
+
+
+class CompareWindow(tk.Toplevel):
+    """What a co-author changed in the Word file of a paper: each equation changed, deleted, added or
+    commented, with the LaTeX from Word, who changed it, their comments; and a corrected copy of the paper."""
+
+    STATUS = {"changed": "Changed", "deleted": "Deleted", "added": "Added", "unchanged": "Unchanged"}
+
+    def __init__(self, app: "App", returned: str, paper: str) -> None:
+        super().__init__(app)
+        self.app, self.returned, self.paper = app, returned, paper
+        self.result = None
+        self.title("Compare: %s and %s" % (os.path.basename(paper), os.path.basename(returned)))
+        self.transient(app)
+        if app.theme_mode == "dark":
+            theme.dark_title_bar(self, True)
+        pad = {"padx": 10, "pady": 4}
+        self.info = tk.StringVar(self, value="Comparing %s with %s..." % (os.path.basename(returned),
+                                                                          os.path.basename(paper)))
+        ttk.Label(self, textvariable=self.info, wraplength=900, justify="left").pack(anchor="w", padx=10, pady=(10, 4))
+        self.all_var = tk.BooleanVar(self, value=False)
+        ttk.Checkbutton(self, text="Show unchanged equations too", variable=self.all_var,
+                        command=self._fill).pack(anchor="w", **pad)
+
+        self._buttons = ttk.Frame(self)  # (packed before the panes: the list never pushes them out)
+        self._buttons.pack(fill="x", side="bottom", padx=10, pady=(4, 10))
+        panes = ttk.PanedWindow(self, orient="vertical")
+        panes.pack(fill="both", expand=True, **pad)
+        frame = ttk.Frame(panes)
+        style = ttk.Style(self)
+        style.configure("Compare.Treeview", rowheight=int(app.mono.metrics("linespace") * 1.35), font=app.mono)
+        self.tree = ttk.Treeview(frame, columns=("status", "where", "latex", "notes"), show="headings",
+                                 selectmode="browse", style="Compare.Treeview", height=10)
+        for column, title, width in (("status", "What", 90), ("where", "Where", 240),
+                                     ("latex", "LaTeX (as it is now in Word)", 480), ("notes", "Notes", 260)):
+            self.tree.heading(column, text=title, anchor="w")
+            self.tree.column(column, width=width, anchor="w")
+        scroll = ttk.Scrollbar(frame, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
+        panes.add(frame, weight=3)
+        self.detail = tk.Text(panes, wrap="word", font=app.mono, height=10, padx=10, pady=8)
+        theme.style_text(self.detail, app.theme_mode)
+        panes.add(self.detail, weight=2)
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._show())
+
+        buttons = self._buttons
+        ttk.Button(buttons, text="Copy LaTeX from Word", command=self.copy_returned).pack(side="left")
+        ttk.Button(buttons, text="Use as input", command=self.use).pack(side="left", padx=6)
+        self.write_button = ttk.Button(buttons, text="Write a corrected copy of the paper...",
+                                       command=self.write_corrected, style=app._accent(), state="disabled")
+        self.write_button.pack(side="left", padx=6)
+        ttk.Button(buttons, text="Close", command=self.destroy).pack(side="right")
+        self._rows: Dict[str, object] = {}
+        macros = app._macros()
+        from . import compare
+
+        def done(result, error) -> None:
+            if not self.winfo_exists():
+                return
+            if error is not None:
+                if not isinstance(error, (ConversionError, PandocNotFound, OSError, zipfile.BadZipFile)):
+                    raise error
+                self.info.set("Could not compare: %s" % (str(error).strip().splitlines() or ["?"])[-1])
+                return
+            self.result = result
+            self.write_button.configure(state="normal")
+            self._fill()
+        app._in_background(lambda: compare.compare(returned, paper, macros), done)
+
+    def _fill(self) -> None:
+        if self.result is None:
+            return
+        self.tree.delete(*self.tree.get_children())
+        self._rows.clear()
+        rows = self.result.rows
+        counts = {s: sum(1 for r in rows if r.status == s) for s in self.STATUS}
+        commented = sum(1 for r in rows if r.comments)
+        summary = ", ".join("%d %s" % (counts[s], s) for s in ("changed", "deleted", "added") if counts[s])
+        self.info.set("%s compared with %s: %s%s." % (
+            os.path.basename(self.paper), os.path.basename(self.returned), summary or "no equation changed",
+            ", %d with comments" % commented if commented else ""))
+        originals = {r.original.n: r.original for r in rows if r.original}
+        for row in rows:
+            if row.status == "unchanged" and not row.comments and not self.all_var.get():
+                continue
+            eq = row.original
+            if eq is not None:
+                where = "  ".join(x for x in (eq.number or "equation %d" % eq.n, " ".join(eq.labels), eq.section) if x)
+            else:
+                anchor = originals.get(row.after)
+                where = ("after %s" % (anchor.number or "equation %d" % anchor.n)) if anchor else "at the start"
+            latex = " ".join((row.returned or (eq.tex if eq else "")).split())
+            notes = []
+            if row.revisions:
+                notes.append("tracked: " + ", ".join(sorted({r.author or "?" for r in row.revisions})))
+            if row.comments:
+                notes.append("%d comment%s" % (len(row.comments), "" if len(row.comments) == 1 else "s"))
+            iid = self.tree.insert("", "end", values=(self.STATUS.get(row.status, row.status), where,
+                                                      latex[:200], "; ".join(notes)))
+            self._rows[iid] = row
+        children = self.tree.get_children()
+        if children:
+            self.tree.selection_set(children[0])
+
+    def _row(self):
+        sel = self.tree.selection()
+        return self._rows.get(sel[0]) if sel else None
+
+    def _show(self) -> None:
+        row = self._row()
+        self.detail.configure(state="normal")
+        self.detail.delete("1.0", "end")
+        if row is not None:
+            parts = []
+            if row.original is not None:
+                parts.append("In the paper:\n" + row.original.tex.strip())
+            if row.status != "deleted":
+                parts.append("In Word now:\n" + (row.returned or "(empty)"))
+            for r in row.revisions[:5]:
+                parts.append("Tracked change by %s, %s" % (r.author or "?", r.date or "?"))
+            for c in row.comments:
+                parts.append("Comment by %s: %s" % (c.author or "?", c.text))
+            self.detail.insert("1.0", "\n\n".join(parts))
+        self.detail.configure(state="disabled")
+
+    def _latex(self) -> Optional[str]:
+        row = self._row()
+        if row is None:
+            return None
+        if row.status == "deleted":
+            return row.original.tex if row.original else None
+        return latex_wrap.wrap(row.returned, "auto", row.display) if row.returned else None
+
+    def copy_returned(self) -> None:
+        latex = self._latex()
+        if latex:
+            self.clipboard_clear()
+            self.clipboard_append(latex)
+            self.info.set("Copied the LaTeX of the selected equation.")
+
+    def use(self) -> None:
+        latex = self._latex()
+        if latex:
+            self.app.src_var.set("latex")
+            self.app.input.delete("1.0", "end")
+            self.app.input.insert("1.0", latex)
+            self.app.convert_now()
+            self.app.lift()
+
+    def write_corrected(self, path: Optional[str] = None) -> None:
+        if self.result is None:
+            return
+        stem = os.path.splitext(os.path.basename(self.paper))[0]
+        path = path or filedialog.asksaveasfilename(
+            parent=self, title="Save the corrected copy of the paper", defaultextension=".tex",
+            initialdir=os.path.dirname(self.paper), initialfile=stem + ".revised.tex",
+            filetypes=[("LaTeX", "*.tex"), ("All files", "*.*")])
+        if not path:
+            return
+        if os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(self.paper)):
+            self.info.set("Choose another file name: the paper itself is never overwritten.")
+            return
+        from . import compare
+        result = self.result
+
+        def done(notes, error) -> None:
+            if not self.winfo_exists():
+                return
+            if error is not None:
+                if not isinstance(error, (ConversionError, OSError)):
+                    raise error
+                self.info.set("Could not write it: %s" % (str(error).strip().splitlines() or ["?"])[-1])
+                return
+            diff = os.path.splitext(path)[0] + ".diff"
+            self.info.set("   ".join(["Written: %s and %s" % (os.path.basename(path), os.path.basename(diff))]
+                                     + list(notes or [])))
+        self.app._in_background(lambda: compare.write_corrected(result, path), done, daemon=False)
 
 
 def main() -> int:

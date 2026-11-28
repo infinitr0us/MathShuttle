@@ -693,3 +693,24 @@ def test_macros_dialog_opens_in_the_theme(app):
     finally:
         for w in new:
             w.destroy()
+
+
+def test_compare_window_with_a_returned_word_file(app, tmp_path):
+    import shutil
+    from mathshuttle.app import CompareWindow
+    fixtures = os.path.join(os.path.dirname(__file__), "fixtures", "word_roundtrip")
+    paper = tmp_path / "paper.tex"
+    shutil.copyfile(os.path.join(fixtures, "paper.tex"), paper)
+    win = CompareWindow(app, os.path.join(fixtures, "returned-deleted-comment.docx"), str(paper))
+    try:
+        assert pump(app, seconds=60, until=lambda: win.result is not None)
+        shown = [win.tree.item(i, "values")[0] for i in win.tree.get_children()]
+        assert "Deleted" in shown and "Added" in shown and "Unchanged" in shown  # (1): commented
+        assert "1 deleted" in win.info.get() and "with comments" in win.info.get()
+        out = tmp_path / "paper.revised.tex"
+        win.write_corrected(str(out))
+        assert pump(app, seconds=30, until=lambda: out.exists() and "Written" in win.info.get())
+        assert (tmp_path / "paper.revised.diff").exists()
+        assert "MathShuttle: deleted in" in out.read_text(encoding="utf-8")
+    finally:
+        win.destroy()
