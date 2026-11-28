@@ -1,0 +1,25 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb}
+\newcommand{\R}{\mathbb{R}}
+\begin{document}
+\section{Model}
+The loss is
+\begin{equation}
+  \mathcal{L}(\theta) = \frac{1}{N} \sum_{i=1}^{N} (f_\theta(x_i) - y_i)^2 \label{eq:loss}
+\end{equation}
+and its gradient
+\begin{equation}
+  \nabla_\theta \mathcal{L} = \frac{2}{N} \sum_{i=1}^{N} (f_\theta(x_i) - y_i) \nabla_\theta f_\theta(x_i) \label{eq:grad}
+\end{equation}
+\section{Bounds}
+For all $x \in \R^n$ we have
+\begin{align}
+  a &= b + c \label{eq:first} \\
+  d &= e + f \label{eq:second}
+\end{align}
+and finally
+\begin{equation}
+  E = m c^2 \label{eq:energy}
+\end{equation}
+which ends the section.
+\end{document}
