@@ -430,8 +430,10 @@ def _read_picture(z: zipfile.ZipFile, shape: ET.Element, tag_paths: Dict[str, st
             collector.entries.append(Found(eq, location, name))
     except ConversionError as e:
         notes.append("could not read the LaTeX: " + _shorten(str(e), 140))
-    for note in notes:
-        collector.notes.append("%s: %s" % (location + (" " + name if name else ""), note))
+    written = compat._NOTES["written"].split("%s")[0]
+    for note in notes:  # what went wrong, per picture; not which macros were written out (every picture)
+        if not note.startswith(written):
+            collector.notes.append("%s: %s" % (location + (" " + name if name else ""), note))
 
 
 def _walk_slide_part(z: zipfile.ZipFile, root: ET.Element, targets: List[Tuple[str, str, str]], where: str,
