@@ -27,9 +27,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - name: Install pandoc 3.14
+      - name: Install pandoc with MathShuttle's own download (the real one, checked against its SHA-256)
         shell: bash
-        run: python tools/ci_pandoc.py >> "$GITHUB_PATH"
+        run: |
+          python -m mathshuttle get-pandoc --force
+          python -c "from mathshuttle import pandoc_fetch; print('MATHSHUTTLE_PANDOC=' + pandoc_fetch.installed_pandoc())" >> "$GITHUB_ENV"
       - name: Install pytest
         run: python -m pip install pytest
       - name: Show versions

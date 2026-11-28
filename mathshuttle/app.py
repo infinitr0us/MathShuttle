@@ -13,7 +13,7 @@ import tkinter as tk
 import traceback
 from tkinter import filedialog
 from tkinter import font as tkfont
-from tkinter import messagebox, ttk
+from tkinter import ttk
 from typing import Optional
 
 from . import __version__, clipboard, compat, hotkeys, latex_wrap, preview, theme
@@ -451,9 +451,8 @@ class App(tk.Tk):
             self.engine_var.set(engine_description())
         except PandocNotFound as e:
             self.engine_var.set("pandoc not found")
-            self._set_status("pandoc not found  -  install it (%s) "
-                             "or set MATHSHUTTLE_PANDOC, then restart" % INSTALL_HINT, error=True)
-            messagebox.showerror("pandoc not found", str(e))
+            self._set_status("pandoc, the conversion engine, is not installed", error=True)
+            self._show_pandoc_banner(str(e))
             return
         except Exception as e:  # pragma: no cover
             self.engine_var.set("engine check failed")
@@ -463,6 +462,87 @@ class App(tk.Tk):
         self._toggle_hotkey()
         self._in_background(preview.tools, self._latex_checked)  # latex --version takes a moment
         self._schedule()
+
+    # ---- pandoc missing: offer to download it -----------------------------------------------------
+    def _show_pandoc_banner(self, reason: str) -> None:
+        """A strip at the top of the window: pandoc is missing, Download installs pandoc's own release
+        (checked against its SHA-256) for this user.  Not offered when MATHSHUTTLE_PANDOC names a file
+        that is not there: that setting would still win over the download."""
+        from . import pandoc_engine, pandoc_fetch
+        if getattr(self, "_banner", None) is not None:
+            self._banner.destroy()
+        banner = ttk.Frame(self, padding=(12, 10), style="Card.TFrame" if self.theme_mode != "native" else "TFrame")
+        banner.pack(side="top", fill="x", padx=10, pady=(10, 0), before=self._top)
+        self._banner = banner
+        env_name, env_value = pandoc_engine._env_pandoc()
+        self._banner_text = tk.StringVar(self)
+        ttk.Label(banner, textvariable=self._banner_text, wraplength=760, justify="left").pack(side="left", fill="x",
+                                                                                           expand=True)
+        buttons = ttk.Frame(banner)
+        buttons.pack(side="right")
+        if env_value:
+            self._banner_text.set(reason)
+            return
+        try:
+            size = " (%d MB)" % round(pandoc_fetch._release_asset().size / 1e6)
+        except pandoc_fetch.FetchError as e:  # no release for this system: only the manual way
+            self._banner_text.set(str(e))
+            return
+        self._banner_text.set("MathShuttle needs pandoc, the conversion engine, and it is not installed. "
+                              "Download pandoc %s%s from pandoc's own release (checked before it is used), "
+                              "or install it yourself with  %s." % (pandoc_fetch.PANDOC_VERSION, size, INSTALL_HINT))
+        self._fetch_progress = ttk.Progressbar(buttons, length=160, mode="determinate", maximum=100)
+        self._fetch_button = ttk.Button(buttons, text="Download pandoc", style=self._accent(),
+                                        command=self._download_pandoc)
+        self._fetch_button.pack(side="right")
+
+    def _download_pandoc(self) -> None:
+        from . import pandoc_engine, pandoc_fetch
+        cancel = threading.Event()
+        state = {"done": 0, "total": None}
+
+        def progress(done, total):  # (in the download thread: only numbers are handed over)
+            state["done"], state["total"] = done, total
+
+        def cancel_download():
+            cancel.set()
+            self._fetch_button.configure(state="disabled")
+
+        def tick():
+            if not self._fetch_progress.winfo_exists() or cancel.is_set():
+                return
+            if state["total"]:
+                self._fetch_progress.configure(value=100 * state["done"] / state["total"])
+                self._banner_text.set("Downloading pandoc %s: %d of %d MB" % (
+                    pandoc_fetch.PANDOC_VERSION, state["done"] // 1_000_000, state["total"] // 1_000_000))
+            if self._fetching:
+                self.after(150, tick)
+
+        def finished(path, error):
+            self._fetching = False
+            if error is None:
+                pandoc_engine.reset_pandoc()
+                self._banner.destroy()
+                self._banner = None
+                self._startup_check()
+                self._set_status("pandoc %s installed: %s" % (pandoc_fetch.PANDOC_VERSION, path))
+                return
+            self._fetch_progress.pack_forget()
+            self._fetch_button.configure(text="Try again", state="normal", style=self._accent(),
+                                         command=self._download_pandoc)
+            if isinstance(error, pandoc_fetch.FetchCancelled):
+                self._banner_text.set("The download was cancelled. Nothing was installed.")
+            else:
+                message = str(error) if isinstance(error, pandoc_fetch.FetchError) else repr(error)
+                self._banner_text.set(message)
+
+        self._fetching = True
+        self._fetch_progress.configure(value=0)
+        self._fetch_progress.pack(side="right", padx=(0, 10))
+        self._fetch_button.configure(text="Cancel", style="TButton", command=cancel_download)
+        self._banner_text.set("Downloading pandoc %s..." % pandoc_fetch.PANDOC_VERSION)
+        self._in_background(lambda: pandoc_fetch.install(progress=progress, cancel=cancel), finished)
+        self.after(150, tick)
 
     def _update_option_states(self) -> None:
         src, dst = self.src_var.get(), self.dst_var.get()

@@ -28,7 +28,7 @@ Windows and macOS. Everything runs on your computer; nothing is sent anywhere.
    **macOS:** drag `MathShuttle.app` into Applications. It is not signed by a registered developer, so
    the first time open it with System Settings > Privacy & Security > *Open Anyway*.
 3. MathShuttle needs [pandoc](https://pandoc.org), the conversion engine. If pandoc is not installed,
-   the window offers to download it (pandoc's own release, 43 MB, checked against its SHA-256). You can
+   the window offers to download it (pandoc's own release, about 40 MB, checked against its SHA-256). You can
    also install it yourself: `winget install JohnMacFarlane.Pandoc` (Windows) or `brew install pandoc`
    (macOS).
 

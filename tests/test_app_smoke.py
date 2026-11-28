@@ -575,3 +575,63 @@ def test_preview_shows_the_latex(app):
     set_input(app, r"\frac{a}")  # an error clears the picture
     app.convert_now()
     assert pump(app, until=lambda: app._preview_image is None)
+
+
+def test_pandoc_missing_offers_a_download(app, monkeypatch, tmp_path):
+    # the start-up check finds no pandoc: a strip offers the download; Download installs (here: a stand-in
+    # for pandoc_fetch.install that reports progress) and the app looks for pandoc again
+    from mathshuttle import pandoc_engine, pandoc_fetch
+    monkeypatch.delenv("MATHSHUTTLE_PANDOC", raising=False)
+    monkeypatch.delenv("EQUATION_TOOL_PANDOC", raising=False)
+    real_find = pandoc_engine.find_pandoc
+    state = {"installed": False, "resets": 0}
+
+    def find():
+        if not state["installed"]:
+            raise pandoc_engine.PandocNotFound("pandoc.exe was not found.")
+        return real_find()
+
+    def install(progress=None, cancel=None):
+        for done in (0, 20_000_000, 40_000_000):
+            progress(done, 40_000_000)
+            time.sleep(0.05)
+        state["installed"] = True
+        return str(tmp_path / "pandoc.exe")
+
+    def reset():
+        state["resets"] += 1
+
+    import mathshuttle.app as app_module
+    monkeypatch.setattr(app_module, "engine_description", lambda: find() and "pandoc (test)")
+    monkeypatch.setattr(pandoc_fetch, "install", install)
+    monkeypatch.setattr(pandoc_engine, "reset_pandoc", reset)
+    app._startup_check()
+    assert app._banner is not None and "not installed" in app._banner_text.get()
+    assert app._fetch_button.cget("text") == "Download pandoc"
+    app._fetch_button.invoke()
+    assert pump(app, until=lambda: app._banner is None)
+    assert state["resets"] == 1
+    assert app.engine_var.get() == "pandoc (test)"
+    assert "pandoc 3.14 installed" in app.status_var.get()
+
+
+def test_pandoc_download_failure_can_be_retried(app, monkeypatch):
+    from mathshuttle import pandoc_engine, pandoc_fetch
+    monkeypatch.delenv("MATHSHUTTLE_PANDOC", raising=False)
+    monkeypatch.delenv("EQUATION_TOOL_PANDOC", raising=False)
+    import mathshuttle.app as app_module
+
+    def missing():
+        raise pandoc_engine.PandocNotFound("pandoc.exe was not found.")
+
+    def install(progress=None, cancel=None):
+        raise pandoc_fetch.FetchError("Could not download pandoc. Check your connection and try again.")
+
+    monkeypatch.setattr(app_module, "engine_description", missing)
+    monkeypatch.setattr(pandoc_fetch, "install", install)
+    app._startup_check()
+    app._fetch_button.invoke()
+    assert pump(app, until=lambda: app._fetch_button.cget("text") == "Try again")
+    assert "Check your connection" in app._banner_text.get()
+    app._banner.destroy()
+    app._banner = None
