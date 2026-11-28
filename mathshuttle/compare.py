@@ -40,6 +40,7 @@ class CompareRow:
     comments: list[Comment] = field(default_factory=list)
     after: Optional[int] = None  # preceding original in the returned document
     note: str = ""
+    numbers: list = field(default_factory=list)  # the row numbers Word shows, in row order
 
     @property
     def tracked(self):
@@ -68,6 +69,7 @@ class _Returned:
     move: str = ""
     picture: bool = False
     conflicting_books: tuple = ()
+    numbers: list = field(default_factory=list)
 
 
 def _pieces(math, at_boundary):
@@ -117,11 +119,13 @@ def _read_returned(z, originals):
     known = {o.n: o for o in originals}
     occurrences, fragments, requests = [], [], []
 
-    def queue(math, accept, outer, display, numbers):
+    def queue(math, accept, outer, display, numbers, found=None):
         if any(e.tag in (DELETED if accept else INSERTED) for e in outer):
             return None
         view = wordmath.revision_view(math, accept)
-        wordmath.strip_numbers(view, numbers)
+        stripped = wordmath.strip_numbers(view, numbers)
+        if found is not None:
+            found.extend(stripped)
         if wordmath.empty(view):
             return None
         if display and view.tag == M + "oMath":
@@ -177,7 +181,7 @@ def _read_returned(z, originals):
             occurrences.append(eq)
             mode = original.display if original else display
             numbers = original.numbers if original else ()
-            accepted = queue(math, True, outer, mode, numbers)
+            accepted = queue(math, True, outer, mode, numbers, eq.numbers)
             rejected = queue(old, False, outer, mode, numbers) if revisions or old is not math else accepted
             requests.append((accepted, rejected))
 
@@ -276,9 +280,19 @@ def _align_gap(originals, keys, a, b, pairs, uncertain, unplaced):
         # A repeated equation (x = 1 twice) added, deleted or changed once: which occurrence it was is
         # not known. Only those are left undecided; the others are still aligned.
         known = set(before) - doubtful
+
+        def held(key):
+            # the repeated formula itself, or one closer to it than to any other (x = 2 next to x = 1
+            # stays with x = 1, not with a repeated x)
+            if key in doubtful:
+                return True
+            if key in known:
+                return False
+            near = max(_ratio(value, key) for value in doubtful)
+            return near >= 0.5 and near > max((_ratio(value, key) for value in known), default=0)
+
         out_a = {i for i in a if originals[i].key in doubtful}
-        out_b = {j for j in b if keys[j] in doubtful
-                 or (keys[j] not in known and any(_ratio(value, keys[j]) >= 0.5 for value in doubtful))}
+        out_b = {j for j in b if held(keys[j])}
         uncertain.update(out_a)
         unplaced.update(out_b)
         a = [i for i in a if i not in out_a]
@@ -391,7 +405,8 @@ def compare(returned_docx, paper_tex, macros=None) -> CompareResult:
             continue
         if status == "changed" and original.macro:
             note = "Equation %d was made by the macro %s: change the macro." % (original.n, original.macro)
-        rows.append(CompareRow(status, original, eq.accepted, eq.display, eq.revisions, eq.comments, after, note))
+        rows.append(CompareRow(status, original, eq.accepted, eq.display, eq.revisions, eq.comments, after, note,
+                               eq.numbers))
         if original and eq.accepted:
             after = original.n
     rows.extend(absent(i) for i in missing)

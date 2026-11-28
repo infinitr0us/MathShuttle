@@ -7,7 +7,7 @@ import os
 import re
 import uuid
 import xml.etree.ElementTree as ET
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from . import __version__, compat, documents, wordmath
@@ -92,6 +92,24 @@ def match_sources(maths, raw):
     return [candidate or eq for candidate, eq in zip(matched, expanded)]
 
 
+# the end of a display's own environment (an inner one, pmatrix or cases, is part of a formula)
+_DISPLAY_END = (r"\\end\s*\{(?:equation|align|alignat|gather|multline|flalign|eqnarray|math|displaymath|dmath)"
+                r"\*?\}\s*$")
+
+
+def _without_citations(node):
+    """Citations replaced by nothing, the maths in their notes too (`\\cite[case $p=2$]{x}`)."""
+    if isinstance(node, list):
+        for i, child in enumerate(node):
+            if isinstance(child, dict) and child.get("t") == "Cite":
+                node[i] = {"t": "Str", "c": ""}
+            else:
+                _without_citations(child)
+    elif isinstance(node, dict):
+        for child in node.values():
+            _without_citations(child)
+
+
 def _trace_sources(tree, maths, raw):
     """Read an in-memory copy with a position written into each literal formula."""
     from .wordexport import _split_grouped
@@ -114,7 +132,7 @@ def _trace_sources(tree, maths, raw):
             if close:
                 offset = b - len(close)
             else:
-                end = re.search(r"\\end\s*\{[^{}]+\}\s*$", literal)
+                end = re.search(_DISPLAY_END, literal)  # a display's own environment, not a matrix in it
                 if not end:
                     continue
                 offset = a + end.start()
@@ -149,6 +167,7 @@ def _trace_sources(tree, maths, raw):
     except ConversionError:
         return {}
     _split_grouped(blocks)
+    _without_citations([meta, blocks])  # as the export prints them: no maths of their own
     _collect_math([meta, blocks], traced)
     # Pair the traced formulas with the export's by content: the export leaves out some that tracing
     # sees (`\cite[Theorem $3.1$]{x}` is printed as a citation), which must not cost the others.
@@ -157,9 +176,12 @@ def _trace_sources(tree, maths, raw):
     if seen == wanted:
         pairs = list(enumerate(range(len(traced))))
     else:
+        # only formulas that occur once on both sides: a repeated one could be paired with another
+        once_seen, once_wanted = Counter(seen), Counter(wanted)
         matcher = difflib.SequenceMatcher(None, seen, wanted, autojunk=False)
         pairs = [(j, i) for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag == "equal"
-                 for i, j in zip(range(i1, i2), range(j1, j2))]
+                 for i, j in zip(range(i1, i2), range(j1, j2))
+                 if once_seen[seen[i]] == once_wanted[wanted[j]] == 1]
     traced = {j: traced[i] for j, i in pairs}
     # An equation's own mark ends it (it was put before the closing delimiter); a mark in the middle
     # belongs to a formula nested in it (`\text{for $x$}` in a display made by \be ... \ee).

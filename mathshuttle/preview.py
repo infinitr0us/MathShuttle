@@ -206,6 +206,28 @@ _FILE_COMMAND = re.compile(r"\\(?:@*input|include|subfile|import|subimport|endin
                            r"(?![A-Za-z@])|\^\^")
 
 
+def _colors_used(lines, tex):
+    """The colour definitions `tex` needs, and the ones they are made from, in the paper's order: an
+    unused one (an alias of a colour defined elsewhere) cannot stop the picture."""
+    from .compat import COLOR_LINE
+    defined = {}
+    for line in lines:
+        m = COLOR_LINE.fullmatch(line)
+        defined.setdefault(m[1] or m[2], line)
+
+    def mentioned(name, text):
+        return re.search(r"(?<![\w.:-])" + re.escape(name) + r"(?![\w.:-])", text)
+
+    wanted, todo = set(), [name for name in defined if mentioned(name, tex)]
+    while todo:
+        name = todo.pop()
+        if name not in wanted:
+            wanted.add(name)
+            spec = defined[name][defined[name].index("}") + 1:]
+            todo.extend(other for other in defined if other not in wanted and mentioned(other, spec))
+    return [line for name, line in defined.items() if name in wanted]
+
+
 def _picture_preamble(tex, packages, defaults):
     """Load installed maths packages, their literal options and the paper's TikZ libraries."""
     from .compat import _TIKZ_LIBRARIES, COLOR_LINE, _group_end, _package_requests
@@ -243,7 +265,7 @@ def _picture_preamble(tex, packages, defaults):
     if "tikz" in names or "tikz-cd" in names:
         loads.extend(libraries)
     if colors and names.keys() & {"tikz", "tikz-cd", "xcolor"}:
-        loads.extend(colors)  # the paper's own colours, used by its diagrams' arrows
+        loads.extend(_colors_used(colors, tex))  # the paper's own colours its diagram uses
     return "\n".join(before + [r"\documentclass[border=1pt,12pt]{standalone}", defaults] + loads)
 
 

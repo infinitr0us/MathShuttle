@@ -398,8 +398,8 @@ def test_identical_rows_edited_in_place_keep_their_places(tmp_path):
     assert not notes and r"x&=2\label{a}\\x&=1\label{b}" in compact(text)
 
 
-def test_ambiguous_labels_reported(tmp_path):
-    # rows swapped and both edited: which label goes where cannot be told
+def test_row_numbers_say_which_row_is_which(tmp_path):
+    # rows swapped and both edited: the numbers Word keeps at their right still tell them apart
     paper, docx = export(tmp_path, r"\begin{align}x&=1\label{a}\\y&=1\label{b}\\z&=1\label{c}\end{align}")
 
     def swap_and_edit(root):
@@ -412,7 +412,18 @@ def test_ambiguous_labels_reported(tmp_path):
                 t.text = "2"
 
     text, notes = corrected(tmp_path, paper, edit(docx, swap_and_edit))
-    assert notes and text == paper.read_text()
+    assert not notes and r"y&=2\label{b}\\x&=2\label{a}\\z&=1\label{c}" in compact(text)
+
+
+def test_ambiguous_labels_reported():
+    # the same without row numbers (an equation Word renumbered, or rows without numbers): not known
+    from mathshuttle import texsource
+    original = Original(1, r"\begin{align}x&=1\label{a}\\y&=1\label{b}\\z&=1\label{c}\end{align}", True)
+    original.numbers = ["(1)", "(2)", "(3)"]
+    notes = []
+    body = r"x&=1\label{a}\\y&=1\label{b}\\z&=1\label{c}"
+    assert texsource._restore_rows(original, body, r"y & = 2 \\ x & = 2 \\ z & = 1", notes) is None
+    assert notes
 
 
 def test_redirect_includeonly(tmp_path):

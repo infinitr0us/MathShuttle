@@ -615,13 +615,13 @@ _TIKZ_LIBRARIES = re.compile(r"\\usetikzlibrary\s*\{\s*" + _LIBRARY_NAME + r"(?:
 
 
 # a colour the paper defines for its diagrams: literal names and values only
-COLOR_LINE = re.compile(r"\\definecolor\s*\{[\w.:-]+\}\s*\{[\w/,]+\}\s*\{[\w.,\s!-]+\}"
-                        r"|\\colorlet\s*\{[\w.:-]+\}\s*\{[\w.!\s-]+\}")
+COLOR_LINE = re.compile(r"\\(?:define|provide)color\s*\{([\w.:-]+)\}\s*\{[\w/,]+\}\s*\{[\w.,\s!-]+\}"
+                        r"|\\colorlet\s*\{([\w.:-]+)\}\s*\{[\w.!\s-]+\}")
 
 
 def _library_lines(text: str):
     """Literal TikZ library declarations and colour definitions outside comments and verbatim examples."""
-    if r"\usetikzlibrary" in text or r"\definecolor" in text or r"\colorlet" in text:
+    if r"\usetikzlibrary" in text or "color" in text:
         text = without_verbatim(text)
         for pattern in (_TIKZ_LIBRARIES, COLOR_LINE):
             for match in pattern.finditer(text):

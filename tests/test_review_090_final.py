@@ -1,4 +1,5 @@
 """The findings of the final 0.9.0 review (realistic cases): each test is one of them."""
+import copy
 import os
 import sys
 import xml.etree.ElementTree as ET
@@ -91,10 +92,16 @@ def test_the_papers_colours_go_into_a_diagram_picture(monkeypatch):
                                        "% \\definecolor{old}{RGB}{0,0,0}\n\\colorlet{soft}{mapblue!40}\n"))
     assert lines == ["\\definecolor{mapblue}{RGB}{36,96,140}", "\\colorlet{soft}{mapblue!40}"]
     monkeypatch.setattr(preview, "installed", lambda name: True)
-    tex = "\\begin{tikzcd} A \\arrow[r,color=mapblue] & B \\end{tikzcd}"
+    tex = "\\begin{tikzcd} A \\arrow[r,color=soft] & B \\end{tikzcd}"
     preamble = preview._picture_preamble(tex, ["\\usepackage{tikz-cd}"] + lines, "")
-    assert preamble.index("\\usepackage{tikz-cd}") < preamble.index("\\definecolor{mapblue}")
-    assert "\\colorlet{soft}{mapblue!40}" in preamble
+    # soft is made from mapblue: both, in the paper's order, after the package
+    assert (preamble.index("\\usepackage{tikz-cd}") < preamble.index("\\definecolor{mapblue}")
+            < preamble.index("\\colorlet{soft}{mapblue!40}"))
+    # an alias the diagram does not use, of a colour defined elsewhere, stays out
+    alias = list(compat._library_lines("\\providecolor{accent}{HTML}{225588}\n\\colorlet{softaccent}{accent!25}"))
+    plain = preview._picture_preamble("\\begin{tikzcd} A \\arrow[r] & B \\end{tikzcd}",
+                                      ["\\usepackage{tikz-cd}", alias[1]], "")
+    assert "softaccent" not in plain
     # a definition that is not a plain colour never reaches the picture
     assert not list(compat._library_lines("\\definecolor{x}{RGB}{\\input{secret}}"))
 
@@ -239,3 +246,117 @@ def test_a_letter_typed_into_a_function_name_with_track_changes(tmp_path):
     returned = edit(docx, insert_h)
     assert [f.equation.tex for f in documents.read_docx(str(returned)).found] == ["\\sinh(x)"]
     assert [(r.status, r.returned) for r in compare(returned, paper).rows] == [("changed", "\\sinh(x)")]
+
+
+# ---- the re-check of those fixes ------------------------------------------------------------------------
+
+def swap_rows(root):
+    array = next(root.iter(M + "eqArr"))
+    first, second = array.findall(M + "e")
+    array.remove(second)
+    array.insert(list(array).index(first), second)
+
+
+def test_an_edit_does_not_land_in_a_citation_with_the_same_formula(tmp_path):
+    body = "Following \\cite[case $p=2$]{smith}, we first take $p=2$."
+    paper, docx = export(tmp_path, body, AMS)
+    text, _ = corrected(tmp_path, paper, edit(docx, lambda r: change_text(r, "2", "3")))
+    assert "\\cite[case $p=2$]{smith}" in text and "take $p = 3$" in text.replace("$p=3$", "$p = 3$")
+
+
+def test_a_matrix_inside_a_shorthand_display_is_not_its_source(tmp_path):
+    preamble = AMS + "\\newcommand{\\be}{\\begin{equation}}\\newcommand{\\ee}{\\end{equation}}"
+    m = "\\begin{pmatrix}0 & 1\\\\1 & 0\\end{pmatrix}"
+    body = "The swap matrix is $" + m + "$. For the chain take \\be P = " + m + "\\ee"
+    paper, docx = export(tmp_path, body, preamble)
+    text, notes = corrected(tmp_path, paper, edit(docx, lambda r: change_text(r, "P", "Q")))
+    assert body in text and any("not found" in n for n in notes)
+
+
+def test_swapped_rows_keep_their_labels_by_their_numbers(tmp_path):
+    body = "\\begin{align} T(n)&\\le 2^{n+1}\\label{coarse}\\\\ T(n)&\\le 2^n+1\\label{sharp}\\end{align}"
+    paper, docx = export(tmp_path, body, AMS)
+    text, notes = corrected(tmp_path, paper, edit(docx, swap_rows))
+    assert not notes, notes
+    assert compact("2^{n}+1\\label{sharp}\\\\T(n)&\\leq2^{n+1}\\label{coarse}") in compact(text)
+
+
+def test_one_row_with_two_column_pairs_keeps_its_columns(tmp_path):
+    paper, docx = export(tmp_path, "\\begin{align} a &= b & c &= 7\\label{two}\\end{align}", AMS)
+
+    def change(root):
+        word365_save(root)
+        change_text(root, "7", "9")
+
+    returned = edit(docx, change)
+    assert "&" in documents.read_docx(str(returned)).found[0].equation.tex
+    text, _ = corrected(tmp_path, paper, returned)
+    assert compact("a&=b&c&=9\\label{two}") in compact(text)
+
+
+def test_a_split_run_after_an_operator_name_is_not_joined_to_it(tmp_path):
+    paper, docx = export(tmp_path, "The log determinant is $\\log\\det A+7$.", AMS)
+
+    def split(root):
+        for parent in root.iter():
+            for i, child in enumerate(parent):
+                if child.tag == M + "r" and child.findtext(M + "t") == "det":
+                    second = copy.deepcopy(child)
+                    child.find(M + "t").text = "d"
+                    second.find(M + "t").text = "et"
+                    parent.insert(i + 1, second)
+                    return
+
+    assert [r.status for r in compare(edit(docx, split), paper).rows] == ["unchanged"]
+    other = tmp_path / "gdp"
+    other.mkdir()
+    _, docx2 = export(other, "$\\log\\mathrm{GDP}$", AMS)
+    assert [f.equation.tex for f in documents.read_docx(str(docx2)).found] == ["\\log \\mathrm{GDP}"]
+
+
+def test_a_deleted_reference_does_not_move_onto_another_number(tmp_path):
+    body = ("\\begin{equation} x=1 \\label{base}\\end{equation}"
+            "\\[f=7\\quad\\text{in case (1), by \\eqref{base}}\\]")
+    paper, docx = export(tmp_path, body, AMS)
+
+    def delete(root):
+        for t in root.iter(M + "t"):
+            if t.text and "in case" in t.text:
+                t.text = "in case (1)"
+
+    text, notes = corrected(tmp_path, paper, edit(docx, delete))
+    assert "\\text{in case (1)}" in text and any("\\eqref{base}" in n for n in notes)
+
+
+def test_a_reference_to_a_starred_tag_gets_its_parentheses_once(tmp_path):
+    body = "\\begin{equation}x=1\\tag*{H}\\label{hyp}\\end{equation}\\[z=7\\quad\\text{by \\eqref{hyp}}\\]"
+    paper, docx = export(tmp_path, body, AMS)
+    text, _ = corrected(tmp_path, paper, edit(docx, seven_to_nine))
+    assert "\\text{by \\eqref{hyp}}" in text and "(\\eqref" not in text
+
+
+def test_an_edit_next_to_a_repeated_formula_without_bookmarks(tmp_path):
+    paper, docx = export(tmp_path, "Let $x$ be a state. We start at $x=1$. Later $x$ is observed.")
+
+    def change(root):
+        remove_marks(root)
+        change_text(root, "1", "2")
+        para = next(root.iter(W + "p"))
+        para.append(copy.deepcopy(list(para.iter(M + "oMath"))[-1]))
+
+    rows = compare(edit(docx, change, legacy=True), paper).rows
+    assert ("changed", "$x=1$", "x = 2") in [(r.status, r.original.tex if r.original else None, r.returned)
+                                            for r in rows]
+
+
+def test_an_eqnarray_relation_with_a_note_over_it_is_left_as_it_is(tmp_path):
+    body = "\\begin{eqnarray}a &=& b \\label{s1}\\\\ b &\\stackrel{(*)}{=}& 7\\label{s2}\\end{eqnarray}"
+    paper, docx = export(tmp_path, body, AMS)
+    text, notes = corrected(tmp_path, paper, edit(docx, seven_to_nine))
+    assert text == paper.read_text(encoding="utf-8") and any("columns" in n for n in notes)
+
+
+def test_a_tag_with_parentheses_in_it(tmp_path):
+    paper, docx = export(tmp_path, "\\begin{equation} x=7 \\tag{P(t)}\\label{problem}\\end{equation}", AMS)
+    text, _ = corrected(tmp_path, paper, edit(docx, seven_to_nine))
+    assert "\\#" not in text and compact("x=9\\tag{P(t)}\\label{problem}") in compact(text)

@@ -27,6 +27,15 @@ _NAMES = frozenset("arccos arcsin arctan arg cos cosh cot coth csc deg det dim e
                    "liminf limsup ln log max min mod Pr sec sin sinh sup tan tanh".split())
 
 
+def _joins(left, right):
+    """Whether two upright runs are one word Word split (s + in, d + et), not two (\\log + \\det, log + GDP):
+    a complete operator name joins only into a longer one (sin + h, lim + sup)."""
+    joined = left + right
+    if joined in _NAMES or any(name.startswith(joined) for name in _NAMES):
+        return True
+    return left not in _NAMES and right not in _NAMES
+
+
 def _run_style(run):
     """Only join upright and plain-text runs, where Word's splitting breaks a name (\\sin as s + in).
     Italic, bold and script runs stay as they are: \\boldsymbol{\\alpha}\\boldsymbol{\\beta} is two symbols.
@@ -58,8 +67,7 @@ def revision_view(el, accept=True):
             children = copy(child, hidden)
             # the style of the run as it is in this view: a tracked "h" typed after "sin" joins it
             style = _run_style(children[0]) if len(children) == 1 else None
-            if (style is not None and style == previous
-                    and not (new[-1][-1].text in _NAMES and children[0][-1].text in _NAMES)):
+            if style is not None and style == previous and _joins(new[-1][-1].text or "", children[0][-1].text or ""):
                 new[-1][-1].text = (new[-1][-1].text or "") + (children[0][-1].text or "")
             else:
                 new.extend(children)
@@ -106,7 +114,7 @@ def strip_numbers(math, expected=()):
                 mark = re.search(r"#(\([A-Za-z0-9.'\u2032\u2033-]{1,32}\))\Z", value)
                 if not mark:
                     # any other tag the export wrote, such as \tag{*}
-                    mark = re.search(r"#(\([^#()]{1,32}\))\Z", value)
+                    mark = re.search(r"#(\((?:[^#()]|\([^#()]*\)){1,32}\))\Z", value)  # \tag{P(t)} too
                     if mark and mark[1] not in expected:
                         mark = None
                 if not mark:
@@ -127,12 +135,14 @@ def strip_numbers(math, expected=()):
                         row.remove(run)
             if not marked:
                 continue
-            if len(rows) == 1:
+            # the alignment points the export wrote (Word 365 adds its fonts, w:rPr, when it saves);
+            # a literal \& has maths properties (m:rPr) and stays
+            points = [c for c in rows[0] if c.tag == M + "r" and c.find(M + "rPr") is None
+                      and c.findtext(M + "t") == "&" and all(k.tag in (W + "rPr", M + "t") for k in c)]
+            if len(rows) == 1 and len(points) <= 1:
+                # one row with at most one alignment point is an ordinary formula; with more
+                # (a &= b & c &= d) its columns are what keeps the two identities apart
                 index = list(formula).index(array)
                 formula.remove(array)
-                # the alignment points the export wrote (Word 365 adds its fonts, w:rPr, when it
-                # saves); a literal \& has maths properties (m:rPr) and stays
-                formula[index:index] = [c for c in rows[0] if not (
-                    c.tag == M + "r" and c.find(M + "rPr") is None and c.findtext(M + "t") == "&"
-                    and all(k.tag in (W + "rPr", M + "t") for k in c))]
+                formula[index:index] = [c for c in rows[0] if not any(c is p for p in points)]
     return numbers

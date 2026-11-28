@@ -369,12 +369,12 @@ def _leading(row, marks):
     return text[:at].replace("\r\n", "\n") if marks and text[at:].strip() else None
 
 
-def _replacement(original, tex, macros, notes):
+def _replacement(original, tex, macros, notes, numbers=()):
     tex = _original_macros(original.body, tex, macros)
     source = original.tex.strip()
     for opening, closing, wrapper in _DELIMITERS:
         if source.startswith(opening) and source.endswith(closing):
-            body = _restore_rows(original, source[len(opening):-len(closing)], tex, notes)
+            body = _restore_rows(original, source[len(opening):-len(closing)], tex, notes, numbers)
             return latex_wrap.wrap(body, wrapper, original.display) if body is not None else None
     env = latex_wrap._ENV_RE.fullmatch(source)
     if not env:
@@ -405,10 +405,14 @@ def _replacement(original, tex, macros, notes):
                 # a matrix or cases inside (or Word's one-row matrix): its & are not eqnarray's
                 notes.append("Check the columns of equation %d. Left the source as it is." % original.n)
                 return None
-            new_body = re.sub(r"(?<!\\)&\s*(\\[A-Za-z]+|[=<>+\-])", r"&\1&", new_body)
+            new_body = re.sub(r"(?<!\\)&\s*(\\[A-Za-z]+(?![A-Za-z]|\s*\{)|[=<>+\-])", r"&\1&", new_body)
+            if any(len(re.findall(r"(?<!\\)&", row)) != 2 for row in re.split(r"\\\\", new_body) if row.strip()):
+                # a relation with a note over it (\stackrel{(*)}{=}): eqnarray's columns cannot be told
+                notes.append("Check the columns of equation %d. Left the source as it is." % original.n)
+                return None
     else:
         new_body = latex_wrap.plain_form(tex)
-    restored = _restore_rows(original, body, new_body, notes)
+    restored = _restore_rows(original, body, new_body, notes, numbers)
     if restored is None:
         return None
     restored = restored.strip()
@@ -424,7 +428,15 @@ def _replacement(original, tex, macros, notes):
     return "\\begin{%s}%s%s%s\n\\end{%s}" % (name, head, "" if joined else "\n", restored, name)
 
 
-def _restore_rows(original, body, new_body, notes):
+def _row_numbers(original, marks):
+    """The number of each row of the original, when every row has one (an align without \\notag)."""
+    from .wordexport import _NO_NUMBER
+    if any(_NO_NUMBER.fullmatch(m) for row in marks for m in row) or len(original.numbers) != len(marks):
+        return []
+    return list(original.numbers)
+
+
+def _restore_rows(original, body, new_body, notes, numbers=()):
     from .wordexport import _top_rows, _without_comments
     # Delimiters and equation environments can themselves enclose an aligned or split block.
     nested = None
@@ -442,14 +454,29 @@ def _restore_rows(original, body, new_body, notes):
             row = _without_comments(row)
             for mark in marks:
                 row = row.replace(mark, "")
-            # braces left out: Word gives back U^2 as U^{2}
-            return tuple(t for t in _TOKEN.findall(row) if t not in ("&", "{", "}"))
+            # braces around one token left out: Word gives back U^2 as U^{2} (but 2^{n+1} is not 2^n+1)
+            tokens = [t for t in _TOKEN.findall(row) if t != "&"]
+            out, k = [], 0
+            while k < len(tokens):
+                if tokens[k] == "{" and k + 2 < len(tokens) and tokens[k + 2] == "}" and tokens[k + 1] not in "{}":
+                    out.append(tokens[k + 1])
+                    k += 3
+                else:
+                    out.append(tokens[k])
+                    k += 1
+            return tuple(out)
 
         old = [row_key(r, m) for r, m in zip(old_rows, marks)]
         new = [row_key(r) for r in rows[::2]]
         paired = {}
+        mine = _row_numbers(original, marks)
+        if (numbers and len(numbers) == len(new) and mine and len(set(mine)) == len(mine)
+                and sorted(numbers) == sorted(mine)):
+            # every row came back with the number Word shows at its right: that says which row is which
+            paired = {j: mine.index(n) for j, n in enumerate(numbers)}
         for j, value in enumerate(new):
-            if old.count(value) == new.count(value) == 1:
+            if j not in paired and value not in [old[i] for i in paired.values()] \
+                    and old.count(value) == new.count(value) == 1:
                 paired[j] = old.index(value)
         left = [i for i in range(len(old)) if i not in paired.values()]
         right = [j for j in range(len(new)) if j not in paired]
@@ -463,10 +490,12 @@ def _restore_rows(original, body, new_body, notes):
         open_rows = [j for j in range(len(new)) if j not in paired]
         if len(old) == len(new) and open_rows and all(i == j for j, i in paired.items()):
             # As many rows as before and none moved: rows edited in place keep their own labels, when
-            # each is at least as close to its own old row as to any other (a swap with edits is not).
+            # each is closer to its own old row than to any other one (a swap with edits is not), or
+            # the old rows are the same (then which is which does not matter).
             def score(i, j):
                 return difflib.SequenceMatcher(None, old[i], new[j], autojunk=False).ratio()
-            if all(score(j, j) >= 0.5 and all(score(i, j) <= score(j, j) for i in open_rows) for j in open_rows):
+            if all(score(j, j) >= 0.5 and all(score(i, j) < score(j, j) or old[i] == old[j]
+                                              for i in open_rows if i != j) for j in open_rows):
                 for j in open_rows:
                     paired[j] = j
         right = [j for j in range(len(new)) if j not in paired]
@@ -503,9 +532,14 @@ def _restore_references(original, new, numbers, notes):
         if m[0] in new:
             continue
         printed = numbers.get(m[2]) if m[1] == "eqref" else None
+        if printed and not (printed.startswith("(") and printed.endswith(")")):
+            printed = "(%s)" % printed  # \eqref of a \tag*{H} prints (H)
         places = [i for i in (j.start() for j in re.finditer(re.escape(printed), new))
                   if any(a <= i < b for a, b in compat._text_spans(new))] if printed else []
-        if len(places) == 1 and new.count(printed) == 1 and body.count(m[0]) == 1:
+        # certain only when the number was this reference's alone in what Word showed: in
+        # "case (1), by \eqref{a}" a deleted reference must not move onto the case number
+        shown = body.replace(m[0], printed) if printed else ""
+        if len(places) == 1 and new.count(printed) == 1 and body.count(m[0]) == 1 and shown.count(printed) == 1:
             new = new[:places[0]] + m[0] + new[places[0] + len(printed):]
         elif m[0] not in lost:
             lost.append(m[0])
@@ -593,7 +627,7 @@ def _edits(result, tree, notes):
             names = compat._control_words(row.original.body)
             macros = _macros(tree, result.macros, (path, start), names) if names else []
             before = len(notes)
-            new = _replacement(row.original, row.returned, macros, notes)
+            new = _replacement(row.original, row.returned, macros, notes, row.numbers)
             if new is None:
                 if len(notes) == before:
                     notes.append("Could not restore the delimiters of equation %d." % row.original.n)
