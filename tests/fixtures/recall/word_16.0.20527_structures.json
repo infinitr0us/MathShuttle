@@ -1,0 +1,197 @@
+[
+ {
+  "tex": "\\boldsymbol{\\theta}^\\top \\bm{w}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <msup>\n      <mi mathvariant=\"bold-italic\">𝜽</mi>\n      <mi>⊤</mi>\n    </msup>\n    <mi mathvariant=\"bold-italic\">𝒘</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><msup><mi>𝜽</mi><mo>⊤</mo></msup><mi>𝒘</mi></math>\r\n"
+ },
+ {
+  "tex": "\\operatorname{softmax}(z) + \\binom{n}{k}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mrow>\n      <mi mathvariant=\"normal\">softmax</mi>\n      <mo>⁡</mo>\n    </mrow>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>z</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n    <mo>+</mo>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">(</mo>\n      <mfrac linethickness=\"0\">\n        <mi>n</mi>\n        <mi>k</mi>\n      </mfrac>\n      <mo stretchy=\"true\" form=\"postfix\">)</mo>\n    </mrow>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>softmax</mi><mrow intent=\":fenced\"><mo>(</mo><mi>z</mi><mo>)</mo></mrow><mo>+</mo><mrow intent=\":fenced\"><mo>(</mo><mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac><mo>)</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\|v\\|_2 + P_{\\rm{OOD}}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mo stretchy=\"false\" form=\"postfix\">‖</mo>\n    <mi>v</mi>\n    <msub>\n      <mo stretchy=\"false\" form=\"postfix\">‖</mo>\n      <mn>2</mn>\n    </msub>\n    <mo>+</mo>\n    <msub>\n      <mi>P</mi>\n      <mrow>\n        <mi mathvariant=\"normal\">O</mi>\n        <mi mathvariant=\"normal\">O</mi>\n        <mi mathvariant=\"normal\">D</mi>\n      </mrow>\n    </msub>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><msub><mrow intent=\":fenced\"><mo fence=\"true\">‖</mo><mi>v</mi><mo fence=\"true\">‖</mo></mrow><mn>2</mn></msub><mo>+</mo><msub><mi>P</mi><mi>OOD</mi></msub></math>\r\n"
+ },
+ {
+  "tex": "a \\leqslant b \\geqslant c, \\quad A \\amalg B",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>a</mi>\n    <mo>⩽</mo>\n    <mi>b</mi>\n    <mo>⩾</mo>\n    <mi>c</mi>\n    <mo separator=\"false\">,</mo>\n    <mo> </mo>\n    <mi>A</mi>\n    <mo>⨿</mo>\n    <mi>B</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>a</mi><mo>⩽</mo><mi>b</mi><mo>⩾</mo><mi>c</mi><mo>,</mo><mo> </mo><mi>A</mi><mo>⨿</mo><mi>B</mi></math>\r\n"
+ },
+ {
+  "tex": "a \\, b \\; c \\quad d \\qquad e",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>a</mi>\n    <mo> </mo>\n    <mi>b</mi>\n    <mo> </mo>\n    <mi>c</mi>\n    <mo> </mo>\n    <mi>d</mi>\n    <mo>  </mo>\n    <mi>e</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>a</mi><mo> </mo><mi>b</mi><mo> </mo><mi>c</mi><mo> </mo><mi>d</mi><mo> </mo><mo> </mo><mi>e</mi></math>\r\n"
+ },
+ {
+  "tex": "x \\longrightarrow y \\iff z \\Longrightarrow w",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>x</mi>\n    <mo>⟶</mo>\n    <mi>y</mi>\n    <mo>⟺</mo>\n    <mi>z</mi>\n    <mo>⟹</mo>\n    <mi>w</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>x</mi><mo>⟶</mo><mi>y</mi><mo>⟺</mo><mi>z</mi><mo>⟹</mo><mi>w</mi></math>\r\n"
+ },
+ {
+  "tex": "\\lVert v \\rVert_2",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mo stretchy=\"false\" form=\"prefix\">‖</mo>\n    <mi>v</mi>\n    <msub>\n      <mo stretchy=\"false\" form=\"postfix\">‖</mo>\n      <mn>2</mn>\n    </msub>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><msub><mrow intent=\":fenced\"><mo fence=\"true\">‖</mo><mi>v</mi><mo fence=\"true\">‖</mo></mrow><mn>2</mn></msub></math>\r\n"
+ },
+ {
+  "tex": "f: A \\to B, \\quad x \\mapsto x^2",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>f</mi>\n    <mo>:</mo>\n    <mi>A</mi>\n    <mo>→</mo>\n    <mi>B</mi>\n    <mo separator=\"false\">,</mo>\n    <mo> </mo>\n    <mi>x</mi>\n    <mo>↦</mo>\n    <msup>\n      <mi>x</mi>\n      <mn>2</mn>\n    </msup>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>f</mi><mo>:</mo><mi>A</mi><mo>→</mo><mi>B</mi><mo>,</mo><mo> </mo><mi>x</mi><mo>↦</mo><msup><mi>x</mi><mn>2</mn></msup></math>\r\n"
+ },
+ {
+  "tex": "x \\coloneqq \\hbar \\omega, \\quad a \\preceq b",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>x</mi>\n    <mo>≔</mo>\n    <mi>ℏ</mi>\n    <mi>ω</mi>\n    <mo separator=\"false\">,</mo>\n    <mo> </mo>\n    <mi>a</mi>\n    <mo>≼</mo>\n    <mi>b</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>x</mi><mo>≔</mo><mi>ℏ</mi><mi>𝜔</mi><mo>,</mo><mo> </mo><mi>a</mi><mo>≼</mo><mi>b</mi></math>\r\n"
+ },
+ {
+  "tex": "\\ket{\\psi} = \\frac{1}{\\sqrt{2}} (\\ket{0} + \\ket{1})",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">|</mo>\n      <mi>ψ</mi>\n      <mo stretchy=\"true\" form=\"postfix\">⟩</mo>\n    </mrow>\n    <mo>=</mo>\n    <mfrac>\n      <mn>1</mn>\n      <msqrt>\n        <mn>2</mn>\n      </msqrt>\n    </mfrac>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">|</mo>\n      <mn>0</mn>\n      <mo stretchy=\"true\" form=\"postfix\">⟩</mo>\n    </mrow>\n    <mo>+</mo>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">|</mo>\n      <mn>1</mn>\n      <mo stretchy=\"true\" form=\"postfix\">⟩</mo>\n    </mrow>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mrow intent=\":fenced\"><mo fence=\"true\">|</mo><mi>𝜓</mi><mo fence=\"true\">⟩</mo></mrow><mo>=</mo><mfrac><mn>1</mn><msqrt><mn>2</mn></msqrt></mfrac><mrow intent=\":fenced\"><mo>(</mo><mrow intent=\":fenced\"><mo fence=\"true\">|</mo><mn>0</mn><mo fence=\"true\">⟩</mo></mrow><mo>+</mo><mrow intent=\":fenced\"><mo fence=\"true\">|</mo><mn>1</mn><mo fence=\"true\">⟩</mo></mrow><mo>)</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\dv{f}{x} + \\pdv{f}{y}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mfrac>\n      <mrow>\n        <mi mathvariant=\"normal\">d</mi>\n        <mi>f</mi>\n      </mrow>\n      <mrow>\n        <mi mathvariant=\"normal\">d</mi>\n        <mi>x</mi>\n      </mrow>\n    </mfrac>\n    <mo>+</mo>\n    <mfrac>\n      <mrow>\n        <mi>∂</mi>\n        <mi>f</mi>\n      </mrow>\n      <mrow>\n        <mi>∂</mi>\n        <mi>y</mi>\n      </mrow>\n    </mfrac>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mfrac><mrow><mi mathvariant=\"normal\">d</mi><mi>f</mi></mrow><mrow><mi mathvariant=\"normal\">d</mi><mi>x</mi></mrow></mfrac><mo>+</mo><mfrac><mrow><mo>𝜕</mo><mi>f</mi></mrow><mrow><mo>𝜕</mo><mi>y</mi></mrow></mfrac></math>\r\n"
+ },
+ {
+  "tex": "\\max(\\cos(a, b), 0) + q(x;\\mu,\\sigma)",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mrow>\n      <mi mathvariant=\"normal\">max</mi>\n      <mo>⁡</mo>\n    </mrow>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mrow>\n      <mi mathvariant=\"normal\">cos</mi>\n      <mo>⁡</mo>\n    </mrow>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>a</mi>\n    <mo separator=\"false\">,</mo>\n    <mi>b</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n    <mo separator=\"false\">,</mo>\n    <mn>0</mn>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n    <mo>+</mo>\n    <mi>q</mi>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>x</mi>\n    <mo separator=\"false\">;</mo>\n    <mi>μ</mi>\n    <mo separator=\"false\">,</mo>\n    <mi>σ</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>max</mi><mrow intent=\":fenced\"><mo>(</mo><mi>cos</mi><mrow intent=\":fenced\"><mo>(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>)</mo></mrow><mo>,</mo><mn>0</mn><mo>)</mo></mrow><mo>+</mo><mi>q</mi><mrow intent=\":fenced\"><mo>(</mo><mi>x</mi><mo>;</mo><mi>𝜇</mi><mo>,</mo><mi>𝜎</mi><mo>)</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\frac{\\partial f}{\\partial x} + \\sum_{i=1}^{n} \\mathbf{x}_i^2 = \\text{const}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mfrac>\n      <mrow>\n        <mi>∂</mi>\n        <mi>f</mi>\n      </mrow>\n      <mrow>\n        <mi>∂</mi>\n        <mi>x</mi>\n      </mrow>\n    </mfrac>\n    <mo>+</mo>\n    <munderover>\n      <mo>∑</mo>\n      <mrow>\n        <mi>i</mi>\n        <mo>=</mo>\n        <mn>1</mn>\n      </mrow>\n      <mi>n</mi>\n    </munderover>\n    <msubsup>\n      <mi>𝐱</mi>\n      <mi>i</mi>\n      <mn>2</mn>\n    </msubsup>\n    <mo>=</mo>\n    <mtext mathvariant=\"normal\">const</mtext>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mfrac><mrow><mo>𝜕</mo><mi>f</mi></mrow><mrow><mo>𝜕</mo><mi>x</mi></mrow></mfrac><mo>+</mo><mrow intent=\":nary\"><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover><msubsup><mi>𝒙</mi><mi>i</mi><mn>2</mn></msubsup></mrow><mo>=</mo><mtext>const</mtext></math>\r\n"
+ },
+ {
+  "tex": "\\begin{align}\na &= b + c \\\\\nd &= \\int_0^1 e^{-t}\\,dt\n\\end{align}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mtable columnspacing=\"0em\">\n    <mtr>\n      <mtd columnalign=\"right\" style=\"text-align: right; padding-right: 0\">\n        <mi>a</mi>\n      </mtd>\n      <mtd columnalign=\"left\" style=\"text-align: left; padding-left: 0\">\n        <mo>=</mo>\n        <mi>b</mi>\n        <mo>+</mo>\n        <mi>c</mi>\n      </mtd>\n    </mtr>\n    <mtr>\n      <mtd columnalign=\"right\" style=\"text-align: right; padding-right: 0\">\n        <mi>d</mi>\n      </mtd>\n      <mtd columnalign=\"left\" style=\"text-align: left; padding-left: 0\">\n        <mo>=</mo>\n        <msubsup>\n          <mo>∫</mo>\n          <mn>0</mn>\n          <mn>1</mn>\n        </msubsup>\n        <msup>\n          <mi>e</mi>\n          <mrow>\n            <mi>−</mi>\n            <mi>t</mi>\n          </mrow>\n        </msup>\n        <mo> </mo>\n        <mi>d</mi>\n        <mi>t</mi>\n      </mtd>\n    </mtr>\n  </mtable>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mtable columnspacing=\"0em\"><mtr><mtd columnalign=\"right\"><mi>a</mi></mtd><mtd columnalign=\"left\"><mo>=</mo><mi>b</mi><mo>+</mo><mi>c</mi></mtd></mtr><mtr><mtd columnalign=\"right\"><mi>d</mi></mtd><mtd columnalign=\"left\"><mo>=</mo><mrow intent=\":nary\"><msubsup><mo>∫</mo><mn>0</mn><mn>1</mn></msubsup><msup><mi>e</mi><mrow><mo>−</mo><mi>t</mi></mrow></msup></mrow><mo> </mo><mi>d</mi><mi>t</mi></mtd></mtr></mtable></math>\r\n"
+ },
+ {
+  "tex": "\\begin{equation}\nf = \\begin{cases} 1 & x > 0 \\\\ 0 & \\text{else} \\end{cases}\n\\end{equation}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>f</mi>\n    <mo>=</mo>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">{</mo>\n      <mtable>\n        <mtr>\n          <mtd columnalign=\"left\" style=\"text-align: left\">\n            <mn>1</mn>\n          </mtd>\n          <mtd columnalign=\"left\" style=\"text-align: left\">\n            <mi>x</mi>\n            <mo>&gt;</mo>\n            <mn>0</mn>\n          </mtd>\n        </mtr>\n        <mtr>\n          <mtd columnalign=\"left\" style=\"text-align: left\">\n            <mn>0</mn>\n          </mtd>\n          <mtd columnalign=\"left\" style=\"text-align: left\">\n            <mtext mathvariant=\"normal\">else</mtext>\n          </mtd>\n        </mtr>\n      </mtable>\n    </mrow>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>f</mi><mo>=</mo><mrow intent=\":fenced\"><mo>{</mo><mtable><mtr><mtd><mn>1</mn></mtd><mtd><mi>x</mi><mo>&gt;</mo><mn>0</mn></mtd></mtr><mtr><mtd><mn>0</mn></mtd><mtd><mtext>else</mtext></mtd></mtr></mtable></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\hat{x} + \\bar{y} + \\tilde{z} + \\vec{v} + \\dot{a} + \\ddot{b}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mover>\n      <mi>x</mi>\n      <mo accent=\"true\">̂</mo>\n    </mover>\n    <mo>+</mo>\n    <mover>\n      <mi>y</mi>\n      <mo accent=\"true\">‾</mo>\n    </mover>\n    <mo>+</mo>\n    <mover>\n      <mi>z</mi>\n      <mo accent=\"true\">̃</mo>\n    </mover>\n    <mo>+</mo>\n    <mover>\n      <mi>v</mi>\n      <mo accent=\"true\">→</mo>\n    </mover>\n    <mo>+</mo>\n    <mover>\n      <mi>a</mi>\n      <mo accent=\"true\">̇</mo>\n    </mover>\n    <mo>+</mo>\n    <mover>\n      <mi>b</mi>\n      <mo accent=\"true\">̈</mo>\n    </mover>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mover accent=\"true\"><mi>x</mi><mo>^</mo></mover><mo>+</mo><mover><mi>y</mi><mo>‾</mo></mover><mo>+</mo><mover accent=\"true\"><mi>z</mi><mo>~</mo></mover><mo>+</mo><mover accent=\"true\"><mi>v</mi><mo>→</mo></mover><mo>+</mo><mover accent=\"true\"><mi>a</mi><mo>.</mo></mover><mo>+</mo><mover accent=\"true\"><mi>b</mi><mo>¨</mo></mover></math>\r\n"
+ },
+ {
+  "tex": "\\widehat{xy} + \\overline{AB} + \\underline{c}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mover>\n      <mrow>\n        <mi>x</mi>\n        <mi>y</mi>\n      </mrow>\n      <mo accent=\"true\">̂</mo>\n    </mover>\n    <mo>+</mo>\n    <mover>\n      <mrow>\n        <mi>A</mi>\n        <mi>B</mi>\n      </mrow>\n      <mo accent=\"true\">¯</mo>\n    </mover>\n    <mo>+</mo>\n    <munder>\n      <mi>c</mi>\n      <mo accent=\"true\">_</mo>\n    </munder>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mover accent=\"true\"><mrow><mi>x</mi><mi>y</mi></mrow><mo>^</mo></mover><mo>+</mo><mover accent=\"true\"><mrow><mi>A</mi><mi>B</mi></mrow><mo>-</mo></mover><mo>+</mo><munder accentunder=\"true\"><mi>c</mi><mo>̲</mo></munder></math>\r\n"
+ },
+ {
+  "tex": "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mo stretchy=\"true\" form=\"prefix\">(</mo>\n    <mtable>\n      <mtr>\n        <mtd columnalign=\"center\" style=\"text-align: center\">\n          <mi>a</mi>\n        </mtd>\n        <mtd columnalign=\"center\" style=\"text-align: center\">\n          <mi>b</mi>\n        </mtd>\n      </mtr>\n      <mtr>\n        <mtd columnalign=\"center\" style=\"text-align: center\">\n          <mi>c</mi>\n        </mtd>\n        <mtd columnalign=\"center\" style=\"text-align: center\">\n          <mi>d</mi>\n        </mtd>\n      </mtr>\n    </mtable>\n    <mo stretchy=\"true\" form=\"postfix\">)</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mrow intent=\":fenced\"><mo>(</mo><mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable><mo>)</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\begin{bmatrix} a & b & c & d \\end{bmatrix}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mo stretchy=\"true\" form=\"prefix\">[</mo>\n    <mtable>\n      <mtr>\n        <mtd columnalign=\"center\" style=\"text-align: center\">\n          <mi>a</mi>\n        </mtd>\n        <mtd columnalign=\"center\" style=\"text-align: center\">\n          <mi>b</mi>\n        </mtd>\n        <mtd columnalign=\"center\" style=\"text-align: center\">\n          <mi>c</mi>\n        </mtd>\n        <mtd columnalign=\"center\" style=\"text-align: center\">\n          <mi>d</mi>\n        </mtd>\n      </mtr>\n    </mtable>\n    <mo stretchy=\"true\" form=\"postfix\">]</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mrow intent=\":fenced\"><mo>[</mo><mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable><mo>]</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\binom{n}{k} + \\frac{n}{k} + \\left(\\frac{n}{k}\\right)",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">(</mo>\n      <mfrac linethickness=\"0\">\n        <mi>n</mi>\n        <mi>k</mi>\n      </mfrac>\n      <mo stretchy=\"true\" form=\"postfix\">)</mo>\n    </mrow>\n    <mo>+</mo>\n    <mfrac>\n      <mi>n</mi>\n      <mi>k</mi>\n    </mfrac>\n    <mo>+</mo>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">(</mo>\n      <mfrac>\n        <mi>n</mi>\n        <mi>k</mi>\n      </mfrac>\n      <mo stretchy=\"true\" form=\"postfix\">)</mo>\n    </mrow>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mrow intent=\":fenced\"><mo>(</mo><mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac><mo>)</mo></mrow><mo>+</mo><mfrac><mi>n</mi><mi>k</mi></mfrac><mo>+</mo><mrow intent=\":fenced\"><mo>(</mo><mfrac><mi>n</mi><mi>k</mi></mfrac><mo>)</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\ell + l + \\hbar + h",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>ℓ</mi>\n    <mo>+</mo>\n    <mi>l</mi>\n    <mo>+</mo>\n    <mi>ℏ</mi>\n    <mo>+</mo>\n    <mi>h</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>𝓁</mi><mo>+</mo><mi>l</mi><mo>+</mo><mi>ℏ</mi><mo>+</mo><mi>h</mi></math>\r\n"
+ },
+ {
+  "tex": "\\sqrt[3]{x} + \\sqrt{y}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mroot>\n      <mi>x</mi>\n      <mn>3</mn>\n    </mroot>\n    <mo>+</mo>\n    <msqrt>\n      <mi>y</mi>\n    </msqrt>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mroot><mi>x</mi><mn>3</mn></mroot><mo>+</mo><msqrt><mi>y</mi></msqrt></math>\r\n"
+ },
+ {
+  "tex": "\\underbrace{a + b}_{n} + \\overbrace{c}^{m}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <munder>\n      <munder>\n        <mrow>\n          <mi>a</mi>\n          <mo>+</mo>\n          <mi>b</mi>\n        </mrow>\n        <mo accent=\"true\">⏟</mo>\n      </munder>\n      <mi>n</mi>\n    </munder>\n    <mo>+</mo>\n    <mover>\n      <mover>\n        <mi>c</mi>\n        <mo accent=\"true\">⏞</mo>\n      </mover>\n      <mi>m</mi>\n    </mover>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><munder><munder accentunder=\"false\"><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow><mo stretchy=\"true\">⏟</mo></munder><mi>n</mi></munder><mo>+</mo><mover><mover accent=\"false\"><mi>c</mi><mo stretchy=\"true\">⏞</mo></mover><mi>m</mi></mover></math>\r\n"
+ },
+ {
+  "tex": "f'(x) + g''(y)",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <msup>\n      <mi>f</mi>\n      <mo>′</mo>\n    </msup>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>x</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n    <mo>+</mo>\n    <msup>\n      <mi>g</mi>\n      <mo>″</mo>\n    </msup>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>y</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><msup><mi>f</mi><mo>′</mo></msup><mrow intent=\":fenced\"><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>+</mo><msup><mi>g</mi><mo>″</mo></msup><mrow intent=\":fenced\"><mo>(</mo><mi>y</mi><mo>)</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\mathbf{x} + \\mathrm{d}x + \\mathcal{L} + \\mathbb{R} + \\mathfrak{g} + \\mathsf{A} + \\mathtt{t}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>𝐱</mi>\n    <mo>+</mo>\n    <mi mathvariant=\"normal\">d</mi>\n    <mi>x</mi>\n    <mo>+</mo>\n    <mi mathvariant=\"script\">ℒ</mi>\n    <mo>+</mo>\n    <mi mathvariant=\"double-struck\">ℝ</mi>\n    <mo>+</mo>\n    <mi mathvariant=\"fraktur\">𝔤</mi>\n    <mo>+</mo>\n    <mi mathvariant=\"sans-serif\">𝖠</mi>\n    <mo>+</mo>\n    <mi mathvariant=\"monospace\">𝚝</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>𝒙</mi><mo>+</mo><mi mathvariant=\"normal\">d</mi><mi>x</mi><mo>+</mo><mi>ℒ</mi><mo>+</mo><mi>ℝ</mi><mo>+</mo><mi>𝔤</mi><mo>+</mo><mi>𝘈</mi><mo>+</mo><mi>𝚝</mi></math>\r\n"
+ },
+ {
+  "tex": "\\sum_{i=1}^{n} x_i + \\prod_{j} y_j + \\int_{0}^{\\infty} f + \\lim_{n \\to \\infty} a_n",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <munderover>\n      <mo>∑</mo>\n      <mrow>\n        <mi>i</mi>\n        <mo>=</mo>\n        <mn>1</mn>\n      </mrow>\n      <mi>n</mi>\n    </munderover>\n    <msub>\n      <mi>x</mi>\n      <mi>i</mi>\n    </msub>\n    <mo>+</mo>\n    <munder>\n      <mo>∏</mo>\n      <mi>j</mi>\n    </munder>\n    <msub>\n      <mi>y</mi>\n      <mi>j</mi>\n    </msub>\n    <mo>+</mo>\n    <msubsup>\n      <mo>∫</mo>\n      <mn>0</mn>\n      <mi>∞</mi>\n    </msubsup>\n    <mi>f</mi>\n    <mo>+</mo>\n    <munder>\n      <mi mathvariant=\"normal\">lim</mi>\n      <mrow>\n        <mi>n</mi>\n        <mo>→</mo>\n        <mi>∞</mi>\n      </mrow>\n    </munder>\n    <msub>\n      <mi>a</mi>\n      <mi>n</mi>\n    </msub>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mrow intent=\":nary\"><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover><msub><mi>x</mi><mi>i</mi></msub></mrow><mo>+</mo><mrow intent=\":nary\"><munder><mo>∏</mo><mi>j</mi></munder><msub><mi>y</mi><mi>j</mi></msub></mrow><mo>+</mo><mrow intent=\":nary\"><msubsup><mo>∫</mo><mn>0</mn><mo>∞</mo></msubsup><mi>f</mi></mrow><mo>+</mo><munder><mi>lim</mi><mrow><mi>n</mi><mo>→</mo><mo>∞</mo></mrow></munder><msub><mi>a</mi><mi>n</mi></msub></math>\r\n"
+ },
+ {
+  "tex": "\\max_{x} f(x) + \\arg\\min_{\\theta} L(\\theta)",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <munder>\n      <mi mathvariant=\"normal\">max</mi>\n      <mi>x</mi>\n    </munder>\n    <mi>f</mi>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>x</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n    <mo>+</mo>\n    <mrow>\n      <mi mathvariant=\"normal\">arg</mi>\n      <mo>⁡</mo>\n    </mrow>\n    <munder>\n      <mi mathvariant=\"normal\">min</mi>\n      <mi>θ</mi>\n    </munder>\n    <mi>L</mi>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>θ</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><munder><mi>max</mi><mi>x</mi></munder><mi>f</mi><mrow intent=\":fenced\"><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>+</mo><mi>arg</mi><munder><mi>min</mi><mi>𝜃</mi></munder><mi>L</mi><mrow intent=\":fenced\"><mo>(</mo><mi>𝜃</mi><mo>)</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\begin{cases} 1 & x > 0 \\\\ 0 & \\text{otherwise} \\end{cases}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mo stretchy=\"true\" form=\"prefix\">{</mo>\n    <mtable>\n      <mtr>\n        <mtd columnalign=\"left\" style=\"text-align: left\">\n          <mn>1</mn>\n        </mtd>\n        <mtd columnalign=\"left\" style=\"text-align: left\">\n          <mi>x</mi>\n          <mo>&gt;</mo>\n          <mn>0</mn>\n        </mtd>\n      </mtr>\n      <mtr>\n        <mtd columnalign=\"left\" style=\"text-align: left\">\n          <mn>0</mn>\n        </mtd>\n        <mtd columnalign=\"left\" style=\"text-align: left\">\n          <mtext mathvariant=\"normal\">otherwise</mtext>\n        </mtd>\n      </mtr>\n    </mtable>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mrow intent=\":fenced\"><mo>{</mo><mtable><mtr><mtd><mn>1</mn></mtd><mtd><mi>x</mi><mo>&gt;</mo><mn>0</mn></mtd></mtr><mtr><mtd><mn>0</mn></mtd><mtd><mtext>otherwise</mtext></mtd></mtr></mtable></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\left\\langle u, v \\right\\rangle + \\left| x \\right| + \\lfloor y \\rfloor",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">⟨</mo>\n      <mi>u</mi>\n      <mo separator=\"false\">,</mo>\n      <mi>v</mi>\n      <mo stretchy=\"true\" form=\"postfix\">⟩</mo>\n    </mrow>\n    <mo>+</mo>\n    <mrow>\n      <mo stretchy=\"true\" form=\"prefix\">|</mo>\n      <mi>x</mi>\n      <mo stretchy=\"true\" form=\"postfix\">|</mo>\n    </mrow>\n    <mo>+</mo>\n    <mo stretchy=\"false\" form=\"prefix\">⌊</mo>\n    <mi>y</mi>\n    <mo stretchy=\"false\" form=\"postfix\">⌋</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mrow intent=\":fenced\"><mo fence=\"true\">⟨</mo><mi>u</mi><mo>,</mo><mi>v</mi><mo fence=\"true\">⟩</mo></mrow><mo>+</mo><mrow intent=\":fenced\"><mo fence=\"true\">|</mo><mi>x</mi><mo fence=\"true\">|</mo></mrow><mo>+</mo><mrow intent=\":fenced\"><mo fence=\"true\">⌊</mo><mi>y</mi><mo fence=\"true\">⌋</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "a \\cdot b \\times c \\pm d \\leq e \\neq f \\approx g",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>a</mi>\n    <mo>⋅</mo>\n    <mi>b</mi>\n    <mo>×</mo>\n    <mi>c</mi>\n    <mo>±</mo>\n    <mi>d</mi>\n    <mo>≤</mo>\n    <mi>e</mi>\n    <mo>≠</mo>\n    <mi>f</mi>\n    <mo>≈</mo>\n    <mi>g</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>a</mi><mo>⋅</mo><mi>b</mi><mo>×</mo><mi>c</mi><mo>±</mo><mi>d</mi><mo>≤</mo><mi>e</mi><mo>≠</mo><mi>f</mi><mo>≈</mo><mi>g</mi></math>\r\n"
+ },
+ {
+  "tex": "x_{i,j}^{2} + {}^{14}C",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <msubsup>\n      <mi>x</mi>\n      <mrow>\n        <mi>i</mi>\n        <mo separator=\"false\">,</mo>\n        <mi>j</mi>\n      </mrow>\n      <mn>2</mn>\n    </msubsup>\n    <mo>+</mo>\n    <msup>\n      <mrow />\n      <mn>14</mn>\n    </msup>\n    <mi>C</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><msubsup><mi>x</mi><mrow><mi>i</mi><mo>,</mo><mi>j</mi></mrow><mn>2</mn></msubsup><mo>+</mo><msup><mrow></mrow><mn>14</mn></msup><mi>C</mi></math>\r\n"
+ },
+ {
+  "tex": "\\text{if } x \\in A \\text{ then } y",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mrow>\n      <mtext mathvariant=\"normal\">if </mtext>\n      <mo> </mo>\n    </mrow>\n    <mi>x</mi>\n    <mo>∈</mo>\n    <mi>A</mi>\n    <mrow>\n      <mo> </mo>\n      <mtext mathvariant=\"normal\"> then </mtext>\n      <mo> </mo>\n    </mrow>\n    <mi>y</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mtext>if</mtext><mo> </mo><mi>x</mi><mo>∈</mo><mi>A</mi><mo> </mo><mtext>then</mtext><mo> </mo><mi>y</mi></math>\r\n"
+ },
+ {
+  "tex": "\\begin{align} a &= b \\\\ &= c + d \\end{align}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mtable columnspacing=\"0em\">\n    <mtr>\n      <mtd columnalign=\"right\" style=\"text-align: right; padding-right: 0\">\n        <mi>a</mi>\n      </mtd>\n      <mtd columnalign=\"left\" style=\"text-align: left; padding-left: 0\">\n        <mo>=</mo>\n        <mi>b</mi>\n      </mtd>\n    </mtr>\n    <mtr>\n      <mtd columnalign=\"right\" style=\"text-align: right; padding-right: 0\" />\n      <mtd columnalign=\"left\" style=\"text-align: left; padding-left: 0\">\n        <mo>=</mo>\n        <mi>c</mi>\n        <mo>+</mo>\n        <mi>d</mi>\n      </mtd>\n    </mtr>\n  </mtable>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mtable columnspacing=\"0em\"><mtr><mtd columnalign=\"right\"><mi>a</mi></mtd><mtd columnalign=\"left\"><mo>=</mo><mi>b</mi></mtd></mtr><mtr><mtd columnalign=\"right\"></mtd><mtd columnalign=\"left\"><mo>=</mo><mi>c</mi><mo>+</mo><mi>d</mi></mtd></mtr></mtable></math>\r\n"
+ },
+ {
+  "tex": "\\begin{aligned} x &= 1 & y &= 2 \\end{aligned}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mtable columnspacing=\"0em\">\n    <mtr>\n      <mtd columnalign=\"right\" style=\"text-align: right; padding-right: 0\">\n        <mi>x</mi>\n      </mtd>\n      <mtd columnalign=\"left\" style=\"text-align: left; padding-left: 0\">\n        <mo>=</mo>\n        <mn>1</mn>\n      </mtd>\n      <mtd columnalign=\"right\" style=\"text-align: right; padding-right: 0\">\n        <mi>y</mi>\n      </mtd>\n      <mtd columnalign=\"left\" style=\"text-align: left; padding-left: 0\">\n        <mo>=</mo>\n        <mn>2</mn>\n      </mtd>\n    </mtr>\n  </mtable>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mtable columnspacing=\"0em\"><mtr><mtd columnalign=\"right\"><mi>x</mi></mtd><mtd columnalign=\"left\"><mo>=</mo><mn>1</mn></mtd><mtd columnalign=\"right\"><mi>y</mi></mtd><mtd columnalign=\"left\"><mo>=</mo><mn>2</mn></mtd></mtr></mtable></math>\r\n"
+ },
+ {
+  "tex": "\\dots + \\cdots + \\ldots",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>…</mi>\n    <mo>+</mo>\n    <mi>⋯</mi>\n    <mo>+</mo>\n    <mi>…</mi>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mo>…</mo><mo>+</mo><mo>⋯</mo><mo>+</mo><mo>…</mo></math>\r\n"
+ },
+ {
+  "tex": "10^{-3} + 1.5 \\times 10^{4}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <msup>\n      <mn>10</mn>\n      <mrow>\n        <mi>−</mi>\n        <mn>3</mn>\n      </mrow>\n    </msup>\n    <mo>+</mo>\n    <mn>1.5</mn>\n    <mo>×</mo>\n    <msup>\n      <mn>10</mn>\n      <mn>4</mn>\n    </msup>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><msup><mn>10</mn><mrow><mo>−</mo><mn>3</mn></mrow></msup><mo>+</mo><mn>1</mn><mo>.</mo><mn>5</mn><mo>×</mo><msup><mn>10</mn><mn>4</mn></msup></math>\r\n"
+ },
+ {
+  "tex": "\\nabla \\cdot \\mathbf{E} = \\frac{\\rho}{\\varepsilon_0}",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mi>∇</mi>\n    <mo>⋅</mo>\n    <mi>𝐄</mi>\n    <mo>=</mo>\n    <mfrac>\n      <mi>ρ</mi>\n      <msub>\n        <mi>ε</mi>\n        <mn>0</mn>\n      </msub>\n    </mfrac>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>𝛻</mi><mo>⋅</mo><mi>𝑬</mi><mo>=</mo><mfrac><mi>𝜌</mi><msub><mi>𝜀</mi><mn>0</mn></msub></mfrac></math>\r\n"
+ },
+ {
+  "tex": "\\mathbb{E}_{x \\sim p}[\\log q(x)]",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <msub>\n      <mi mathvariant=\"double-struck\">𝔼</mi>\n      <mrow>\n        <mi>x</mi>\n        <mo>∼</mo>\n        <mi>p</mi>\n      </mrow>\n    </msub>\n    <mo stretchy=\"false\" form=\"prefix\">[</mo>\n    <mrow>\n      <mi mathvariant=\"normal\">log</mi>\n      <mo>⁡</mo>\n    </mrow>\n    <mi>q</mi>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>x</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n    <mo stretchy=\"false\" form=\"postfix\">]</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><msub><mi>𝔼</mi><mrow><mi>x</mi><mo>∼</mo><mi>p</mi></mrow></msub><mrow intent=\":fenced\"><mo>[</mo><mi>log</mi><mi>q</mi><mrow intent=\":fenced\"><mo>(</mo><mi>x</mi><mo>)</mo></mrow><mo>]</mo></mrow></math>\r\n"
+ },
+ {
+  "tex": "\\operatorname{softmax}(\\mathbf{W}\\mathbf{h} + \\mathbf{b})",
+  "ours": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">\n  <mrow>\n    <mrow>\n      <mi mathvariant=\"normal\">softmax</mi>\n      <mo>⁡</mo>\n    </mrow>\n    <mo stretchy=\"false\" form=\"prefix\">(</mo>\n    <mi>𝐖</mi>\n    <mi>𝐡</mi>\n    <mo>+</mo>\n    <mi>𝐛</mi>\n    <mo stretchy=\"false\" form=\"postfix\">)</mo>\n  </mrow>\n</math>",
+  "word": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><mi>softmax</mi><mrow intent=\":fenced\"><mo>(</mo><mi>𝑾</mi><mi>𝒉</mi><mo>+</mo><mi>𝒃</mi><mo>)</mo></mrow></math>\r\n"
+ }
+]

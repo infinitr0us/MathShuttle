@@ -19,8 +19,8 @@ from typing import Optional
 from . import __version__, clipboard, compat, hotkeys, latex_wrap, preview
 from .convert import FORMAT_LABELS, MODES, Result, convert, input_equations, macro_notes, office_copy
 from .latex_wrap import WRAPPERS
-from .pandoc_engine import (INSTALL_HINT, READ_FORMATS, WRITE_FORMATS, ConversionError, PandocNotFound, engine_description,
-                            engine_report)
+from .pandoc_engine import (INSTALL_HINT, READ_FORMATS, WRITE_FORMATS, ConversionError, Equation, PandocNotFound,
+                            engine_description, engine_report)
 
 SAMPLE = "\\begin{align}\n  \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\\n  \\nabla \\times \\mathbf{B} - \\frac{1}{c^2}\\frac{\\partial \\mathbf{E}}{\\partial t} &= \\mu_0 \\mathbf{J}\n\\end{align}"
 
@@ -509,12 +509,19 @@ class App(tk.Tk):
             result: object = convert(*args[:6], macros=self._macros(args[7]), tidy=args[6])
             recalled = self._recalled
             if (recalled and recalled[1] and recalled[0] == args[0] and args[1] == "mathml" and args[2] == "latex"
-                    and isinstance(result, Result)):
-                # pasted from Office unedited: the LaTeX it was copied from, as written (recall)
+                    and args[6] and isinstance(result, Result)):
+                # pasted from Office unedited: the LaTeX it was copied from, as written (recall); not
+                # when Tidy is off, which asks for texmath's own LaTeX
                 from . import recall
                 tex, display = recalled[1]
                 display = display if args[3] == "auto" else args[3] == "display"
-                result = Result(result.equations, [latex_wrap.wrap(tex, args[4], display)], [recall.NOTE])
+                display = not latex_wrap.wrapper_is_inline(args[4], display)
+                notes = [recall.NOTE]
+                if latex_wrap.numbering_conflict(tex, args[4], display):
+                    notes.append("\\tag / \\label commands were kept, but LaTeX allows no \\tag and at most one "
+                                 "\\label in this wrapper - edit them, or choose the align wrapper.")
+                result = Result([Equation(tex, latex_wrap.output_is_display(tex, args[4], display))],
+                                [latex_wrap.wrap(tex, args[4], display)], notes)
         except (ConversionError, PandocNotFound) as e:
             result = e
         except Exception:  # pragma: no cover
@@ -651,10 +658,12 @@ class App(tk.Tk):
         # an equation copied from here that comes back unedited: its LaTeX as written (recall); the
         # conversion of exactly this input gives that
         from . import recall
-        self._recalled = (text, recall.recall(text)) if src == "mathml" else None
+        recalled = recall.recall(text) if src == "mathml" else None
         self.input.delete("1.0", "end")
         self.input.insert("1.0", text)
         self.input.edit_modified(False)
+        # (the input as the widget gives it back, which is what the conversion reads)
+        self._recalled = (self.input.get("1.0", "end-1c"), recalled) if recalled else None
         self.convert_now()
 
     def swap(self) -> None:
@@ -827,7 +836,7 @@ class App(tk.Tk):
                        "omml" if re.search(r"<m:oMath", text) else "latex")
             if src != "latex":
                 from . import recall
-                recalled = recall.latex_for(text, wrapper, mode) if src == "mathml" else None
+                recalled = recall.latex_for(text, wrapper, mode) if src == "mathml" and tidy else None
                 latex = recalled or convert(text, src, "latex", mode, wrapper, tidy=tidy).text
                 clipboard.set_text(latex, expect_sequence=sequence)
                 return "LaTeX copied%s: %s" % (" (as it was copied, unedited)" if recalled else "",

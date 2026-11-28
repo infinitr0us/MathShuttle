@@ -209,6 +209,13 @@ def test_paste_from_office_gives_back_the_latex_it_was_copied_from(app, monkeypa
     assert pump(app, until=lambda: app.output.get("1.0", "end").startswith("$$"))
     assert "\\label{eq:sm}" in app.output.get("1.0", "end")
     app.wrapper_var.set("auto")
+    app.tidy_var.set(False)  # texmath's own LaTeX asked for: no recall
+    try:
+        app.convert_now()
+        assert pump(app, until=lambda: "softmax" in app.output.get("1.0", "end")
+                    and "\\label" not in app.output.get("1.0", "end"))
+    finally:
+        app.tidy_var.set(True)
     set_input(app, copied[-1].replace("<mi>z</mi>", "<mi>y</mi>"))  # edited: converted as usual
     app.convert_now()
     assert pump(app, until=lambda: "y" in app.output.get("1.0", "end") and "softmax" in app.output.get("1.0", "end"))

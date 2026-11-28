@@ -1,9 +1,11 @@
 """The LaTeX an equation was copied from, given back when it returns from Word unedited (recall).
-fixtures/recall/word_16.0.20527.json: what real Word 16.0.20527 copied back for equations MathShuttle
-copied (captured with tests/office_smoke.py's helpers)."""
+fixtures/recall/word_16.0.20527*.json: what real Word 16.0.20527 copied back for equations MathShuttle
+copied (captured with tests/office_smoke.py's helpers; _structures: accents, matrices, binomials, fonts,
+limits, the smoke test's equations)."""
 import json
 import os
 import re
+import subprocess
 import sys
 
 import pytest
@@ -13,8 +15,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from mathshuttle import recall  # noqa: E402
 from mathshuttle.convert import office_copy  # noqa: E402
 
-FIXTURES = json.load(open(os.path.join(os.path.dirname(__file__), "fixtures", "recall", "word_16.0.20527.json"),
-                          encoding="utf-8"))
+_FOLDER = os.path.join(os.path.dirname(__file__), "fixtures", "recall")
+FIXTURES = json.load(open(os.path.join(_FOLDER, "word_16.0.20527.json"), encoding="utf-8"))
+STRUCTURES = json.load(open(os.path.join(_FOLDER, "word_16.0.20527_structures.json"), encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", STRUCTURES, ids=[c["tex"][:30] for c in STRUCTURES])
+def test_what_word_does_to_structures_is_no_edit(case):
+    # accents as other characters, ℓ as 𝓁, sans-serif italic, 1.5 as 1 . 5, scripts on a bracketed group
+    assert recall.fingerprint(case["ours"]) == recall.fingerprint(case["word"])
+
+
+@pytest.mark.parametrize("a, b", [
+    ("x", r"\hat{x}"), ("x", r"\bar{x}"), (r"\hat{x}", r"\tilde{x}"), (r"y = f(x)", r"\tilde{y} = f(x)"),
+    ("v = u", r"\vec{v} = \vec{u}"), (r"A \cup B", r"\overline{A \cup B}"),
+    (r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}", r"\begin{pmatrix} a & b & c & d \end{pmatrix}"),
+    (r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}", "(abcd)"),
+    (r"\begin{align} a &= b \\ c &= d \end{align}", "a = b c = d"),
+    (r"\binom{n}{k}", r"\left(\frac{n}{k}\right)"), (r"\ell", "l"), (r"\mathbf{2} x", "2 x"),
+    (r"\langle x, y \rangle", "< x, y >"), (r"a \parallel b", r"a \| b"), (r"\mathbf{x}", "x"), (r"\mathrm{d}x", "dx"),
+    (r"\sum_{i} x", r"\sum^{i} x"), (r"x_i", "x^i"), (r"\sqrt{x}", r"\sqrt[3]{x}"), (r"\frac{a}{b}", r"\frac{b}{a}"),
+    (r"\mathcal{L}", "L"), (r"\mathbb{R}", "R"), ("x'", "x"), (r"(a+b)^2", r"(a+b^2)")])
+def test_an_edit_is_told_apart(a, b):
+    assert recall.fingerprint(office_copy(a, "latex").mathml) != recall.fingerprint(office_copy(b, "latex").mathml)
 
 
 @pytest.fixture
@@ -93,3 +116,45 @@ def test_cli_paste_gives_the_latex_as_written(store, monkeypatch, capsys):
     monkeypatch.setattr(clipboard, "read_office_equation", lambda: ("mathml", word))
     assert main(["paste"]) == 0
     assert "\\label" not in capsys.readouterr().out  # another equation: Word's LaTeX
+    assert main(["paste", "--no-tidy"]) == 0  # texmath's own LaTeX asked for: no recall
+    monkeypatch.setattr(clipboard, "read_office_equation", lambda: ("mathml", sent["mathml"]))
+    assert main(["paste", "--no-tidy"]) == 0
+    assert "\\label" not in capsys.readouterr().out
+
+
+def test_the_same_equation_with_two_labels_is_converted_afresh(store):
+    first = office_copy(r"x = 0 \label{eq:initial}", "latex")
+    first.remember()
+    assert recall.recall(first.mathml) == (r"x = 0 \label{eq:initial}", True)
+    office_copy(r"x = 0 \label{eq:initial}", "latex").remember()  # the same again: still known
+    assert recall.recall(first.mathml) is not None
+    office_copy(r"x = 0 \label{eq:terminal}", "latex").remember()  # the same symbols, another label
+    assert recall.recall(first.mathml) is None
+    office_copy(r"x = 0 \label{eq:initial}", "latex").remember()
+    assert recall.recall(first.mathml) is None  # which one it is stays unknown
+    other = office_copy(r"y = 1 \label{eq:y}", "latex")  # another equation: unaffected
+    other.remember()
+    assert recall.recall(other.mathml) == (r"y = 1 \label{eq:y}", True)
+
+
+def test_a_relative_path_is_kept_next_to_the_working_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MATHSHUTTLE_RECALL_PATH", "copied.json")
+    copy = office_copy("a+b", "latex")
+    copy.remember()
+    assert (tmp_path / "copied.json").is_file() and recall.recall(copy.mathml) == ("a+b", True)
+    assert not [p for p in os.listdir(str(tmp_path)) if p.endswith((".part", ".lock"))]
+
+
+def test_two_processes_lose_nothing(store):
+    script = ("import sys; sys.path.insert(0, %r)\n"
+              "from mathshuttle.convert import office_copy\n"
+              "for i in range(15):\n"
+              "    office_copy('x_{%%s%%d}' %% (sys.argv[1], i), 'latex').remember()\n"
+              % os.path.join(os.path.dirname(__file__), ".."))
+    env = dict(os.environ, MATHSHUTTLE_RECALL_PATH=str(store))
+    runs = [subprocess.Popen([sys.executable, "-c", script, name], env=env) for name in "abcd"]
+    assert all(run.wait(120) == 0 for run in runs)
+    entries = json.load(open(str(store), encoding="utf-8"))
+    assert len(entries) == 60
+    assert recall.recall(office_copy("x_{c7}", "latex").mathml) == ("x_{c7}", True)
